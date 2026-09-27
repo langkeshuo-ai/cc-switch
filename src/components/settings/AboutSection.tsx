@@ -62,13 +62,7 @@ interface ToolVersion {
 const TOOL_NAMES = [
   "claude",
   "codex",
-  "gemini",
-  "grok",
-  "opencode",
-  "openclaw",
-  "hermes",
   "pi",
-  "mcode",
 ] as const;
 type ToolName = (typeof TOOL_NAMES)[number];
 type ToolLifecycleAction = "install" | "update";
@@ -181,13 +175,7 @@ const ONE_CLICK_INSTALL_COMMANDS = isWindows()
 const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
   claude: "Claude Code",
   codex: "Codex",
-  gemini: "Gemini CLI",
-  grok: "Grok Build",
-  opencode: "OpenCode",
-  openclaw: "OpenClaw",
-  hermes: "Hermes",
   pi: "Pi",
-  mcode: "MiniMax Code",
 };
 
 // 后端返回的 tool 是 string；这里收敛唯一的 ToolName 断言与兜底，供升级确认
@@ -199,13 +187,7 @@ function toolDisplayName(tool: string): string {
 const TOOL_APP_IDS: Record<ToolName, AppId> = {
   claude: "claude",
   codex: "codex",
-  gemini: "gemini",
-  grok: "grokbuild",
-  opencode: "opencode",
-  openclaw: "openclaw",
-  hermes: "hermes",
   pi: "pi",
-  mcode: "mcode",
 };
 
 // 工具版本探测代价高：每个工具一次 `--version` 子进程 + 一次 npm/github/pypi 网络请求。

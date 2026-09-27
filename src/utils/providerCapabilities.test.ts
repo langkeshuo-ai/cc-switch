@@ -189,7 +189,7 @@ describe("providerNeedsRouting", () => {
   });
 
   it("官方供应商一律不需要路由（即便 providerType 是 OAuth）", () => {
-    const apps: AppId[] = ["claude", "codex", "claude-desktop"];
+    const apps: AppId[] = ["claude", "codex"];
     for (const app of apps) {
       expect(
         providerNeedsRouting(
@@ -257,16 +257,6 @@ describe("providerNeedsRouting", () => {
       ).toBe(true);
     });
 
-    it("grokbuild 下 xai_oauth 需要路由", () => {
-      expect(
-        providerNeedsRouting(
-          "grokbuild",
-          mkProvider({
-            meta: { providerType: "xai_oauth", apiFormat: "openai_responses" },
-          }),
-        ),
-      ).toBe(true);
-    });
   });
 
   describe("Claude 非 OAuth 按格式判定", () => {
@@ -351,33 +341,5 @@ describe("providerNeedsRouting", () => {
         ),
       ).toBe(false);
     });
-  });
-
-  describe("Claude Desktop 路由判定", () => {
-    it("proxy 模式需要路由", () => {
-      expect(
-        providerNeedsRouting(
-          "claude-desktop",
-          mkProvider({ meta: { claudeDesktopMode: "proxy" } }),
-        ),
-      ).toBe(true);
-    });
-
-    it.each(["github_copilot", "codex_oauth", "xai_oauth"])(
-      "direct 模式的托管 OAuth %s 仍需要路由",
-      (providerType) => {
-        expect(
-          providerNeedsRouting(
-            "claude-desktop",
-            mkProvider({
-              meta: {
-                providerType,
-                claudeDesktopMode: "direct",
-              },
-            }),
-          ),
-        ).toBe(true);
-      },
-    );
   });
 });

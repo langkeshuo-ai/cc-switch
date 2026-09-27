@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
 import {
@@ -32,27 +31,6 @@ describe("xAI OAuth provider presets", () => {
     expect((preset!.settingsConfig as any).env).not.toHaveProperty(
       "ANTHROPIC_AUTH_TOKEN",
     );
-  });
-
-  it("pins the Claude Desktop preset to proxy Responses mode without 1M", () => {
-    const preset = claudeDesktopProviderPresets.find(
-      (entry) => entry.name === "xAI (Grok)",
-    );
-    expect(preset).toMatchObject({
-      category: "third_party",
-      baseUrl: "https://api.x.ai/v1",
-      mode: "proxy",
-      apiFormat: "openai_responses",
-      providerType: "xai_oauth",
-      requiresOAuth: true,
-      icon: "xai",
-    });
-    expect(preset!.modelRoutes).toEqual([
-      expect.objectContaining({
-        upstreamModel: "grok-4.5",
-        supports1m: false,
-      }),
-    ]);
   });
 
   it("pins the Codex preset to native Responses via API key (no managed OAuth)", () => {

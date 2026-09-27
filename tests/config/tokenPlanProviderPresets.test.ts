@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { claudeDesktopProviderPresets } from "@/config/claudeDesktopProviderPresets";
 import { providerPresets } from "@/config/claudeProviderPresets";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
-import { hermesProviderPresets } from "@/config/hermesProviderPresets";
-import {
-  openclawProviderPresets,
-  rebaseOpenClawSuggestedDefaults,
-} from "@/config/openclawProviderPresets";
-import { opencodeProviderPresets } from "@/config/opencodeProviderPresets";
 import { piProviderPresets } from "@/config/piProviderPresets";
 import {
   extractCodexBaseUrl,
@@ -218,31 +211,6 @@ describe("Tencent Token Plan provider presets", () => {
       });
     });
 
-    it(`uses its documented Anthropic endpoint for ${product.name} in Claude Desktop`, () => {
-      const preset = claudeDesktopProviderPresets.find(
-        (item) => item.name === product.name,
-      );
-
-      expect(preset).toBeDefined();
-      expect(preset).toMatchObject({
-        websiteUrl:
-          product.site === "domestic" ? DOMESTIC_WEBSITE_URL : INTL_WEBSITE_URL,
-        apiKeyUrl: product.apiKeyUrl,
-        category: "cn_official",
-        baseUrl: product.anthropicBaseUrl,
-        mode: "proxy",
-        apiFormat: "anthropic",
-        endpointCandidates: product.anthropicCandidates,
-        icon: "tencent",
-      });
-      expect(preset?.modelRoutes).toEqual([
-        expect.objectContaining({
-          routeId: "claude-sonnet-5",
-          upstreamModel: product.model,
-        }),
-      ]);
-    });
-
     it(`uses Chat Completions through local routing for ${product.name} in Codex`, () => {
       const preset = codexProviderPresets.find(
         (item) => item.name === product.name,
@@ -277,83 +245,6 @@ describe("Tencent Token Plan provider presets", () => {
         effortParam: "reasoning_effort",
         outputFormat: "reasoning_content",
       });
-    });
-
-    it(`uses the OpenAI-compatible endpoint for ${product.name} in OpenCode`, () => {
-      const preset = opencodeProviderPresets.find(
-        (item) => item.name === product.name,
-      );
-
-      expect(preset).toBeDefined();
-      expect(preset?.websiteUrl).toBe(
-        product.site === "domestic" ? DOMESTIC_WEBSITE_URL : INTL_WEBSITE_URL,
-      );
-      expect(preset?.apiKeyUrl).toBe(product.apiKeyUrl);
-      expect(preset?.category).toBe("cn_official");
-      expect(preset?.icon).toBe("tencent");
-      expect(preset?.settingsConfig.npm).toBe("@ai-sdk/openai-compatible");
-      expect(
-        (preset?.settingsConfig.options as { baseURL: string }).baseURL,
-      ).toBe(product.openaiBaseUrl);
-      expect(Object.keys(preset?.settingsConfig.models ?? {})).toEqual(
-        product.catalogModels,
-      );
-    });
-
-    it(`uses the OpenAI-compatible endpoint for ${product.name} in Hermes`, () => {
-      const preset = hermesProviderPresets.find(
-        (item) => item.name === product.name,
-      );
-
-      expect(preset).toBeDefined();
-      expect(preset?.websiteUrl).toBe(
-        product.site === "domestic" ? DOMESTIC_WEBSITE_URL : INTL_WEBSITE_URL,
-      );
-      expect(preset?.apiKeyUrl).toBe(product.apiKeyUrl);
-      expect(preset?.category).toBe("cn_official");
-      expect(preset?.icon).toBe("tencent");
-      expect(preset?.settingsConfig.base_url).toBe(product.openaiBaseUrl);
-      expect(preset?.settingsConfig.api_mode).toBe("chat_completions");
-      expect(
-        (preset?.settingsConfig.models ?? []).map((model) => model.id),
-      ).toEqual(product.catalogModels);
-      expect(preset?.suggestedDefaults?.model).toEqual({
-        default: product.model,
-        provider: product.configProviderName,
-      });
-    });
-
-    it(`uses the OpenAI-compatible endpoint for ${product.name} in OpenClaw`, () => {
-      const preset = openclawProviderPresets.find(
-        (item) => item.name === product.name,
-      );
-
-      expect(preset).toBeDefined();
-      expect(preset?.websiteUrl).toBe(
-        product.site === "domestic" ? DOMESTIC_WEBSITE_URL : INTL_WEBSITE_URL,
-      );
-      expect(preset?.apiKeyUrl).toBe(product.apiKeyUrl);
-      expect(preset?.category).toBe("cn_official");
-      expect(preset?.icon).toBe("tencent");
-      expect(preset?.settingsConfig.baseUrl).toBe(product.openaiBaseUrl);
-      expect(preset?.settingsConfig.api).toBe("openai-completions");
-      expect(
-        (preset?.settingsConfig.models ?? []).map((model) => model.id),
-      ).toEqual(product.catalogModels);
-      // 五字段照官方 OpenClaw 接入页（1823/130062、1300/81503）：订阅套餐
-      // cost 全零；超出接入页的模型按平台列表补 maxTokens（注释标边界）
-      for (const model of preset?.settingsConfig.models ?? []) {
-        expect(model.cost).toEqual({
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        });
-        expect(model.contextWindow).toBeGreaterThan(0);
-        expect(model.maxTokens).toBeGreaterThan(0);
-        expect(model.reasoning).toBeDefined();
-        expect(model.input).toEqual(["text"]);
-      }
     });
 
     it(`uses the OpenAI-compatible endpoint for ${product.name} in Pi`, () => {
@@ -564,44 +455,6 @@ describe("Tencent Token Plan provider presets", () => {
     }
   });
 
-  it("rebases OpenClaw defaults to the submitted provider key", () => {
-    const preset = openclawProviderPresets.find(
-      (item) => item.name === "Tencent Token Plan",
-    );
-    expect(preset?.suggestedDefaults).toBeDefined();
-
-    const rebased = rebaseOpenClawSuggestedDefaults(
-      preset!.suggestedDefaults!,
-      "my-tencent",
-    );
-    expect(rebased.model?.primary).toBe("my-tencent/tc-code-latest");
-    expect(rebased.modelCatalog).toHaveProperty("my-tencent/tc-code-latest");
-  });
-});
-
-// OpenClaw 把 agents.defaults.models 当白名单：modelCatalog 的 key 若在
-// settingsConfig.models 里没有对应条目，导入后会被静默丢弃（openclaw#30152）。
-describe("OpenClaw suggestedDefaults.modelCatalog", () => {
-  it("only references models the preset declares", () => {
-    const orphans: string[] = [];
-
-    for (const preset of openclawProviderPresets) {
-      const catalog = preset.suggestedDefaults?.modelCatalog;
-      if (!catalog) continue;
-
-      const declared = new Set(
-        (preset.settingsConfig?.models ?? []).map((model) => model.id),
-      );
-      for (const key of Object.keys(catalog)) {
-        const modelId = key.slice(key.indexOf("/") + 1);
-        if (!declared.has(modelId)) {
-          orphans.push(`${preset.name}: ${key}`);
-        }
-      }
-    }
-
-    expect(orphans).toEqual([]);
-  });
 });
 
 describe("Tencent TokenHub (pay-as-you-go) Pi presets", () => {

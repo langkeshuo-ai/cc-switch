@@ -113,11 +113,6 @@ export function useSettings(): UseSettingsResult {
     resetAllDirectories({
       claude: sanitizeDir(data?.claudeConfigDir),
       codex: sanitizeDir(data?.codexConfigDir),
-      gemini: sanitizeDir(data?.geminiConfigDir),
-      grokbuild: sanitizeDir(data?.grokConfigDir),
-      opencode: sanitizeDir(data?.opencodeConfigDir),
-      openclaw: sanitizeDir(data?.openclawConfigDir),
-      hermes: sanitizeDir(data?.hermesConfigDir),
       pi: sanitizeDir(data?.piConfigDir),
     });
     setRequiresRestart(false);

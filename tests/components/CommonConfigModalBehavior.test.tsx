@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CodexConfigEditor from "@/components/providers/forms/CodexConfigEditor";
-import GeminiConfigEditor from "@/components/providers/forms/GeminiConfigEditor";
 
 vi.mock("@/components/common/FullScreenPanel", () => ({
   FullScreenPanel: ({
@@ -70,43 +69,6 @@ describe("Common config modals", () => {
     fireEvent.click(
       screen.getByRole("button", {
         name: /codexConfig.editCommonConfig|编辑通用配置/,
-      }),
-    );
-
-    expect(screen.getByTestId("common-config-panel")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "common.cancel" }));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId("common-config-panel"),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
-  it("keeps the Gemini common config modal closed after user closes it with an error present", async () => {
-    render(
-      <GeminiConfigEditor
-        envValue="{}"
-        configValue="{}"
-        onEnvChange={() => {}}
-        onConfigChange={() => {}}
-        useCommonConfig={false}
-        onCommonConfigToggle={() => {}}
-        commonConfigSnippet={`{"GEMINI_MODEL":"gemini-2.5-pro"}`}
-        onCommonConfigSnippetChange={() => false}
-        onCommonConfigErrorClear={() => {}}
-        commonConfigError="Invalid JSON"
-        envError=""
-        configError=""
-      />,
-    );
-
-    expect(screen.queryByTestId("common-config-panel")).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: /geminiConfig.editCommonConfig|编辑通用配置/,
       }),
     );
 
