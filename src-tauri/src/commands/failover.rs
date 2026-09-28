@@ -14,6 +14,11 @@ fn require_failover_app(app_type: &str) -> Result<(), String> {
     if !app.supports_local_proxy() {
         return Err(format!("{} 不支持故障转移", app.as_str()));
     }
+    // Pi 透传网关的请求方言由供应商 `api` 字段决定，故障转移可能跨方言切换，
+    // 导致请求体方言与上游不匹配。v1 明确不支持 Pi 故障转移队列。
+    if matches!(app, crate::app_config::AppType::Pi) {
+        return Err("Pi 暂不支持故障转移队列（透明转发模式下跨方言切换不安全）".to_string());
+    }
     Ok(())
 }
 

@@ -335,6 +335,7 @@ export const handlers = [
     success({
       claude: false,
       codex: false,
+      pi: false,
       gemini: false,
       grokbuild: false,
     }),

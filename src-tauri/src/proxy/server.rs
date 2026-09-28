@@ -296,6 +296,12 @@ impl ProxyServer {
             // Claude API (支持带前缀和不带前缀两种格式)
             .route("/v1/messages", post(handlers::handle_messages))
             .route("/claude/v1/messages", post(handlers::handle_messages))
+            // Pi API（透明转发，方言由供应商 `api` 字段决定）：
+            // - anthropic-messages → baseUrl=http://host:port/pi/anthropic
+            // - openai-completions / openai-responses → baseUrl=.../pi/openai
+            .route("/pi/anthropic/*rest", post(handlers::handle_pi_messages))
+            .route("/pi/openai/chat/completions", post(handlers::handle_pi_chat_completions))
+            .route("/pi/openai/responses", post(handlers::handle_pi_responses))
             // OpenAI Chat Completions API (Codex CLI，支持带前缀和不带前缀)
             .route("/chat/completions", post(handlers::handle_chat_completions))
             .route(

@@ -104,6 +104,110 @@ pub(crate) fn read_pi_native_providers() -> Result<IndexMap<String, Value>, AppE
     read_pi_native_providers_locked(&get_pi_models_path()?)
 }
 
+/// Read the entire raw `models.json` bytes (None = file does not exist).
+///
+/// Used by proxy takeover to back up the original file verbatim so that a
+/// later disable can restore it byte-for-byte.
+pub(crate) fn read_models_document_raw() -> Result<Option<Vec<u8>>, AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(read_file_limited(&path, "Pi models")?))
+}
+
+/// Restore the entire `models.json` from raw bytes (atomic write, serialized
+/// with every other models.json mutation via `MODELS_FILE_LOCK`).
+pub(crate) fn restore_models_document_raw(raw: &[u8]) -> Result<(), AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    ensure_private_models_parent(&path)?;
+    atomic_write_private(&path, raw)
+}
+
+/// Gateway route prefix for a Pi provider's `api` dialect.
+///
+/// Proxy takeover rewrites the provider's `baseUrl` to the local gateway;
+/// the gateway then forwards transparently (Pi's request dialect equals the
+/// upstream dialect, so no body transformation is needed). Dialects the
+/// gateway cannot speak return `None` and takeover must be rejected.
+pub(crate) fn pi_takeover_prefix_for_api(api: &str) -> Option<&'static str> {
+    match api.trim() {
+        "anthropic-messages" => Some("pi/anthropic"),
+        "openai-completions" | "openai-responses" => Some("pi/openai"),
+        _ => None,
+    }
+}
+
+/// Point one provider's live `baseUrl` at the local gateway.
+///
+/// Only `baseUrl` is touched; every other field (including `apiKey`, which Pi
+/// stores natively in `models.json`) is preserved verbatim. Fails when the
+/// provider's `api` dialect has no gateway route.
+pub(crate) fn apply_pi_takeover_base_url(
+    provider_key: &str,
+    proxy_base_url: &str,
+) -> Result<(), AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    {
+        let providers = providers_mut(&mut document, &path)?;
+        let node = providers.get_mut(provider_key).ok_or_else(|| {
+            AppError::Config(format!(
+                "Pi provider '{provider_key}' is not present in models.json"
+            ))
+        })?;
+        let api = node
+            .get("api")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let prefix = pi_takeover_prefix_for_api(api).ok_or_else(|| {
+            AppError::InvalidInput(format!(
+                "Pi provider '{provider_key}' 的 API 格式 '{api}' 不支持本地代理接管（仅支持 anthropic-messages / openai-completions / openai-responses）"
+            ))
+        })?;
+        let proxy_base = proxy_base_url.trim().trim_end_matches('/');
+        let rewritten = format!("{proxy_base}/{prefix}");
+        node.as_object_mut().ok_or_else(|| {
+            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+        })?
+        .insert("baseUrl".to_string(), Value::String(rewritten));
+    }
+    write_models_document(&path, &document, &expected_revision)
+}
+
+/// Overwrite one provider's live `baseUrl` unconditionally.
+///
+/// Restore/cleanup path companion of [`apply_pi_takeover_base_url`]: no dialect
+/// validation, used to put back the original upstream URL from the DB profile.
+/// Missing key is an error (nothing to restore onto).
+pub(crate) fn set_pi_provider_base_url(
+    provider_key: &str,
+    base_url: &str,
+) -> Result<(), AppError> {
+    let _guard = lock_models_file()?;
+    let path = get_pi_models_path()?;
+    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    {
+        let providers = providers_mut(&mut document, &path)?;
+        let node = providers.get_mut(provider_key).ok_or_else(|| {
+            AppError::Config(format!(
+                "Pi provider '{provider_key}' is not present in models.json"
+            ))
+        })?;
+        node.as_object_mut().ok_or_else(|| {
+            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+        })?
+        .insert(
+            "baseUrl".to_string(),
+            Value::String(base_url.trim().trim_end_matches('/').to_string()),
+        );
+    }
+    write_models_document(&path, &document, &expected_revision)
+}
+
 pub(crate) fn read_pi_native_provider(provider_key: &str) -> Result<Option<Value>, AppError> {
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
@@ -635,6 +739,182 @@ mod tests {
         assert_eq!(
             fs::read_to_string(path).expect("read external models"),
             external
+        );
+    }
+
+    fn takeover_provider(api: &str, base_url: &str, api_key: &str) -> Value {
+        json!({
+            "name": "Takeover Target",
+            "baseUrl": base_url,
+            "api": api,
+            "apiKey": api_key,
+            "models": [{"id": "m1"}]
+        })
+    }
+
+    #[test]
+    fn takeover_prefix_maps_supported_dialects_only() {
+        assert_eq!(
+            pi_takeover_prefix_for_api("anthropic-messages"),
+            Some("pi/anthropic")
+        );
+        assert_eq!(
+            pi_takeover_prefix_for_api("openai-completions"),
+            Some("pi/openai")
+        );
+        assert_eq!(
+            pi_takeover_prefix_for_api("openai-responses"),
+            Some("pi/openai")
+        );
+        assert_eq!(pi_takeover_prefix_for_api("google-generative-ai"), None);
+        assert_eq!(pi_takeover_prefix_for_api("bedrock-converse-stream"), None);
+        assert_eq!(pi_takeover_prefix_for_api(""), None);
+    }
+
+    #[test]
+    #[serial]
+    fn takeover_rewrites_base_url_and_preserves_other_fields_and_nodes() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider(
+            "pi-anthropic",
+            &takeover_provider("anthropic-messages", "https://anthropic.example.com", "sk-a"),
+        )
+        .expect("insert anthropic provider");
+        insert_pi_provider(
+            "pi-openai",
+            &takeover_provider("openai-completions", "https://openai.example.com/v1", "sk-o"),
+        )
+        .expect("insert openai provider");
+
+        apply_pi_takeover_base_url("pi-anthropic", "http://127.0.0.1:15721/")
+            .expect("takeover rewrite");
+
+        let node = read_pi_native_provider("pi-anthropic")
+            .expect("read node")
+            .expect("node exists");
+        assert_eq!(
+            node["baseUrl"],
+            "http://127.0.0.1:15721/pi/anthropic",
+            "baseUrl points at the gateway with the anthropic prefix"
+        );
+        assert_eq!(node["apiKey"], "sk-a", "apiKey must be preserved");
+        assert_eq!(node["api"], "anthropic-messages", "api must be preserved");
+        assert_eq!(
+            node["models"][0]["id"],
+            "m1",
+            "models must be preserved"
+        );
+
+        let sibling = read_pi_native_provider("pi-openai")
+            .expect("read sibling")
+            .expect("sibling exists");
+        assert_eq!(
+            sibling["baseUrl"],
+            "https://openai.example.com/v1",
+            "other provider nodes must stay untouched"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn openai_dialect_maps_to_openai_gateway_prefix() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider(
+            "pi-openai",
+            &takeover_provider("openai-responses", "https://openai.example.com/v1", "sk-o"),
+        )
+        .expect("insert provider");
+
+        apply_pi_takeover_base_url("pi-openai", "http://127.0.0.1:15721")
+            .expect("takeover rewrite");
+
+        let node = read_pi_native_provider("pi-openai")
+            .expect("read node")
+            .expect("node exists");
+        assert_eq!(node["baseUrl"], "http://127.0.0.1:15721/pi/openai");
+    }
+
+    #[test]
+    #[serial]
+    fn unsupported_dialect_is_rejected_and_models_file_untouched() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider(
+            "pi-gemini",
+            &takeover_provider("google-generative-ai", "https://gemini.example.com", "sk-g"),
+        )
+        .expect("insert provider");
+        let before = read_models_document_raw()
+            .expect("read raw")
+            .expect("file exists");
+
+        let error = apply_pi_takeover_base_url("pi-gemini", "http://127.0.0.1:15721")
+            .expect_err("unsupported dialect must be rejected");
+        assert!(matches!(error, AppError::InvalidInput(_)));
+
+        let after = read_models_document_raw()
+            .expect("read raw")
+            .expect("file exists");
+        assert_eq!(
+            before, after,
+            "models.json must not be modified on rejected takeover"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn raw_restore_recovers_pre_takeover_models_document() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider(
+            "pi-anthropic",
+            &takeover_provider("anthropic-messages", "https://anthropic.example.com", "sk-a"),
+        )
+        .expect("insert provider");
+        let backup = read_models_document_raw()
+            .expect("read raw")
+            .expect("file exists");
+
+        apply_pi_takeover_base_url("pi-anthropic", "http://127.0.0.1:15721")
+            .expect("takeover rewrite");
+        let taken_over = read_pi_native_provider("pi-anthropic")
+            .expect("read node")
+            .expect("node exists");
+        assert!(taken_over["baseUrl"]
+            .as_str()
+            .expect("baseUrl string")
+            .contains("/pi/anthropic"));
+
+        restore_models_document_raw(&backup).expect("restore raw backup");
+        let node = read_pi_native_provider("pi-anthropic")
+            .expect("read node")
+            .expect("node exists");
+        assert_eq!(
+            node["baseUrl"],
+            "https://anthropic.example.com",
+            "restored baseUrl must equal the original upstream URL"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn set_base_url_restores_original_upstream_without_dialect_validation() {
+        let _agent = test_support::TestAgentDir::new();
+        insert_pi_provider(
+            "pi-openai",
+            &takeover_provider("openai-completions", "https://openai.example.com/v1", "sk-o"),
+        )
+        .expect("insert provider");
+
+        apply_pi_takeover_base_url("pi-openai", "http://127.0.0.1:15721").expect("takeover");
+        set_pi_provider_base_url("pi-openai", "https://openai.example.com/v1/")
+            .expect("restore via ssot helper");
+
+        let node = read_pi_native_provider("pi-openai")
+            .expect("read node")
+            .expect("node exists");
+        assert_eq!(
+            node["baseUrl"],
+            "https://openai.example.com/v1",
+            "trailing slash normalized by the setter"
         );
     }
 }

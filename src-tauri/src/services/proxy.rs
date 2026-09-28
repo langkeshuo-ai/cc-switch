@@ -1091,10 +1091,17 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        let pi_enabled = self
+            .db
+            .get_proxy_config_for_app("pi")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
 
         Ok(ProxyTakeoverStatus {
             claude: claude_enabled,
             codex: codex_enabled,
+            pi: pi_enabled,
         })
     }
 
@@ -1396,7 +1403,8 @@ impl ProxyService {
         let live_config = match app_type {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
-            _ => return Err("该应用不支持代理功能".to_string()),
+            // 透明转发：apiKey 保留在 models.json，无 Token 需要同步
+            AppType::Pi => return Ok(()),
         };
 
         self.sync_live_config_to_provider(app_type, &live_config)
@@ -1732,11 +1740,112 @@ impl ProxyService {
     }
 
     /// 备份指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
+    /// 解析 Pi 接管目标：settings.json 的 defaultProvider（Pi 原生活动供应商）
+    /// 对齐 CC Switch 数据库档案，返回 (provider_key, 网关路由前缀)。
+    fn resolve_pi_takeover_target(&self) -> Result<(String, &'static str), String> {
+        let defaults = crate::pi_config::read_pi_native_defaults()
+            .map_err(|e| format!("读取 Pi settings.json 失败: {e}"))?;
+        let provider_key = defaults
+            .default_provider
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                "Pi 尚未设置默认供应商（settings.json defaultProvider），请先在 Pi 中选择默认供应商再开启接管"
+                    .to_string()
+            })?;
+        let provider = self
+            .db
+            .get_provider_by_id(&provider_key, "pi")
+            .map_err(|e| format!("读取 Pi 供应商档案失败: {e}"))?
+            .ok_or_else(|| {
+                format!(
+                    "Pi 默认供应商 '{provider_key}' 在 CC Switch 中没有档案，无法接管（请先在 Pi 应用中保存该供应商）"
+                )
+            })?;
+        let api = provider
+            .settings_config
+            .get("api")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let prefix = crate::pi_config::pi_takeover_prefix_for_api(api).ok_or_else(|| {
+            format!(
+                "Pi 供应商 '{provider_key}' 的 API 格式 '{api}' 不支持本地代理接管（仅支持 anthropic-messages / openai-completions / openai-responses）"
+            )
+        })?;
+        Ok((provider_key, prefix))
+    }
+
+    /// 读取整份 models.json（解析为 Value）
+    fn read_pi_models_document(&self) -> Result<Value, String> {
+        let raw = crate::pi_config::read_models_document_raw()?
+            .ok_or_else(|| "Pi models.json 不存在".to_string())?;
+        serde_json::from_str(&String::from_utf8_lossy(&raw))
+            .map_err(|e| format!("解析 Pi models.json 失败: {e}"))
+    }
+
+    /// 判断整份 models.json 中是否存在 baseUrl 指向本网关 /pi/ 路由的供应商节点
+    fn pi_models_document_is_taken_over(document: &Value) -> bool {
+        document
+            .get("providers")
+            .and_then(|v| v.as_object())
+            .map(|providers| {
+                providers.values().any(|node| {
+                    node.get("baseUrl")
+                        .and_then(|v| v.as_str())
+                        .map(|url| Self::is_local_proxy_url(url) && url.contains("/pi/"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// SSOT 兜底：把接管期间改写的 baseUrl 从数据库档案还原。
+    fn restore_pi_base_url_from_ssot(&self) -> Result<bool, String> {
+        let defaults = crate::pi_config::read_pi_native_defaults()
+            .map_err(|e| format!("读取 Pi settings.json 失败: {e}"))?;
+        let Some(provider_key) = defaults
+            .default_provider
+            .filter(|k| !k.trim().is_empty())
+        else {
+            return Ok(false);
+        };
+        let Some(provider) = self
+            .db
+            .get_provider_by_id(&provider_key, "pi")
+            .map_err(|e| format!("读取 Pi 供应商档案失败: {e}"))?
+        else {
+            return Ok(false);
+        };
+        let Some(original_base_url) = provider
+            .settings_config
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(false);
+        };
+        // 档案本身是接管残留（历史异常：接管期间被导入）时不能用它还原
+        if Self::is_local_proxy_url(original_base_url) {
+            log::warn!("Pi 供应商 '{provider_key}' 档案 baseUrl 指向本地代理（疑似接管残留），跳过 SSOT 还原");
+            return Ok(false);
+        }
+        crate::pi_config::set_pi_provider_base_url(&provider_key, original_base_url)
+            .map_err(|e| format!("还原 Pi baseUrl 失败: {e}"))?;
+        Ok(true)
+    }
+
     async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         let (app_type_str, mut config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
-            _ => return Err("该应用不支持代理功能".to_string()),
+            AppType::Pi => {
+                let raw = crate::pi_config::read_models_document_raw()?.ok_or_else(|| {
+                    "Pi models.json 不存在，无法备份".to_string()
+                })?;
+                let config: Value = serde_json::from_str(&String::from_utf8_lossy(&raw))
+                    .map_err(|e| format!("解析 Pi models.json 失败: {e}"))?;
+                ("pi", config)
+            }
         };
 
         // 跳过已被代理接管的 Live：避免把代理占位符当作"原始 Live"存进备份槽
@@ -1860,7 +1969,12 @@ impl ProxyService {
                     .await?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
-            _ => return Err("该应用不支持代理功能".to_string()),
+            AppType::Pi => {
+                let (provider_key, _prefix) = self.resolve_pi_takeover_target()?;
+                crate::pi_config::apply_pi_takeover_base_url(&provider_key, &proxy_url)
+                    .map_err(|e| format!("写入 Pi 接管配置失败: {e}"))?;
+                log::info!("Pi Live 配置已接管（供应商 {provider_key}），网关地址: {proxy_url}/...");
+            }
         }
 
         Ok(())
@@ -1898,6 +2012,21 @@ impl ProxyService {
                 let codex_provider = self.require_current_provider_for_app(&AppType::Codex)?;
                 self.sync_codex_live_from_provider_while_proxy_active(&codex_provider)
                     .await?;
+            }
+            AppType::Pi => {
+                // 尽力而为：无默认供应商 / models.json 缺失 / 方言不支持时静默跳过
+                if let Ok((provider_key, _prefix)) = self.resolve_pi_takeover_target() {
+                    if crate::pi_config::read_models_document_raw()
+                        .map(|raw| raw.is_some())
+                        .unwrap_or(false)
+                    {
+                        if let Err(e) =
+                            crate::pi_config::apply_pi_takeover_base_url(&provider_key, &proxy_url)
+                        {
+                            log::warn!("Pi 尽力接管写入失败（跳过）: {e}");
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1952,7 +2081,13 @@ impl ProxyService {
                     log::info!("Codex Live 配置已恢复");
                 }
             }
-            _ => {}
+            AppType::Pi => {
+                if let Ok(Some(backup)) = self.db.get_live_backup("pi").await {
+                    crate::pi_config::restore_models_document_raw(backup.original_config.as_bytes())
+                        .map_err(|e| format!("恢复 Pi models.json 失败: {e}"))?;
+                    log::info!("Pi Live 配置已恢复");
+                }
+            }
         }
 
         Ok(())
@@ -1965,6 +2100,7 @@ impl ProxyService {
         for app_type in [
             AppType::Claude,
             AppType::Codex,
+            AppType::Pi,
         ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
@@ -2013,6 +2149,12 @@ impl ProxyService {
                 log::warn!(
                     "{app_type_str} 备份本身已是代理占位符（异常历史状态），跳过备份，改走 SSOT 重建 Live"
                 );
+            } else if matches!(app_type, AppType::Pi) {
+                // Pi 的备份就是整份 models.json，字节级原样恢复
+                crate::pi_config::restore_models_document_raw(backup.original_config.as_bytes())
+                    .map_err(|e| format!("恢复 Pi models.json 失败: {e}"))?;
+                log::info!("{app_type_str} Live 配置已从备份恢复");
+                return Ok(());
             } else {
                 self.write_live_config_for_app(app_type, &config)?;
                 log::info!("{app_type_str} Live 配置已从备份恢复");
@@ -2067,7 +2209,10 @@ impl ProxyService {
                 Ok(config) => Self::is_codex_live_taken_over(&config),
                 Err(_) => false,
             },
-            _ => false,
+            AppType::Pi => match self.read_pi_models_document() {
+                Ok(document) => Self::pi_models_document_is_taken_over(&document),
+                Err(_) => false,
+            },
         }
     }
 
@@ -2077,6 +2222,12 @@ impl ProxyService {
     /// - Ok(true)：已成功写回
     /// - Ok(false)：缺少当前供应商/供应商不存在/供应商本身含占位符，无法写回
     fn restore_live_from_ssot_for_app(&self, app_type: &AppType) -> Result<bool, String> {
+        // Pi：从数据库档案还原被改写的 baseUrl（Pi 的 SSOT 是 models.json 本身，
+        // 这里只回填档案里的原始上游地址）
+        if matches!(app_type, AppType::Pi) {
+            return self.restore_pi_base_url_from_ssot();
+        }
+
         let current_id = crate::settings::get_effective_current_provider(&self.db, app_type)
             .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?;
 
@@ -2121,7 +2272,10 @@ impl ProxyService {
         match app_type {
             AppType::Claude => self.cleanup_claude_takeover_placeholders_in_live(),
             AppType::Codex => self.cleanup_codex_takeover_placeholders_in_live(),
-            _ => Ok(()),
+            // Pi：把指向本网关的 baseUrl 还原为档案中的原始地址
+            AppType::Pi => self
+                .restore_pi_base_url_from_ssot()
+                .map(|_| ()),
         }
     }
 
@@ -2203,7 +2357,18 @@ impl ProxyService {
                     });
                 Ok(Self::is_codex_live_taken_over(&config) && base_url_matches)
             }
-            _ => Ok(false),
+            AppType::Pi => {
+                let (provider_key, prefix) = self.resolve_pi_takeover_target()?;
+                let document = self.read_pi_models_document()?;
+                let expected = format!("{proxy_url}/{prefix}");
+                let base_url_matches = document
+                    .get("providers")
+                    .and_then(|value| value.get(&provider_key))
+                    .and_then(|node| node.get("baseUrl"))
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|url| Self::proxy_urls_match(url, &expected));
+                Ok(Self::pi_models_document_is_taken_over(&document) && base_url_matches)
+            }
         }
     }
 
@@ -2374,7 +2539,7 @@ impl ProxyService {
         match app_type {
             AppType::Claude => Self::is_claude_live_taken_over(config),
             AppType::Codex => Self::is_codex_live_taken_over(config),
-            _ => false,
+            AppType::Pi => Self::pi_models_document_is_taken_over(config),
         }
     }
 

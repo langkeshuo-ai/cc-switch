@@ -131,6 +131,42 @@ pub async fn handle_messages(
     handle_messages_for_app(state, request, AppType::Claude, "Claude", "claude", None).await
 }
 
+// ============================================================================
+// Pi API 处理器（透明转发：方言由供应商 `api` 字段决定，与上游一致）
+// ============================================================================
+
+/// Pi anthropic-messages 方言入口：`/pi/anthropic/v1/messages` 等
+pub async fn handle_pi_messages(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_messages_for_app(
+        state,
+        request,
+        AppType::Pi,
+        "Pi",
+        "pi",
+        Some("/pi/anthropic"),
+    )
+    .await
+}
+
+/// Pi openai-completions 方言入口：`/pi/openai/chat/completions`
+pub async fn handle_pi_chat_completions(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Pi, "Pi", "pi").await
+}
+
+/// Pi openai-responses 方言入口：`/pi/openai/responses`
+pub async fn handle_pi_responses(
+    State(state): State<ProxyState>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ProxyError> {
+    handle_responses_for_app(state, request, AppType::Pi, "Pi", "pi").await
+}
+
 async fn handle_messages_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -704,6 +740,17 @@ pub async fn handle_chat_completions(
     State(state): State<ProxyState>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ProxyError> {
+    handle_chat_completions_for_app(state, request, AppType::Codex, "Codex", "codex").await
+}
+
+/// OpenAI Chat Completions 请求的应用参数化版本（Codex CLI / Pi 等共用）
+pub(crate) async fn handle_chat_completions_for_app(
+    state: ProxyState,
+    request: axum::extract::Request,
+    app_type: AppType,
+    tag: &'static str,
+    app_type_str: &'static str,
+) -> Result<axum::response::Response, ProxyError> {
     let (parts, req_body) = request.into_parts();
     let method = parts.method.clone();
     let uri = parts.uri;
@@ -718,8 +765,8 @@ pub async fn handle_chat_completions(
     let body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
 
-    let mut ctx =
-        RequestContext::new(&state, &body, &headers, AppType::Codex, "Codex", "codex").await?;
+    let mut ctx = RequestContext::new(&state, &body, &headers, app_type.clone(), tag, app_type_str)
+        .await?;
     let endpoint = endpoint_with_query(&uri, "/chat/completions");
 
     let is_stream = body
@@ -730,7 +777,7 @@ pub async fn handle_chat_completions(
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
         .forward_with_retry(
-            &AppType::Codex,
+            &app_type,
             method,
             &endpoint,
             body,
