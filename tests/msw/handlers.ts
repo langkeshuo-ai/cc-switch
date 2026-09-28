@@ -244,7 +244,7 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/get_config_dir`, async ({ request }) => {
     const { app } = await withJson<{ app: AppId }>(request);
-    return success(app === "claude" ? "/default/claude" : "/default/codex");
+    return success(`/default/${app}`);
   }),
 
   http.post(`${TAURI_ENDPOINT}/is_portable_mode`, () => success(false)),
@@ -336,8 +336,6 @@ export const handlers = [
       claude: false,
       codex: false,
       pi: false,
-      gemini: false,
-      grokbuild: false,
     }),
   ),
 

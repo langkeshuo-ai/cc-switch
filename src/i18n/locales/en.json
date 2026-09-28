@@ -360,6 +360,7 @@
         "applyPartial": "Snapshot partially applied; some apps were skipped",
         "deleted": "Snapshot deleted",
         "saveFailed": "Failed to save snapshot",
+        "loadFailed": "Failed to load snapshots",
         "applyFailed": "Failed to apply snapshot",
         "deleteFailed": "Failed to delete snapshot",
         "deletedProvider": "(deleted)",

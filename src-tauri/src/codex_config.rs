@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    atomic_write, delete_file, get_home_dir, path_is_within, read_json_file,
-    sanitize_provider_name, write_json_file, write_text_file,
+    atomic_write, delete_file, get_home_dir, path_is_within, read_json_file, write_json_file,
+    write_text_file,
 };
 use crate::error::AppError;
 use crate::model_capabilities::{image_input_capability_from_modalities, ImageInputCapability};
@@ -991,36 +991,6 @@ pub fn get_codex_config_path() -> PathBuf {
 
 pub fn get_codex_model_catalog_path() -> PathBuf {
     get_codex_config_dir().join(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
-}
-
-/// 获取 Codex 供应商配置文件路径
-#[allow(dead_code)]
-pub fn get_codex_provider_paths(
-    provider_id: &str,
-    provider_name: Option<&str>,
-) -> (PathBuf, PathBuf) {
-    let base_name = provider_name
-        .map(sanitize_provider_name)
-        .unwrap_or_else(|| sanitize_provider_name(provider_id));
-
-    let auth_path = get_codex_config_dir().join(format!("auth-{base_name}.json"));
-    let config_path = get_codex_config_dir().join(format!("config-{base_name}.toml"));
-
-    (auth_path, config_path)
-}
-
-/// 删除 Codex 供应商配置文件
-#[allow(dead_code)]
-pub fn delete_codex_provider_config(
-    provider_id: &str,
-    provider_name: &str,
-) -> Result<(), AppError> {
-    let (auth_path, config_path) = get_codex_provider_paths(provider_id, Some(provider_name));
-
-    delete_file(&auth_path).ok();
-    delete_file(&config_path).ok();
-
-    Ok(())
 }
 
 /// 原子写 Codex 的 `auth.json` 与 `config.toml`，在第二步失败时回滚第一步

@@ -360,6 +360,7 @@
         "applyPartial": "快照部分套用，部分應用被跳過",
         "deleted": "快照已刪除",
         "saveFailed": "儲存快照失敗",
+        "loadFailed": "載入快照清單失敗",
         "applyFailed": "套用快照失敗",
         "deleteFailed": "刪除快照失敗",
         "deletedProvider": "（已刪除）",

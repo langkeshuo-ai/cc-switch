@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use super::session::normalize_session_id;
+
 /// 默认 TTL：30 分钟
 const DEFAULT_TTL: Duration = Duration::from_secs(30 * 60);
 /// 默认容量上限
@@ -55,8 +57,9 @@ impl SessionAffinityMap {
 
     /// 查询会话上次成功使用的供应商
     ///
-    /// TTL 过期（惰性判断）或未记录时返回 `None`。
+    /// TTL 过期（惰性判断）、session id 不合法或未记录时返回 `None`。
     pub fn get(&self, app_type: &str, session_id: &str) -> Option<String> {
+        let session_id = normalize_session_id(session_id)?;
         let entries = self.entries.lock().expect("session affinity lock poisoned");
         let (provider_id, last_seen) = entries.get(&Self::key(app_type, session_id))?;
         // 惰性过期：读时判断，不主动清理（容量上限兜底内存）
@@ -67,7 +70,12 @@ impl SessionAffinityMap {
     }
 
     /// 记录会话成功使用某供应商（同时刷新 last_seen）
+    ///
+    /// session id 不合法时静默忽略（不参与粘性）。
     pub fn record(&self, app_type: &str, session_id: &str, provider_id: &str) {
+        let Some(session_id) = normalize_session_id(session_id) else {
+            return;
+        };
         let mut entries = self
             .entries
             .lock()
@@ -130,5 +138,21 @@ mod tests {
 
         assert_eq!(map.get("claude", "sess-1"), Some("p_claude".to_string()));
         assert_eq!(map.get("codex", "sess-1"), Some("p_codex".to_string()));
+    }
+
+    #[test]
+    fn invalid_session_ids_are_ignored() {
+        let map = SessionAffinityMap::new();
+
+        // record：非法 id 静默忽略，不占用容量
+        map.record("claude", "bad id with spaces", "p1");
+        map.record("claude", "bad/../id", "p1");
+        map.record("claude", &"a".repeat(129), "p1");
+        assert_eq!(map.get("claude", "bad id with spaces"), None);
+        assert_eq!(map.get("claude", "bad/../id"), None);
+
+        // 合法 id 不受影响
+        map.record("claude", "sess-1", "p2");
+        assert_eq!(map.get("claude", "sess-1"), Some("p2".to_string()));
     }
 }

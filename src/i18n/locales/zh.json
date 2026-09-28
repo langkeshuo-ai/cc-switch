@@ -360,6 +360,7 @@
         "applyPartial": "快照部分应用，部分应用被跳过",
         "deleted": "快照已删除",
         "saveFailed": "保存快照失败",
+        "loadFailed": "加载快照列表失败",
         "applyFailed": "应用快照失败",
         "deleteFailed": "删除快照失败",
         "deletedProvider": "（已删除）",
