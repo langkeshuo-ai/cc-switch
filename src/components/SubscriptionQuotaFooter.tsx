@@ -425,8 +425,8 @@ const SubscriptionQuotaFooter: React.FC<SubscriptionQuotaFooterProps> = ({
       quota={quota}
       loading={loading}
       refetch={refetch}
-      // expiredHint 里的 {tool} 是 CLI 命令名：Grok 的命令是 `grok` 而非 appId
-      appIdForExpiredHint={appId === "grokbuild" ? "grok" : appId}
+      // expiredHint 里的 {tool} 是 CLI 命令名
+      appIdForExpiredHint={appId}
       inline={inline}
     />
   );

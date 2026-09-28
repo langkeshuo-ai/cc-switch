@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "3.20.4"
+version = "3.20.4-trim.1"
 description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
 authors = ["Jason Young"]
 license = "MIT"
@@ -21,6 +21,10 @@ test-hooks = []
 
 [build-dependencies]
 tauri-build = { version = "2.4.0", features = [] }
+# 兼容性补丁：schemars 0.8.22（tauri-build 依赖链）使用的 indexmap 1.9.3 在
+# rustc >= 1.96 下 autocfg 的 std 探测失效（has_std 不发射 → 泛型默认参数
+# 丢失 → schemars 编译失败）。显式启用 std 绕过探测，行为与旧 rustc 一致。
+indexmap1 = { package = "indexmap", version = "1.9.3", default-features = false, features = ["std"] }
 
 [dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -75,6 +79,8 @@ once_cell = "1.21.3"
 base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 indexmap = { version = "2", features = ["serde"] }
+# 同上：normal 依赖图里如果也出现 indexmap 1.9.3，统一强制 std
+indexmap1 = { package = "indexmap", version = "1.9.3", default-features = false, features = ["std"] }
 rust_decimal = "1.33"
 uuid = { version = "1.11", features = ["v4"] }
 sha2 = "0.10"

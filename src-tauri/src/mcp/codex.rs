@@ -236,11 +236,6 @@ pub fn import_from_codex(config: &mut MultiAppConfig) -> Result<usize, AppError>
                         apps: McpApps {
                             claude: false,
                             codex: true,
-                            gemini: false,
-                            grokbuild: false,
-                            opencode: false,
-                            hermes: false,
-                            mcode: false,
                         },
                         description: None,
                         homepage: None,

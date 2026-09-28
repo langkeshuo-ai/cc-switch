@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
+import { ClaudeIcon, CodexIcon } from "@/components/BrandIcons";
 import {
   ArrowUpAZ,
   Search,
@@ -15,12 +15,6 @@ import {
 } from "lucide-react";
 import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
-import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
-import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
-import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
-import type { OpenClawProviderPreset } from "@/config/openclawProviderPresets";
-import type { HermesProviderPreset } from "@/config/hermesProviderPresets";
-import type { McodeProviderPreset } from "@/config/mcodeProviderPresets";
 import type { PiProviderPreset } from "@/config/piProviderPresets";
 import type { ProviderCategory } from "@/types";
 import {
@@ -42,13 +36,7 @@ export type PresetSortMode =
 export type AnyPreset =
   | ProviderPreset
   | CodexProviderPreset
-  | GeminiProviderPreset
-  | ClaudeDesktopProviderPreset
-  | OpenCodeProviderPreset
-  | OpenClawProviderPreset
-  | HermesProviderPreset
-  | PiProviderPreset
-  | McodeProviderPreset;
+  | PiProviderPreset;
 
 export type PresetEntry = {
   id: string;
@@ -287,8 +275,6 @@ export function ProviderPresetSelector({
           return <ClaudeIcon size={14} />;
         case "codex":
           return <CodexIcon size={14} />;
-        case "gemini":
-          return <GeminiIcon size={14} />;
         case "generic":
           return <Zap size={14} />;
       }

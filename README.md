@@ -1,3 +1,17 @@
+> [!IMPORTANT]
+> ## 个人裁剪分支说明（Personal Trim Fork）
+>
+> 这是 [farion1231/cc-switch](https://github.com/farion1231/cc-switch) 的个人裁剪分支，**只保留 Claude Code、Codex CLI、Pi coding agent 三个应用的管理能力**。
+>
+> **与上游的差异：**
+> - 前端 `AppId` 收窄为 `claude | codex | pi`，删除其余 7 个应用（claude-desktop / gemini / grokbuild / opencode / openclaw / hermes / mcode）的预设、表单、组件与测试
+> - Rust 层 `AppType` 枚举同步收窄，删除对应配置模块、命令、代理路由与会话统计；`gemini_shadow` 基础设施保留（claude 供应商的 gemini_native 格式仍依赖它）
+> - 旧配置/数据库向后兼容：含已删应用 key 的 JSON 与 SQLite 旧列可正常加载，未知应用标识降级处理，不会启动失败
+> - 构建产物**不签名、不公证、不带 updater**（`.github/workflows/build.yml`，自用）
+>
+> 会定期通过 GitHub 的 Sync fork 同步上游更新；上游功能合并后仅维护 claude/codex/pi 相关路径。
+> 版本号后缀 `-trim.N` 表示个人裁剪版（基于上游 3.20.4）。
+
 <div align="center">
 
 # CC Switch

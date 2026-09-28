@@ -120,26 +120,6 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         .set_current_provider(AppType::Claude.as_str(), "p1")
         .expect("set current provider p1");
 
-    // Claude Desktop 只有供应商一个活跃维度（MCP/Skills/Prompt 对它不适用）
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d1", "dk-1"),
-        )
-        .expect("save desktop provider d1");
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d2", "dk-2"),
-        )
-        .expect("save desktop provider d2");
-    state
-        .db
-        .set_current_provider(AppType::ClaudeDesktop.as_str(), "d1")
-        .expect("set current desktop provider d1");
-
     // 让 live settings.json 与 p1 一致（switch_normal 回填需要）
     let claude_dir = home.join(".claude");
     fs::create_dir_all(&claude_dir).expect("create .claude dir");
@@ -191,16 +171,9 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         "codex side not captured when creating from the claude group"
     );
     assert_eq!(payload.mcp.codex, None, "uncaptured side stays None");
-    assert_eq!(
-        payload.providers.claude_desktop, None,
-        "claude desktop has its own profile scope"
-    );
 
     // ---- 改动全部四类配置（走真实切换路径）----
     ProviderService::switch(&state, AppType::Claude, "p2").expect("switch to p2");
-    // Desktop 现在有自己的项目分组；Claude 分组 apply 不应再影响 Desktop
-    #[cfg(any(target_os = "macos", windows))]
-    ProviderService::switch(&state, AppType::ClaudeDesktop, "d2").expect("switch desktop to d2");
     McpService::toggle_app(&state, "m1", AppType::Claude, false).expect("disable m1");
     McpService::toggle_app(&state, "m2", AppType::Claude, true).expect("enable m2");
     SkillService::toggle_app(&state.db, "local:test-skill", &AppType::Claude, false)
@@ -217,23 +190,6 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
         .get_current_provider(AppType::Claude.as_str())
         .expect("get current provider");
     assert_eq!(current.as_deref(), Some("p1"), "provider restored to p1");
-
-    // Claude 分组不再管理 Desktop：apply 后 Desktop 保持切换前的状态不变。
-    // macOS/Windows 上上面已切到 d2；Linux（CI）不支持 Desktop 切换、那行被 cfg 门控
-    // 编译剔除，Desktop 仍是种子值 d1。两种情况都验证 claude-scope apply 不会动 Desktop。
-    let current_desktop = state
-        .db
-        .get_current_provider(AppType::ClaudeDesktop.as_str())
-        .expect("get current desktop provider");
-    #[cfg(any(target_os = "macos", windows))]
-    let expected_desktop = "d2";
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let expected_desktop = "d1";
-    assert_eq!(
-        current_desktop.as_deref(),
-        Some(expected_desktop),
-        "desktop provider untouched by claude-scope apply"
-    );
 
     let servers = state.db.get_all_mcp_servers().expect("get mcp servers");
     assert!(servers.get("m1").expect("m1").apps.claude, "m1 re-enabled");
@@ -318,7 +274,6 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
         "claude slot not captured by codex-side snapshot"
     );
     assert_eq!(payload.mcp.claude, None);
-    assert_eq!(payload.providers.claude_desktop, None);
     assert_eq!(payload.mcp.codex, Some(vec![]), "codex side captured");
 
     // 按 Codex 组应用：只动 codex 组的 current 标记，Claude 侧原样不动
@@ -748,67 +703,3 @@ fn profile_switch_auto_disables_takeover_before_apply() {
     );
 }
 
-#[cfg(any(target_os = "macos", windows))]
-#[test]
-fn claude_desktop_profile_scope_is_independent() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    let state = create_test_state().expect("create test state");
-
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d1", "dk-1"),
-        )
-        .expect("save desktop provider d1");
-    state
-        .db
-        .save_provider(
-            AppType::ClaudeDesktop.as_str(),
-            &desktop_provider("d2", "dk-2"),
-        )
-        .expect("save desktop provider d2");
-    state
-        .db
-        .set_current_provider(AppType::ClaudeDesktop.as_str(), "d1")
-        .expect("set current desktop provider d1");
-
-    // 在 Desktop 页新建项目：只拍 Desktop 供应商
-    let project = ProfileService::create(&state, "Desktop Project", ProfileScope::ClaudeDesktop)
-        .expect("create desktop profile");
-    let payload: ProfilePayload =
-        serde_json::from_str(&project.payload).expect("parse desktop payload");
-    assert_eq!(payload.providers.claude_desktop.as_deref(), Some("d1"));
-    assert_eq!(payload.providers.claude, None, "claude slot untouched");
-    assert_eq!(payload.providers.codex, None, "codex slot untouched");
-
-    // 切到 d2
-    ProviderService::switch(&state, AppType::ClaudeDesktop, "d2").expect("switch desktop to d2");
-
-    // 应用 Desktop 项目：恢复 d1
-    let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::ClaudeDesktop)
-        .expect("apply desktop profile");
-    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
-
-    assert_eq!(
-        state
-            .db
-            .get_current_provider(AppType::ClaudeDesktop.as_str())
-            .expect("get current desktop provider")
-            .as_deref(),
-        Some("d1"),
-        "desktop provider restored by desktop-scope apply"
-    );
-    assert_eq!(
-        state
-            .db
-            .get_current_profile_id(ProfileScope::ClaudeDesktop.as_str())
-            .expect("get desktop current profile id")
-            .as_deref(),
-        Some(project.id.as_str()),
-        "desktop scope marker set"
-    );
-}

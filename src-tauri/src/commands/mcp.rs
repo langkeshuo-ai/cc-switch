@@ -121,8 +121,6 @@ pub async fn upsert_mcp_server_in_config(
     if sync_other_side.unwrap_or(false) {
         new_server.apps.claude = true;
         new_server.apps.codex = true;
-        new_server.apps.gemini = true;
-        new_server.apps.opencode = true;
     }
 
     McpService::upsert_server(&state, new_server)

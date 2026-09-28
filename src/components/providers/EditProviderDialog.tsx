@@ -10,7 +10,6 @@ import {
 } from "@/components/providers/forms/ProviderForm";
 import { AuthSettingsPanel } from "@/components/providers/AuthSettingsPanel";
 import {
-  openclawApi,
   providersApi,
   vscodeApi,
   type AppId,
@@ -202,33 +201,13 @@ export function EditProviderDialog({
         return;
       }
 
-      // OpenCode uses additive mode, while Pi's shared models.json is owned by
-      // the catalog coordinator. Neither has a per-provider generic live
-      // snapshot that may replace the DB aggregate in this form.
-      if (appId === "opencode" || appId === "pi" || appId === "mcode") {
+      // Pi's shared models.json is owned by the catalog coordinator. It has
+      // no per-provider generic live snapshot that may replace the DB
+      // aggregate in this form.
+      if (appId === "pi") {
         if (!cancelled) {
           setLiveSettings(null);
           setHasLoadedLive(true);
-        }
-        return;
-      }
-
-      if (appId === "openclaw") {
-        try {
-          const live = await openclawApi.getLiveProvider(provider.id);
-          if (!cancelled && live && typeof live === "object") {
-            setLiveSettings(live);
-          } else if (!cancelled) {
-            setLiveSettings(null);
-          }
-        } catch {
-          if (!cancelled) {
-            setLiveSettings(null);
-          }
-        } finally {
-          if (!cancelled) {
-            setHasLoadedLive(true);
-          }
         }
         return;
       }
@@ -337,8 +316,7 @@ export function EditProviderDialog({
         unknown
       >;
       const nextProviderId =
-        (appId === "opencode" || appId === "openclaw" || appId === "pi") &&
-        values.providerKey?.trim()
+        appId === "pi" && values.providerKey?.trim()
           ? values.providerKey.trim()
           : provider.id;
 
