@@ -14,7 +14,8 @@ jobs:
         include:
           - os: windows-2022
             target: ""
-            args: ""
+            # MSI(WiX) 不接受 3.20.4-trim.1 的字母 pre-release，Windows 只出 NSIS
+            args: "--bundles nsis"
           - os: macos-14
             target: universal-apple-darwin
             args: "--target universal-apple-darwin"
@@ -81,7 +82,6 @@ jobs:
           name: cc-switch-windows
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
       - name: Upload artifacts (macOS)
