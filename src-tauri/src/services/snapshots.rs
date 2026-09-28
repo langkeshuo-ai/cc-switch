@@ -10,6 +10,13 @@
 //! 现成 `set_takeover_for_app` 接口，不自写文件操作。
 //!
 //! apply 为 best-effort：单个应用的失败记入 skipped 继续，不整体回滚。
+//! 若某个应用在多步恢复的中途失败（如切换成功但接管开启失败），已完成
+//! 的步骤保持生效；由于 apply 幂等，最经济的补救是重新执行一次「应用
+//! 快照」，剩余未完成的步骤会被重新计算并补齐（失败时会以 warn 日志提示）。
+//!
+//! apply/save 与数据库导入恢复（import/export、WebDAV/S3 同步）同为
+//! 「配置变更序列」，共用 sync_protocol::sync_mutex 串行化，避免两个
+//! apply 并发交错（计划基于过期状态），或 apply 与数据库整体恢复竞态。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -121,6 +128,16 @@ pub struct SnapshotApplyResult {
 
 pub struct SnapshotService;
 
+/// 串行化配置变更序列：复用同步层的全局 `sync_mutex`（数据库导入/恢复、
+/// WebDAV/S3 同步共用同一把锁），使快照 apply/save 与这些序列互斥。
+///
+/// 调用方为同步 Tauri 命令（跑在 Tauri 线程池而非 tokio worker 线程），
+/// 因此这里的 `block_on` 是安全的，与 `apply_one` 内部对
+/// `set_takeover_for_app` 的既有用法一致；异步任务持有该锁时不会走到本函数。
+fn lock_config_sequence() -> tokio::sync::MutexGuard<'static, ()> {
+    tauri::async_runtime::block_on(crate::services::sync_protocol::sync_mutex().lock())
+}
+
 impl SnapshotService {
     /// 读取应用当前的"有效供应商 id"。
     ///
@@ -171,6 +188,7 @@ impl SnapshotService {
 
     /// 保存当前状态为命名快照（同名覆盖，覆盖时沿用原 created_at）
     pub fn save(state: &AppState, name: &str) -> Result<(), AppError> {
+        let _sequence_guard = lock_config_sequence();
         let name = name.trim();
         if name.is_empty() {
             return Err(AppError::InvalidInput("快照名称不能为空".to_string()));
@@ -250,6 +268,7 @@ impl SnapshotService {
 
     /// 应用快照（best-effort）：逐应用恢复供应商与接管状态
     pub fn apply(state: &AppState, name: &str) -> Result<SnapshotApplyResult, AppError> {
+        let _sequence_guard = lock_config_sequence();
         let row = state
             .db
             .get_app_snapshot(name)?
@@ -274,10 +293,18 @@ impl SnapshotService {
             };
             match Self::apply_one(state, &app, &entry) {
                 Ok(()) => result.applied.push(app.as_str().to_string()),
-                Err(reason) => result.skipped.push(SkippedApp {
-                    app: app.as_str().to_string(),
-                    reason,
-                }),
+                Err(reason) => {
+                    // 部分应用语义：该应用已完成的前序步骤保持生效，不做回滚
+                    //（apply 幂等，重新执行一次即可补齐剩余步骤）
+                    log::warn!(
+                        "应用快照 '{name}' 时 {} 恢复失败（{reason}）：已完成步骤保持现状，可重新执行应用快照补齐剩余恢复",
+                        app.as_str()
+                    );
+                    result.skipped.push(SkippedApp {
+                        app: app.as_str().to_string(),
+                        reason,
+                    });
+                }
             }
         }
         Ok(result)
@@ -351,6 +378,53 @@ mod tests {
     use serial_test::serial;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// 测试期把 HOME/CC_SWITCH_TEST_HOME 指向临时目录，隔离 claude/codex
+    /// 的真实用户配置（与 provider 模块测试的 TempHome 同一套路）。
+    struct TestHomeGuard {
+        _dir: tempfile::TempDir,
+        home: Option<std::ffi::OsString>,
+        userprofile: Option<std::ffi::OsString>,
+        test_home: Option<std::ffi::OsString>,
+    }
+
+    impl TestHomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::TempDir::new().expect("create temp home");
+            let home = std::env::var_os("HOME");
+            let userprofile = std::env::var_os("USERPROFILE");
+            let test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("HOME", dir.path());
+            std::env::set_var("USERPROFILE", dir.path());
+            std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+            crate::settings::reload_settings().expect("reload settings");
+            Self {
+                _dir: dir,
+                home,
+                userprofile,
+                test_home,
+            }
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match self.userprofile.take() {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+            match self.test_home.take() {
+                Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = crate::settings::reload_settings();
+        }
+    }
 
     fn entry(provider_id: Option<&str>, takeover: bool) -> SnapshotAppEntry {
         SnapshotAppEntry {
@@ -380,6 +454,243 @@ mod tests {
         let settings_path = crate::pi_config::get_pi_settings_path().unwrap();
         fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         fs::write(&settings_path, content).unwrap();
+    }
+
+    fn claude_provider(id: &str) -> Provider {
+        Provider::with_id(
+            id.to_string(),
+            "Claude provider".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": format!("token-{id}"),
+                    "ANTHROPIC_BASE_URL": "https://api.example.com"
+                }
+            }),
+            None,
+        )
+    }
+
+    fn codex_provider(id: &str) -> Provider {
+        let mut provider = Provider::with_id(
+            id.to_string(),
+            "Codex provider".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": format!("sk-{id}") },
+                "config": format!(
+                    "model_provider = \"{id}\"\n\
+                     [model_providers.{id}]\n\
+                     name = \"{id}\"\n\
+                     base_url = \"https://{id}.example/v1\"\n\
+                     wire_api = \"chat\"\n"
+                )
+            }),
+            None,
+        );
+        provider.category = Some("custom".to_string());
+        provider
+    }
+
+    /// 建立三应用各两个供应商，并让 current 指向各自的 "a" 槽位
+    /// （claude/codex = DB + 本地 settings，pi = settings.json defaultProvider）。
+    fn seed_three_apps_with_current(state: &AppState) {
+        ProviderService::add(state, AppType::Pi, pi_provider("pi-a"), false)
+            .expect("add pi-a");
+        ProviderService::add(state, AppType::Pi, pi_provider("pi-b"), false)
+            .expect("add pi-b");
+        state
+            .db
+            .save_provider("claude", &claude_provider("cl-a"))
+            .expect("save cl-a");
+        state
+            .db
+            .save_provider("claude", &claude_provider("cl-b"))
+            .expect("save cl-b");
+        state
+            .db
+            .save_provider("codex", &codex_provider("cx-a"))
+            .expect("save cx-a");
+        state
+            .db
+            .save_provider("codex", &codex_provider("cx-b"))
+            .expect("save cx-b");
+
+        state.db.set_current_provider("claude", "cl-a").unwrap();
+        crate::settings::set_current_provider(&AppType::Claude, Some("cl-a")).unwrap();
+        state.db.set_current_provider("codex", "cx-a").unwrap();
+        crate::settings::set_current_provider(&AppType::Codex, Some("cx-a")).unwrap();
+        write_pi_settings(r#"{"defaultProvider":"pi-a"}"#);
+    }
+
+    /// 把三个应用的 current 全部漂移到 "b" 槽位
+    fn drift_all_apps_to_b(state: &AppState) {
+        state.db.set_current_provider("claude", "cl-b").unwrap();
+        crate::settings::set_current_provider(&AppType::Claude, Some("cl-b")).unwrap();
+        state.db.set_current_provider("codex", "cx-b").unwrap();
+        crate::settings::set_current_provider(&AppType::Codex, Some("cx-b")).unwrap();
+        write_pi_settings(r#"{"defaultProvider":"pi-b"}"#);
+    }
+
+    #[test]
+    #[serial]
+    fn multi_app_snapshot_apply_restores_all_three_apps() {
+        let _home = TestHomeGuard::new();
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+        seed_three_apps_with_current(&state);
+
+        SnapshotService::save(&state, "work").expect("save snapshot");
+        drift_all_apps_to_b(&state);
+
+        let result = SnapshotService::apply(&state, "work").expect("apply snapshot");
+        assert!(
+            result.skipped.is_empty(),
+            "no app should be skipped: {:?}",
+            result.skipped
+        );
+        for app in ["claude", "codex", "pi"] {
+            assert!(
+                result.applied.iter().any(|a| a == app),
+                "{app} must be applied; got {:?}",
+                result.applied
+            );
+        }
+
+        // 供应商恢复到快照时的 "a" 槽位
+        assert_eq!(
+            crate::settings::get_effective_current_provider(&state.db, &AppType::Claude)
+                .unwrap()
+                .as_deref(),
+            Some("cl-a"),
+            "claude current provider must be restored"
+        );
+        assert_eq!(
+            crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+                .unwrap()
+                .as_deref(),
+            Some("cx-a"),
+            "codex current provider must be restored"
+        );
+        assert_eq!(
+            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            Some("pi-a"),
+            "Pi defaultProvider must be restored"
+        );
+
+        // 接管标志恢复到快照记录的状态（本测试快照记录的均为关闭）
+        for app in ["claude", "codex", "pi"] {
+            assert!(
+                !state.db.get_proxy_flags_sync(app).0,
+                "{app} takeover flag must match the snapshot (off)"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn apply_reports_missing_provider_per_app_and_restores_the_rest() {
+        let _home = TestHomeGuard::new();
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+        seed_three_apps_with_current(&state);
+
+        SnapshotService::save(&state, "work").expect("save snapshot");
+        drift_all_apps_to_b(&state);
+        // 部分失败场景：claude 的快照目标供应商在 apply 前被删除
+        state
+            .db
+            .delete_provider("claude", "cl-a")
+            .expect("delete cl-a");
+
+        let result = SnapshotService::apply(&state, "work").expect("apply snapshot");
+
+        // claude 按应用粒度上报跳过，带稳定原因码
+        let claude_skip = result
+            .skipped
+            .iter()
+            .find(|s| s.app == "claude")
+            .expect("claude must be reported as skipped");
+        assert_eq!(claude_skip.reason, "provider_missing: cl-a");
+
+        // 其余应用不受影响，照常恢复
+        assert!(result.applied.iter().any(|a| a == "codex"));
+        assert!(result.applied.iter().any(|a| a == "pi"));
+        assert_eq!(
+            crate::settings::get_effective_current_provider(&state.db, &AppType::Codex)
+                .unwrap()
+                .as_deref(),
+            Some("cx-a")
+        );
+        assert_eq!(
+            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            Some("pi-a")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn apply_is_serialized_behind_the_config_sequence_lock() {
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+
+        // 先持有配置变更序列锁（与 import/export、快照 apply 共用），
+        // 并发的 apply 必须等待而不是交错执行
+        let lock = crate::services::sync_protocol::sync_mutex().blocking_lock();
+        let done = Arc::new(AtomicBool::new(false));
+        let handle = {
+            let done = done.clone();
+            let state = state.clone();
+            std::thread::spawn(move || {
+                // 快照不存在 → InvalidInput；无论结果如何，必须在拿到锁后才返回
+                let _ = SnapshotService::apply(&state, "missing");
+                done.store(true, Ordering::Release);
+            })
+        };
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !done.load(Ordering::Acquire),
+            "apply must wait for the config sequence lock instead of running concurrently"
+        );
+
+        drop(lock);
+        handle.join().expect("apply thread must not panic");
+        assert!(done.load(Ordering::Acquire));
+    }
+
+    #[test]
+    #[serial]
+    fn pi_snapshot_apply_result_is_what_provider_router_selects() {
+        let _home = TestHomeGuard::new();
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+        ProviderService::add(&state, AppType::Pi, pi_provider("pi-a"), false)
+            .expect("add pi-a");
+        ProviderService::add(&state, AppType::Pi, pi_provider("pi-b"), false)
+            .expect("add pi-b");
+
+        write_pi_settings(r#"{"defaultProvider":"pi-a"}"#);
+        SnapshotService::save(&state, "route").expect("save snapshot");
+
+        // 漂移：settings.json 与 DB current 都指向 pi-b
+        write_pi_settings(r#"{"defaultProvider":"pi-b"}"#);
+        state.db.set_current_provider("pi", "pi-b").unwrap();
+
+        SnapshotService::apply(&state, "route").expect("apply snapshot");
+
+        // 端到端切片：DB current 已经不指向快照目标，路由层必须经由
+        // settings.json defaultProvider（apply 恢复后的值）选出正确供应商
+        let router = crate::proxy::provider_router::ProviderRouter::new(state.db.clone());
+        let selected = tauri::async_runtime::block_on(router.select_providers("pi", None))
+            .expect("router must select a provider");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "pi-a");
     }
 
     #[test]
