@@ -72,6 +72,13 @@ jobs:
         run: pnpm typecheck
 
       # createUpdaterArtifacts 已用 --config 关闭：本分支产物不签名、不用 updater
+      # 构建前清 bundle 目录：target 缓存可能带出旧版本安装包，避免混入 artifact
+      - name: Clean stale bundles
+        shell: bash
+        run: |
+          rm -rf src-tauri/target/release/bundle
+          rm -rf src-tauri/target/universal-apple-darwin/release/bundle
+
       - name: Build Tauri app (unsigned)
         run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
