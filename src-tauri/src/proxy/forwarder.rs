@@ -407,6 +407,12 @@ impl RequestForwarder {
                 app_type, method, endpoint, body, headers, extensions, providers,
             )
             .await;
+        // 会话粘性埋点：请求成功返回后记录 session → provider 映射。
+        // 统一放在 wrapper 出口，覆盖主路径 / media 重试 / 整流重试等全部成功出口；
+        // 仅客户端提供的 session id 参与粘性（生成的 UUID 每次请求都不同）。
+        if let Ok(fr) = &result {
+            self.record_session_affinity(app_type.as_str(), &fr.provider.id);
+        }
         // 把 guard 注入到 Ok 结果，让它随响应一起流转到 response_processor，
         // 在流式 body 的 future 内才真正 drop。
         // Err 路径：guard 在函数 scope 内随返回值落地时自动 drop。
@@ -414,6 +420,15 @@ impl RequestForwarder {
             fr.connection_guard = Some(guard);
             fr
         })
+    }
+
+    /// 会话粘性埋点：请求成功返回后记录 session → provider
+    fn record_session_affinity(&self, app_type: &str, provider_id: &str) {
+        if !self.session_client_provided {
+            return;
+        }
+        self.router
+            .record_session_affinity(app_type, &self.session_id, provider_id);
     }
 
     /// 实际转发逻辑（不包含客户端维度的入口/出口计数）
