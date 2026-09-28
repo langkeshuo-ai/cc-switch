@@ -59,9 +59,36 @@ impl ProviderRouter {
         let mut total_providers = 0usize;
         let mut circuit_open_count = 0usize;
         // Pi 的实际生效供应商是 settings.json 的 defaultProvider（Pi CLI 唯一
-        // 跟随的源），代理转发必须以它为准；缺失时退回数据库 current provider。
+        // 跟随的源）。语义约定：
+        // - defaultProvider 存在且在 CC Switch 有供应商档案 → 以它为准；
+        // - 缺失 / settings.json 不可读 / 悬空（指向不存在的档案）→ 记 warn
+        //   并退回数据库 current provider，与路由器其余缺失配置的兜底行为
+        //   保持一致（consistency over cleverness）；
+        // - 两者皆无 → 落入下方统一的 NoProvidersConfigured 错误路径。
         let pi_proxy_override = (app_type == crate::app_config::AppType::Pi.as_str())
-            .then(crate::pi_config::pi_proxy_current_provider_key)
+            .then(|| -> Option<String> {
+                let Some(key) = crate::pi_config::pi_proxy_current_provider_key() else {
+                    log::warn!(
+                        "[{app_type}] Pi settings.json 缺失 defaultProvider 或不可读，退回数据库 current provider"
+                    );
+                    return None;
+                };
+                match self.db.get_provider_by_id(&key, app_type) {
+                    Ok(Some(_)) => Some(key),
+                    Ok(None) => {
+                        log::warn!(
+                            "[{app_type}] Pi settings.json defaultProvider '{key}' 在 CC Switch 中没有供应商档案（悬空引用），退回数据库 current provider"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[{app_type}] 读取 Pi 供应商档案 '{key}' 失败，退回数据库 current provider: {e}"
+                        );
+                        None
+                    }
+                }
+            })
             .flatten();
         let current_id = pi_proxy_override.or_else(|| {
             AppType::from_str(app_type)
@@ -805,5 +832,71 @@ mod tests {
             .unwrap();
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "a");
+    }
+
+    /// 写入 Pi settings.json（TestAgentDir 隔离真实用户目录）
+    fn write_pi_settings(content: &str) {
+        let settings_path = crate::pi_config::get_pi_settings_path().unwrap();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, content).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_valid_default_provider_overrides_db_current() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let provider_b =
+            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        db.save_provider("pi", &provider_a).unwrap();
+        db.save_provider("pi", &provider_b).unwrap();
+        // DB current 指向 a，但 Pi 实际生效的是 b（settings.json 为权威源）
+        db.set_current_provider("pi", "a").unwrap();
+        write_pi_settings(r#"{"defaultProvider":"b"}"#);
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router.select_providers("pi", None).await.unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "b");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_dangling_default_provider_falls_back_to_db_current() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        db.save_provider("pi", &provider_a).unwrap();
+        db.set_current_provider("pi", "a").unwrap();
+        // defaultProvider 悬空：指向 CC Switch 中不存在的档案
+        write_pi_settings(r#"{"defaultProvider":"ghost"}"#);
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router.select_providers("pi", None).await.unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_missing_default_provider_and_no_db_fallback_is_a_clear_error() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        write_pi_settings("{}");
+
+        let router = ProviderRouter::new(db.clone());
+        let error = router
+            .select_providers("pi", None)
+            .await
+            .expect_err("no provider configured anywhere");
+        assert!(matches!(error, crate::error::AppError::NoProvidersConfigured));
     }
 }

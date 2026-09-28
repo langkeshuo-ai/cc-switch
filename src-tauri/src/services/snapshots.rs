@@ -122,11 +122,40 @@ pub struct SnapshotApplyResult {
 pub struct SnapshotService;
 
 impl SnapshotService {
+    /// 读取应用当前的"有效供应商 id"。
+    ///
+    /// Pi 的唯一权威来源是 Pi settings.json 的 `defaultProvider`（Pi CLI 只认
+    /// 它，与 CC Switch 数据库的 current provider 可能分叉），因此对 Pi 必须
+    /// 读取实际文件；仅当 settings.json 缺失或不可读时才退回数据库 current
+    /// provider。其他应用维持原逻辑。
+    fn capture_provider_id(state: &AppState, app: &AppType) -> Result<Option<String>, AppError> {
+        if app == &AppType::Pi {
+            let settings_exists = crate::pi_config::get_pi_settings_path()
+                .map(|path| path.exists())
+                .unwrap_or(false);
+            if settings_exists {
+                match crate::pi_config::read_pi_native_defaults() {
+                    Ok(defaults) => {
+                        return Ok(defaults
+                            .default_provider
+                            .filter(|key| !key.trim().is_empty()));
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "读取 Pi settings.json 失败，快照退回数据库 current provider: {error}"
+                        );
+                    }
+                }
+            }
+        }
+        crate::settings::get_effective_current_provider(&state.db, app)
+    }
+
     /// 抓取三个应用的当前状态
     fn capture_apps(state: &AppState) -> Result<BTreeMap<String, SnapshotAppEntry>, AppError> {
         let mut apps = BTreeMap::new();
         for app in AppType::all() {
-            let provider_id = crate::settings::get_effective_current_provider(&state.db, &app)?;
+            let provider_id = Self::capture_provider_id(state, &app)?;
             // 接管状态与 UI 展示同源：proxy_config.enabled（get_proxy_flags_sync 的第一个值）
             let takeover = state.db.get_proxy_flags_sync(app.as_str()).0;
             apps.insert(
@@ -271,7 +300,7 @@ impl SnapshotService {
             }
         }
 
-        let current_provider = crate::settings::get_effective_current_provider(&state.db, app)
+        let current_provider = Self::capture_provider_id(state, app)
             .map_err(|e| format!("current_provider_failed: {e}"))?;
         let current_takeover = state.db.get_proxy_flags_sync(app.as_str()).0;
         let steps = plan_app_restore(current_provider.as_deref(), current_takeover, entry);
@@ -286,6 +315,13 @@ impl SnapshotService {
                     let pid = entry.provider_id.clone().unwrap_or_default();
                     ProviderService::switch(state, app.clone(), &pid)
                         .map_err(|e| format!("switch_failed: {e}"))?;
+                    // Pi CLI 只跟随 settings.json 的 defaultProvider；membership
+                    // 切换（pi::enable）不会改它，这里补写使 Pi 真正指向快照
+                    // 记录的供应商。
+                    if app == &AppType::Pi {
+                        crate::pi_config::set_pi_default_provider(&pid)
+                            .map_err(|e| format!("pi_default_provider_failed: {e}"))?;
+                    }
                 }
                 ApplyStep::EnableTakeover => tauri::async_runtime::block_on(
                     state.proxy_service.set_takeover_for_app(app.as_str(), true),
@@ -308,12 +344,108 @@ impl SnapshotService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::Database;
+    use crate::pi_config::test_support::TestAgentDir;
+    use crate::provider::Provider;
+    use serde_json::json;
+    use serial_test::serial;
+    use std::fs;
+    use std::sync::Arc;
 
     fn entry(provider_id: Option<&str>, takeover: bool) -> SnapshotAppEntry {
         SnapshotAppEntry {
             provider_id: provider_id.map(|s| s.to_string()),
             takeover,
         }
+    }
+
+    fn pi_provider(id: &str) -> Provider {
+        let mut provider = Provider::with_id(
+            id.to_string(),
+            "Test provider".to_string(),
+            json!({
+                "name": "Test provider",
+                "baseUrl": "https://api.example.com/v1",
+                "apiKey": "secret",
+                "api": "openai-completions",
+                "models": [{ "id": "model-a" }]
+            }),
+            None,
+        );
+        provider.category = Some("custom".to_string());
+        provider
+    }
+
+    fn write_pi_settings(content: &str) {
+        let settings_path = crate::pi_config::get_pi_settings_path().unwrap();
+        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        fs::write(&settings_path, content).unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn pi_snapshot_roundtrip_preserves_settings_default_provider() {
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+        // DB-only 供应商（不进 models.json）
+        ProviderService::add(&state, AppType::Pi, pi_provider("cc-switch-test"), false)
+            .expect("save provider");
+
+        // capture 必须读取 settings.json 的 defaultProvider（而非 DB current）
+        write_pi_settings(r#"{"defaultProvider":"cc-switch-test"}"#);
+        SnapshotService::save(&state, "pi-work").expect("save snapshot");
+        let saved = state.db.get_app_snapshot("pi-work").unwrap().unwrap();
+        let data: AppSnapshotData = serde_json::from_str(&saved.data).unwrap();
+        assert_eq!(
+            data.apps.get("pi").and_then(|entry| entry.provider_id.clone()),
+            Some("cc-switch-test".to_string()),
+            "capture must record the actual Pi defaultProvider"
+        );
+
+        // 模拟漂移：defaultProvider 指向别处
+        write_pi_settings(r#"{"defaultProvider":"somewhere-else"}"#);
+        let result = SnapshotService::apply(&state, "pi-work").expect("apply snapshot");
+        assert!(result.applied.iter().any(|app| app == "pi"));
+
+        // apply 后 Pi CLI 唯一跟随的 defaultProvider 必须被恢复
+        assert_eq!(
+            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            Some("cc-switch-test"),
+            "apply must restore Pi defaultProvider"
+        );
+        // 且该供应商已进入 models.json（membership 经 ProviderService::switch 恢复）
+        assert!(
+            crate::pi_config::pi_provider_exists("cc-switch-test").unwrap(),
+            "apply must restore models.json membership via the normal switch path"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn pi_snapshot_capture_falls_back_to_db_when_settings_unreadable() {
+        let _agent = TestAgentDir::new();
+        let state = AppState::new(Arc::new(
+            Database::memory().expect("create in-memory database"),
+        ));
+        ProviderService::add(&state, AppType::Pi, pi_provider("cc-switch-test"), false)
+            .expect("save provider");
+        // settings.json 存在但不可解析 → 退回 DB current provider
+        write_pi_settings("{not-json");
+        state
+            .db
+            .set_current_provider(AppType::Pi.as_str(), "cc-switch-test")
+            .unwrap();
+
+        SnapshotService::save(&state, "pi-work").expect("save snapshot");
+        let saved = state.db.get_app_snapshot("pi-work").unwrap().unwrap();
+        let data: AppSnapshotData = serde_json::from_str(&saved.data).unwrap();
+        assert_eq!(
+            data.apps.get("pi").and_then(|entry| entry.provider_id.clone()),
+            Some("cc-switch-test".to_string()),
+            "unreadable settings.json must fall back to the DB current provider"
+        );
     }
 
     #[test]

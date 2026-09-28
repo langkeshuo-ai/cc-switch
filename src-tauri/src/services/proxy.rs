@@ -1804,11 +1804,12 @@ impl ProxyService {
         Ok((provider_key, prefix))
     }
 
-    /// 读取整份 models.json（解析为 Value）
+    /// 读取整份 models.json（解析为 Value；JSON5 兼容：文件可能带注释，
+    /// 必须经 pi_config 的统一解析器，不能用 serde_json 直接解析）
     fn read_pi_models_document(&self) -> Result<Value, String> {
         let raw = crate::pi_config::read_models_document_raw()?
             .ok_or_else(|| "Pi models.json 不存在".to_string())?;
-        serde_json::from_str(&String::from_utf8_lossy(&raw))
+        crate::pi_config::parse_models_document_raw(&raw)
             .map_err(|e| format!("解析 Pi models.json 失败: {e}"))
     }
 
@@ -1865,17 +1866,32 @@ impl ProxyService {
     }
 
     async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
+        // Pi：models.json 备份保存原始字节（UTF-8 文本），停止接管时经
+        // restore_models_document_raw 字节级原样写回，注释与格式不丢失；
+        // JSON5 解析仅用于接管占位符检查。
+        if matches!(app_type, AppType::Pi) {
+            let raw = crate::pi_config::read_models_document_raw()?.ok_or_else(|| {
+                "Pi models.json 不存在，无法备份".to_string()
+            })?;
+            let config = crate::pi_config::parse_models_document_raw(&raw)
+                .map_err(|e| format!("解析 Pi models.json 失败: {e}"))?;
+            if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
+                log::warn!(
+                    "pi Live 已被代理接管，不备份（避免把代理配置固化进备份槽）；下次 stop 会从 SSOT 重建 Live"
+                );
+                return Ok(());
+            }
+            self.db
+                .save_live_backup("pi", &String::from_utf8_lossy(&raw))
+                .await
+                .map_err(|e| format!("备份 pi 配置失败: {e}"))?;
+            return Ok(());
+        }
+
         let (app_type_str, mut config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
-            AppType::Pi => {
-                let raw = crate::pi_config::read_models_document_raw()?.ok_or_else(|| {
-                    "Pi models.json 不存在，无法备份".to_string()
-                })?;
-                let config: Value = serde_json::from_str(&String::from_utf8_lossy(&raw))
-                    .map_err(|e| format!("解析 Pi models.json 失败: {e}"))?;
-                ("pi", config)
-            }
+            AppType::Pi => unreachable!("Pi handled above"),
         };
 
         // 跳过已被代理接管的 Live：避免把代理占位符当作"原始 Live"存进备份槽
