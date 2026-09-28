@@ -20,6 +20,7 @@ pub mod session_usage;
 pub mod session_usage_codex;
 pub mod session_usage_pi;
 pub mod skill;
+pub mod snapshots;
 pub mod speedtest;
 pub mod sql_helpers;
 pub mod stream_check;

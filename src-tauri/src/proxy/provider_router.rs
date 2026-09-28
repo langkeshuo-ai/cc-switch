@@ -7,6 +7,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::proxy::circuit_breaker::{AllowResult, CircuitBreaker, CircuitBreakerConfig};
+use crate::proxy::session_affinity::SessionAffinityMap;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -26,6 +27,8 @@ pub struct ProviderRouter {
     db: Arc<Database>,
     /// 熔断器管理器 - key 格式: "app_type:provider_id"
     circuit_breakers: Arc<RwLock<HashMap<String, Arc<CircuitBreaker>>>>,
+    /// 会话粘性映射（session → 上次成功使用的 provider），生命周期与路由器一致
+    session_affinity: SessionAffinityMap,
 }
 
 impl ProviderRouter {
@@ -34,6 +37,7 @@ impl ProviderRouter {
         Self {
             db,
             circuit_breakers: Arc::new(RwLock::new(HashMap::new())),
+            session_affinity: SessionAffinityMap::new(),
         }
     }
 
@@ -42,7 +46,15 @@ impl ProviderRouter {
     /// 返回按优先级排序的可用供应商列表：
     /// - 故障转移关闭时：仅返回当前供应商
     /// - 故障转移开启时：仅使用故障转移队列，按队列顺序依次尝试（P1 → P2 → ...）
-    pub async fn select_providers(&self, app_type: &str) -> Result<Vec<Provider>, AppError> {
+    ///
+    /// `session_id` 为 `Some` 时启用会话粘性：若该会话上次成功使用的供应商
+    /// 仍在候选内（未熔断、在队列中），将其前移到候选首位；否则保持队列
+    /// 顺序回落。故障转移关闭路径不受影响。
+    pub async fn select_providers(
+        &self,
+        app_type: &str,
+        session_id: Option<&str>,
+    ) -> Result<Vec<Provider>, AppError> {
         let mut result = Vec::new();
         let mut total_providers = 0usize;
         let mut circuit_open_count = 0usize;
@@ -114,6 +126,32 @@ impl ProviderRouter {
                     result.push(provider);
                 } else {
                     circuit_open_count += 1;
+                }
+            }
+
+            // 会话粘性：粘性命中且仍在候选内 → 前移到首位；否则按队列顺序回落。
+            // 粘性项若已熔断，上方熔断过滤已将其排除，自然回落到队列后续项。
+            if let Some(sid) = session_id {
+                if let Some(sticky_id) = self.session_affinity.get(app_type, sid) {
+                    match result.iter().position(|p| p.id == sticky_id) {
+                        Some(pos) if pos > 0 => {
+                            let sticky = result.remove(pos);
+                            result.insert(0, sticky);
+                            log::info!(
+                                "[{app_type}] [SessionAffinity] 粘性命中: session={sid} → provider={sticky_id}（前移到候选首位）"
+                            );
+                        }
+                        Some(_) => {
+                            log::debug!(
+                                "[{app_type}] [SessionAffinity] 粘性命中且已在首位: session={sid}, provider={sticky_id}"
+                            );
+                        }
+                        None => {
+                            log::debug!(
+                                "[{app_type}] [SessionAffinity] 粘性项不在候选内（不在队列/已熔断），按队列顺序回落: session={sid}, provider={sticky_id}"
+                            );
+                        }
+                    }
                 }
             }
         } else {
@@ -188,6 +226,16 @@ impl ProviderRouter {
             .await?;
 
         Ok(())
+    }
+
+    /// 记录会话粘性：session 成功使用某 provider 后更新映射
+    ///
+    /// 仅应由请求成功路径调用（forwarder 成功埋点）。
+    pub(crate) fn record_session_affinity(&self, app_type: &str, session_id: &str, provider_id: &str) {
+        self.session_affinity.record(app_type, session_id, provider_id);
+        log::debug!(
+            "[{app_type}] [SessionAffinity] 记录粘性: session={session_id} → provider={provider_id}"
+        );
     }
 
     /// 重置熔断器（手动恢复）
@@ -404,7 +452,7 @@ mod tests {
         db.add_to_failover_queue("claude", "b").unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("claude", None).await.unwrap();
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "a");
@@ -437,7 +485,7 @@ mod tests {
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("claude", None).await.unwrap();
 
         assert_eq!(providers.len(), 2);
         // 故障转移开启时：仅按队列顺序选择（忽略当前供应商）
@@ -469,7 +517,7 @@ mod tests {
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let router = ProviderRouter::new(db.clone());
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("claude", None).await.unwrap();
 
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "b");
@@ -497,7 +545,7 @@ mod tests {
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let providers = ProviderRouter::new(db)
-            .select_providers("codex")
+            .select_providers("codex", None)
             .await
             .unwrap();
         assert_eq!(providers.len(), 1);
@@ -534,7 +582,7 @@ mod tests {
         db.update_proxy_config_for_app(config).await.unwrap();
 
         let providers = ProviderRouter::new(db)
-            .select_providers("codex")
+            .select_providers("codex", None)
             .await
             .unwrap();
         assert_eq!(
@@ -583,7 +631,7 @@ mod tests {
             .await
             .unwrap();
 
-        let providers = router.select_providers("claude").await.unwrap();
+        let providers = router.select_providers("claude", None).await.unwrap();
         assert_eq!(providers.len(), 2);
 
         assert!(router.allow_provider_request("b", "claude").await.allowed);
@@ -640,5 +688,122 @@ mod tests {
         let third = router.allow_provider_request("a", "claude").await;
         assert!(third.allowed);
         assert!(third.used_half_open_permit);
+    }
+
+    /// 构造故障转移开启、队列顺序为 a → b 的路由器（粘性集成测试共用）
+    async fn setup_failover_router(db: &Arc<Database>) -> ProviderRouter {
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let provider_b =
+            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+
+        db.save_provider("claude", &provider_a).unwrap();
+        db.save_provider("claude", &provider_b).unwrap();
+        db.set_current_provider("claude", "a").unwrap();
+
+        db.add_to_failover_queue("claude", "a").unwrap();
+        db.add_to_failover_queue("claude", "b").unwrap();
+
+        let mut config = db.get_proxy_config_for_app("claude").await.unwrap();
+        config.auto_failover_enabled = true;
+        db.update_proxy_config_for_app(config).await.unwrap();
+
+        ProviderRouter::new(db.clone())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_session_affinity_moves_sticky_provider_to_front() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = setup_failover_router(&db).await;
+
+        // 会话 sess-1 上次成功使用 b
+        router.record_session_affinity("claude", "sess-1", "b");
+
+        let providers = router
+            .select_providers("claude", Some("sess-1"))
+            .await
+            .unwrap();
+        assert_eq!(providers.len(), 2);
+        // 粘性命中：b 前移到首位，其余候选保持队列顺序
+        assert_eq!(providers[0].id, "b");
+        assert_eq!(providers[1].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_session_affinity_falls_back_when_sticky_provider_circuit_open() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = setup_failover_router(&db).await;
+
+        // 熔断器：1 次失败即熔断，60 秒内不恢复
+        db.update_circuit_breaker_config(&CircuitBreakerConfig {
+            failure_threshold: 1,
+            timeout_seconds: 60,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        router.record_session_affinity("claude", "sess-1", "b");
+        router
+            .record_result("b", "claude", false, false, Some("fail".to_string()))
+            .await
+            .unwrap();
+
+        let providers = router
+            .select_providers("claude", Some("sess-1"))
+            .await
+            .unwrap();
+        // 粘性项 b 已熔断 → 回落队列顺序，仅剩 a
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_session_affinity_miss_keeps_queue_order() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+        let router = setup_failover_router(&db).await;
+
+        // 未知会话（无粘性记录）→ 队列顺序原样
+        let providers = router
+            .select_providers("claude", Some("sess-unknown"))
+            .await
+            .unwrap();
+        assert_eq!(providers.len(), 2);
+        assert_eq!(providers[0].id, "a");
+        assert_eq!(providers[1].id, "b");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_session_affinity_ignored_when_failover_disabled() {
+        let _home = TempHome::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let provider_b =
+            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+
+        db.save_provider("claude", &provider_a).unwrap();
+        db.save_provider("claude", &provider_b).unwrap();
+        db.set_current_provider("claude", "a").unwrap();
+        db.add_to_failover_queue("claude", "b").unwrap();
+
+        let router = ProviderRouter::new(db.clone());
+        // 记录粘性指向 b，但故障转移关闭 → 单候选路径不受粘性影响
+        router.record_session_affinity("claude", "sess-1", "b");
+
+        let providers = router
+            .select_providers("claude", Some("sess-1"))
+            .await
+            .unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "a");
     }
 }

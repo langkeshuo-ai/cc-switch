@@ -1136,6 +1136,127 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
     write_text_file(&config_path, &cfg_text)
 }
 
+// ==================== config.toml 外科手术式合并 ====================
+//
+// 供应商切换/接管写入的 config 文本是 cc-switch 生成的"稀疏"模板：只有当前
+// 供应商需要的键。历史上写盘会整份替换 config.toml，把用户手写的注释、键顺序、
+// 自定义段落（profiles、mcp_servers 等）一并抹掉。这里的合并以新文本的键为
+// 权威覆盖/插入，其余既有内容原样保留（magpie 式 surgical editing）。
+//
+// 仅两类例外会被移除——都要求值携带 cc-switch 的 ownership 哨兵，用户手写的
+// 同名键绝不受影响：
+// - `model_catalog_json` 指向 cc-switch 生成的目录文件（陈旧指针会让读取端
+//   误报上一个供应商的目录）；
+// - `web_search = "disabled"` 与顶层 `experimental_bearer_token = "PROXY_MANAGED"`
+//   （cc-switch 自己写入的占位/哨兵值，切换后残留即垃圾）。
+
+/// 判断该键当前值是否为 cc-switch 拥有的哨兵值（merge 时允许在新配置缺席时移除）。
+fn codex_config_value_is_cc_switch_owned(key: &str, item: &toml_edit::Item) -> bool {
+    let value = match item.as_str() {
+        Some(value) => value,
+        None => return false,
+    };
+    match key {
+        "model_catalog_json" => {
+            Path::new(value).file_name().and_then(|name| name.to_str())
+                == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
+        }
+        "web_search" => value == CODEX_WEB_SEARCH_DISABLED,
+        "experimental_bearer_token" => value == CODEX_PROXY_AUTH_PLACEHOLDER,
+        _ => false,
+    }
+}
+
+/// 新文本标量是否自带注释（自带注释时整体替换，不保留旧侧 decor）。
+fn codex_config_item_has_comment(item: &toml_edit::Item) -> bool {
+    item.as_value()
+        .map(|value| {
+            let has = |decor: Option<&toml_edit::RawString>| {
+                decor.and_then(|text| text.as_str())
+                    .is_some_and(|text| text.contains('#'))
+            };
+            has(value.decor().prefix()) || has(value.decor().suffix())
+        })
+        .unwrap_or(false)
+}
+
+/// 让合并输出的换行风格跟随既有文件（CRLF 为主 → 统一 CRLF，否则统一 LF）。
+fn codex_config_merge_harmonize_newlines(output: &str, existing_text: &str) -> String {
+    let crlf = existing_text.matches("\r\n").count();
+    let lf_total = existing_text.matches('\n').count();
+    let lf_only = lf_total.saturating_sub(crlf);
+    if crlf > lf_only {
+        output.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        output.replace("\r\n", "\n")
+    }
+}
+
+/// 外科手术式合并：`new_text` 中出现的顶层键覆盖/插入（表与数组整体替换、
+/// 标量替换值并保留旧侧注释 decor），`existing_text` 独有的键/表/注释原样保留。
+///
+/// 任一侧解析失败或 `existing_text` 为空时，回退为直接返回 `new_text`
+/// （与既有整份替换行为一致，保注释绝不以写入失败为代价）。
+fn merge_codex_config_surgical(existing_text: &str, new_text: &str) -> String {
+    if new_text.trim().is_empty() {
+        return new_text.to_string();
+    }
+    let new_doc: DocumentMut = match new_text.parse() {
+        Ok(doc) => doc,
+        Err(_) => return new_text.to_string(),
+    };
+    if existing_text.trim().is_empty() {
+        return new_text.to_string();
+    }
+    let mut doc: DocumentMut = match existing_text.parse() {
+        Ok(doc) => doc,
+        Err(_) => return new_text.to_string(),
+    };
+
+    // 1) cc-switch 拥有、新配置不再携带的哨兵键 → 移除（陈旧值不得残留）。
+    for key in ["model_catalog_json", "web_search", "experimental_bearer_token"] {
+        let stale = doc
+            .get(key)
+            .is_some_and(|item| codex_config_value_is_cc_switch_owned(key, item))
+            && new_doc.get(key).is_none();
+        if stale {
+            doc.as_table_mut().remove(key);
+        }
+    }
+
+    // 2) 新配置的每个顶层键：覆盖/插入。
+    let root = doc.as_table_mut();
+    for (key, src_item) in new_doc.as_table().iter() {
+        let replace_scalar_keep_decor = root.get(key).is_some_and(|dest| {
+            dest.is_value() && src_item.is_value() && !codex_config_item_has_comment(src_item)
+        });
+        if replace_scalar_keep_decor {
+            if let Some(toml_edit::Item::Value(dest_value)) = root.get_mut(key) {
+                let decor = dest_value.decor().clone();
+                *dest_value = src_item
+                    .clone()
+                    .into_value()
+                    .expect("checked is_value above");
+                *dest_value.decor_mut() = decor;
+            }
+        } else {
+            root.insert(key, src_item.clone());
+        }
+    }
+
+    codex_config_merge_harmonize_newlines(&doc.to_string(), existing_text)
+}
+
+/// 读取盘上 `~/.codex/config.toml` 并与 `new_text` 做外科手术式合并。
+///
+/// 仅供应商切换/接管写入路径调用（文本来自 cc-switch 生成的稀疏模板）；
+/// verbatim 恢复与接管清理路径写入的是完整文本、键缺席即删除意图，
+/// 不得经过本函数。盘读取失败时按空文件处理（回退整份替换）。
+pub(crate) fn merge_codex_live_config_with_disk(new_text: &str) -> String {
+    let existing_text = read_codex_config_text().unwrap_or_default();
+    merge_codex_config_surgical(&existing_text, new_text)
+}
+
 pub fn extract_codex_auth_api_key(auth: &Value) -> Option<String> {
     auth.get("OPENAI_API_KEY")
         .and_then(|value| value.as_str())
@@ -4004,10 +4125,20 @@ pub fn write_codex_live_for_provider(
         config_text,
         crate::settings::preserve_codex_official_auth_on_switch(),
     )?;
+    // 切换写入的是 cc-switch 生成的稀疏模板：写盘前与盘上现有 config.toml
+    // 做外科手术式合并，保留用户的注释/键序/自定义段落（verbatim 恢复与
+    // 接管清理路径写入完整文本、键缺席即删除意图，不经此合并）。
+    let merged_config = plan.config_text.as_deref().map(|text| {
+        if text.trim().is_empty() {
+            text.to_string()
+        } else {
+            merge_codex_live_config_with_disk(text)
+        }
+    });
     if plan.write_full_auth {
-        return write_codex_live_atomic(auth, plan.config_text.as_deref());
+        return write_codex_live_atomic(auth, merged_config.as_deref());
     }
-    write_codex_live_config_atomic(plan.config_text.as_deref())?;
+    write_codex_live_config_atomic(merged_config.as_deref())?;
     // Config is already committed at this point, so a cleanup failure
     // degrades to a warning instead of reporting an unswitched state.
     if plan.remove_auth_file {
@@ -8345,6 +8476,159 @@ model_catalog_json = "cc-switch-model-catalog.json"
         assert!(
             result.is_err(),
             "file larger than MAX_CODEX_CATALOG_BYTES must be rejected"
+        );
+    }
+
+    // ==================== 外科手术式合并（merge_codex_config_surgical） ====================
+
+    const MERGE_USER_EXISTING: &str = r#"# my custom comment
+model = "gpt-5.1"
+model_provider = "custom"
+
+# my other comment
+[profiles.work]
+model = "o4-mini"
+
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem"]
+"#;
+
+    const MERGE_NEW_CONFIG: &str = r#"model = "gpt-5.2"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "Custom"
+base_url = "https://relay.example.test/v1"
+experimental_bearer_token = "sk-test"
+"#;
+
+    fn merge_assert_toml(text: &str) -> toml::Table {
+        toml::from_str(text).expect("merged output must be valid TOML")
+    }
+
+    #[test]
+    fn merge_preserves_user_comments_and_custom_tables_while_updating_managed_keys() {
+        let merged = merge_codex_config_surgical(MERGE_USER_EXISTING, MERGE_NEW_CONFIG);
+
+        // 注释与自定义段逐字保留
+        assert!(merged.contains("# my custom comment"));
+        assert!(merged.contains("# my other comment"));
+        assert!(merged.contains("[profiles.work]"));
+        assert!(merged.contains("[mcp_servers.filesystem]"));
+        assert!(merged.contains("command = \"npx\""));
+
+        // 管理键已更新为 new_config 值
+        let table = merge_assert_toml(&merged);
+        assert_eq!(table.get("model"), Some(&toml::Value::from("gpt-5.2")));
+        assert_eq!(
+            table.get("model_provider"),
+            Some(&toml::Value::from("custom"))
+        );
+        let providers = table.get("model_providers").expect("providers table");
+        let custom = providers.get("custom").expect("custom provider");
+        assert_eq!(
+            custom.get("base_url"),
+            Some(&toml::Value::from("https://relay.example.test/v1"))
+        );
+        assert_eq!(
+            custom.get("experimental_bearer_token"),
+            Some(&toml::Value::from("sk-test"))
+        );
+    }
+
+    #[test]
+    fn merge_into_blank_text_yields_all_new_keys() {
+        for existing in ["", "   \n", "# only a comment\n"] {
+            let merged = merge_codex_config_surgical(existing, MERGE_NEW_CONFIG);
+            let table = merge_assert_toml(&merged);
+            assert_eq!(table.get("model"), Some(&toml::Value::from("gpt-5.2")));
+            assert!(
+                table.get("model_providers").is_some(),
+                "model_providers must be present for existing={existing:?}"
+            );
+            assert_eq!(
+                table.get("model_provider"),
+                Some(&toml::Value::from("custom"))
+            );
+        }
+    }
+
+    #[test]
+    fn merge_falls_back_to_full_text_when_existing_is_invalid_toml() {
+        let invalid = "this is = not [valid toml";
+        let merged = merge_codex_config_surgical(invalid, MERGE_NEW_CONFIG);
+        // 回退路径输出合法完整的新配置
+        let table = merge_assert_toml(&merged);
+        assert_eq!(table.get("model"), Some(&toml::Value::from("gpt-5.2")));
+        // 回退输出与整份替换行为一致
+        assert_eq!(merged, MERGE_NEW_CONFIG);
+    }
+
+    #[test]
+    fn merge_is_idempotent_across_repeated_switches_and_keeps_comments() {
+        let first = merge_codex_config_surgical(MERGE_USER_EXISTING, MERGE_NEW_CONFIG);
+        // 第二轮切换：盘上文本已是第一轮输出，新配置语义不变
+        let second = merge_codex_config_surgical(&first, MERGE_NEW_CONFIG);
+
+        let first_table = merge_assert_toml(&first);
+        let second_table = merge_assert_toml(&second);
+        assert_eq!(
+            first_table, second_table,
+            "repeated merges must not change parsed semantics"
+        );
+        assert!(second.contains("# my custom comment"));
+        assert!(second.contains("[profiles.work]"));
+        assert!(second.contains("[mcp_servers.filesystem]"));
+        // 标量替换保留旧侧 decor 后，重复合并应逐字稳定
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn merge_removes_stale_cc_switch_owned_sentinels_but_keeps_user_values() {
+        let existing = r#"model_provider = "cc-switch-official"
+model_catalog_json = "cc-switch-model-catalog.json"
+web_search = "disabled"
+experimental_bearer_token = "PROXY_MANAGED"
+user_catalog = "my-own-catalog.json"
+web_search_note = "keep-me"
+"#;
+        let new_text = "model = \"gpt-5.2\"\n";
+        let merged = merge_codex_config_surgical(existing, new_text);
+        let table = merge_assert_toml(&merged);
+
+        // cc-switch 哨兵键随新配置缺席被移除
+        assert!(table.get("model_catalog_json").is_none());
+        assert!(table.get("web_search").is_none());
+        assert!(table.get("experimental_bearer_token").is_none());
+        // 用户自己的键原样保留
+        assert_eq!(
+            table.get("user_catalog"),
+            Some(&toml::Value::from("my-own-catalog.json"))
+        );
+        assert_eq!(
+            table.get("web_search_note"),
+            Some(&toml::Value::from("keep-me"))
+        );
+    }
+
+    #[test]
+    fn merge_keeps_existing_scalar_comments_and_harmonizes_newlines() {
+        let existing = "# top\r\nmodel = \"gpt-5.1\" # pinned by hand\r\n";
+        let new_text = "model = \"gpt-5.2\"\n";
+        let merged = merge_codex_config_surgical(existing, new_text);
+
+        assert!(
+            merged.contains("# pinned by hand"),
+            "user's trailing comment must survive: {merged:?}"
+        );
+        assert!(
+            !merged.contains('\n') || merged.contains("\r\n"),
+            "CRLF style must be preserved: {merged:?}"
+        );
+        assert_eq!(
+            merge_assert_toml(&merged).get("model"),
+            Some(&toml::Value::from("gpt-5.2"))
         );
     }
 }

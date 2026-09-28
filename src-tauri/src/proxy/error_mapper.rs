@@ -58,6 +58,9 @@ pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
         // 转换错误：422 Unprocessable Entity
         ProxyError::TransformError(_) => 422,
 
+        // 上游响应体超过大小上限：502 Bad Gateway（与 IntoResponse 一致）
+        ProxyError::ResponseBodyTooLarge(_) => 502,
+
         // 其他未知错误：500 Internal Server Error
         _ => 500,
     }
