@@ -756,9 +756,19 @@ impl ProxyService {
     }
 
     fn get_current_provider_for_app(&self, app_type: &AppType) -> Result<Option<Provider>, String> {
-        let Some(current_id) = crate::settings::get_effective_current_provider(&self.db, app_type)
-            .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?
-        else {
+        // Pi：实际生效供应商是 settings.json 的 defaultProvider（Pi CLI 唯一
+        // 跟随的源），代理状态展示与接管路径都应以它为准
+        let current_id = if matches!(app_type, AppType::Pi) {
+            crate::pi_config::pi_proxy_current_provider_key().or_else(|| {
+                crate::settings::get_effective_current_provider(&self.db, app_type)
+                    .ok()
+                    .flatten()
+            })
+        } else {
+            crate::settings::get_effective_current_provider(&self.db, app_type)
+                .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?
+        };
+        let Some(current_id) = current_id else {
             return Ok(None);
         };
 

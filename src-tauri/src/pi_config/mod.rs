@@ -104,6 +104,17 @@ pub(crate) fn read_pi_native_providers() -> Result<IndexMap<String, Value>, AppE
     read_pi_native_providers_locked(&get_pi_models_path()?)
 }
 
+/// Pi 的"实际生效供应商"标识：settings.json 的 `defaultProvider`。
+///
+/// 这是 Pi CLI 唯一跟随的来源，与 CC Switch 数据库的 current provider 可能
+/// 不一致。代理转发路径必须以它为准，否则会把 Pi 的流量转发到错误上游。
+pub(crate) fn pi_proxy_current_provider_key() -> Option<String> {
+    read_pi_native_defaults()
+        .ok()
+        .and_then(|defaults| defaults.default_provider)
+        .filter(|key| !key.trim().is_empty())
+}
+
 /// Read the entire raw `models.json` bytes (None = file does not exist).
 ///
 /// Used by proxy takeover to back up the original file verbatim so that a

@@ -46,14 +46,21 @@ impl ProviderRouter {
         let mut result = Vec::new();
         let mut total_providers = 0usize;
         let mut circuit_open_count = 0usize;
-        let current_id = AppType::from_str(app_type)
-            .ok()
-            .and_then(|app_enum| {
-                crate::settings::get_effective_current_provider(&self.db, &app_enum)
-                    .ok()
-                    .flatten()
-            })
-            .or_else(|| self.db.get_current_provider(app_type).ok().flatten());
+        // Pi 的实际生效供应商是 settings.json 的 defaultProvider（Pi CLI 唯一
+        // 跟随的源），代理转发必须以它为准；缺失时退回数据库 current provider。
+        let pi_proxy_override = (app_type == crate::app_config::AppType::Pi.as_str())
+            .then(crate::pi_config::pi_proxy_current_provider_key)
+            .flatten();
+        let current_id = pi_proxy_override.or_else(|| {
+            AppType::from_str(app_type)
+                .ok()
+                .and_then(|app_enum| {
+                    crate::settings::get_effective_current_provider(&self.db, &app_enum)
+                        .ok()
+                        .flatten()
+                })
+                .or_else(|| self.db.get_current_provider(app_type).ok().flatten())
+        });
         let current_provider = current_id
             .as_deref()
             .map(|id| self.db.get_provider_by_id(id, app_type))
