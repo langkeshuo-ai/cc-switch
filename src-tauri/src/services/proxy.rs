@@ -668,7 +668,7 @@ impl ProxyService {
         model
             .trim_end()
             .to_ascii_lowercase()
-            .ends_with(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
+            .ends_with("[1m]")
     }
 
     fn strip_claude_one_m_marker(model: &str) -> String {
@@ -753,29 +753,6 @@ impl ProxyService {
 
         self.write_codex_takeover_live_for_provider(&effective_settings, Some(provider))?;
         Ok(())
-    }
-
-    pub async fn sync_grok_live_from_provider_while_proxy_active(
-        &self,
-        provider: &Provider,
-    ) -> Result<(), String> {
-        let existing_live = self.read_grok_live().ok();
-        let mut effective_settings = build_effective_settings_with_common_config(
-            self.db.as_ref(),
-            &AppType::GrokBuild,
-            provider,
-        )
-        .map_err(|e| format!("构建 Grok Build 有效配置失败: {e}"))?;
-        if let Some(existing_live) = existing_live.as_ref() {
-            Self::preserve_toml_mcp_servers_from_existing_config(
-                &mut effective_settings,
-                existing_live,
-            )?;
-        }
-        let (proxy_url, _) = self.build_proxy_urls().await?;
-        let proxy_grok_base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
-        Self::apply_grok_takeover_fields(&mut effective_settings, &proxy_grok_base_url)?;
-        self.write_grok_live(&effective_settings)
     }
 
     fn get_current_provider_for_app(&self, app_type: &AppType) -> Result<Option<Provider>, String> {
@@ -890,9 +867,6 @@ impl ProxyService {
                 .await
         } else if live_taken_over && matches!(app_type, AppType::Codex) {
             self.sync_codex_live_from_provider_while_proxy_active(&previous_provider)
-                .await
-        } else if live_taken_over && matches!(app_type, AppType::GrokBuild) {
-            self.sync_grok_live_from_provider_while_proxy_active(&previous_provider)
                 .await
         } else {
             Ok(())
@@ -1117,29 +1091,10 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
-        let gemini_enabled = self
-            .db
-            .get_proxy_config_for_app("gemini")
-            .await
-            .map(|c| c.enabled)
-            .unwrap_or(false);
-        let grokbuild_enabled = self
-            .db
-            .get_proxy_config_for_app("grokbuild")
-            .await
-            .map(|c| c.enabled)
-            .unwrap_or(false);
-        // OpenCode and OpenClaw don't support proxy features, always return false
-        let opencode_enabled = false;
-        let openclaw_enabled = false;
 
         Ok(ProxyTakeoverStatus {
             claude: claude_enabled,
             codex: codex_enabled,
-            gemini: gemini_enabled,
-            grokbuild: grokbuild_enabled,
-            opencode: opencode_enabled,
-            openclaw: openclaw_enabled,
         })
     }
 
@@ -1441,8 +1396,6 @@ impl ProxyService {
         let live_config = match app_type {
             AppType::Claude => self.read_claude_live()?,
             AppType::Codex => self.read_codex_live()?,
-            AppType::Gemini => self.read_gemini_live()?,
-            AppType::GrokBuild => self.read_grok_live()?,
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
@@ -1609,103 +1562,6 @@ impl ProxyService {
                     }
                 }
             }
-            AppType::Gemini => {
-                let provider_id =
-                    crate::settings::get_effective_current_provider(&self.db, &AppType::Gemini)
-                        .map_err(|e| format!("获取 Gemini 当前供应商失败: {e}"))?;
-
-                if let Some(provider_id) = provider_id {
-                    if let Ok(Some(mut provider)) =
-                        self.db.get_provider_by_id(&provider_id, "gemini")
-                    {
-                        if let Some(token) = live_config
-                            .get("env")
-                            .and_then(|v| v.get("GEMINI_API_KEY"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.trim())
-                            .filter(|s| !s.is_empty() && *s != PROXY_TOKEN_PLACEHOLDER)
-                        {
-                            if let Some(env_obj) = provider
-                                .settings_config
-                                .get_mut("env")
-                                .and_then(|v| v.as_object_mut())
-                            {
-                                env_obj.insert("GEMINI_API_KEY".to_string(), json!(token));
-                            } else {
-                                if provider.settings_config.is_null() {
-                                    provider.settings_config = json!({});
-                                }
-
-                                if let Some(root) = provider.settings_config.as_object_mut() {
-                                    root.insert(
-                                        "env".to_string(),
-                                        json!({ "GEMINI_API_KEY": token }),
-                                    );
-                                } else {
-                                    log::warn!(
-                                        "Gemini provider settings_config 格式异常（非对象），跳过写入 Token (provider: {provider_id})"
-                                    );
-                                }
-                            }
-
-                            if let Err(e) = self.db.update_provider_settings_config(
-                                "gemini",
-                                &provider_id,
-                                &provider.settings_config,
-                            ) {
-                                log::warn!("同步 Gemini Token 到数据库失败: {e}");
-                            } else {
-                                log::info!(
-                                    "已同步 Gemini Token 到数据库 (provider: {provider_id})"
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            AppType::GrokBuild => {
-                let provider_id =
-                    crate::settings::get_effective_current_provider(&self.db, &AppType::GrokBuild)
-                        .map_err(|e| format!("获取 Grok Build 当前供应商失败: {e}"))?;
-
-                if let Some(provider_id) = provider_id {
-                    if let Ok(Some(mut provider)) =
-                        self.db.get_provider_by_id(&provider_id, "grokbuild")
-                    {
-                        let live_config_toml = live_config
-                            .get("config")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        if let Some(token) =
-                            crate::grok_config::extract_inline_api_key(live_config_toml)
-                        {
-                            if !token.is_empty() && token != PROXY_TOKEN_PLACEHOLDER {
-                                if let Some(provider_config) = provider
-                                    .settings_config
-                                    .get("config")
-                                    .and_then(Value::as_str)
-                                {
-                                    let updated =
-                                        crate::grok_config::update_api_key(provider_config, &token)
-                                            .map_err(|e| {
-                                                format!("更新 Grok Build API Key 失败: {e}")
-                                            })?;
-                                    provider.settings_config["config"] = json!(updated);
-                                    self.db
-                                        .update_provider_settings_config(
-                                            "grokbuild",
-                                            &provider_id,
-                                            &provider.settings_config,
-                                        )
-                                        .map_err(|e| {
-                                            format!("同步 Grok Build Token 到数据库失败: {e}")
-                                        })?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
             _ => {}
         }
 
@@ -1723,15 +1579,6 @@ impl ProxyService {
                 .await?;
         }
 
-        if let Ok(live_config) = self.read_gemini_live() {
-            self.sync_live_config_to_provider(&AppType::Gemini, &live_config)
-                .await?;
-        }
-
-        if let Ok(live_config) = self.read_grok_live() {
-            self.sync_live_config_to_provider(&AppType::GrokBuild, &live_config)
-                .await?;
-        }
 
         log::info!("Live 配置 Token 同步完成");
         Ok(())
@@ -1785,7 +1632,7 @@ impl ProxyService {
             .map_err(|e| format!("清除接管状态失败: {e}"))?;
 
         // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
-        for app_type in ["claude", "codex", "gemini", "grokbuild"] {
+        for app_type in ["claude", "codex"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
                     config.enabled = false;
@@ -1879,33 +1726,6 @@ impl ProxyService {
             }
         }
 
-        // Gemini
-        if let Ok(config) = self.read_gemini_live() {
-            if Self::live_has_proxy_placeholder_for_app(&AppType::Gemini, &config) {
-                log::warn!("gemini Live 已被代理接管，不备份（避免把代理配置固化进备份槽）；下次 stop 会从 SSOT 重建 Live");
-            } else {
-                let json_str = serde_json::to_string(&config)
-                    .map_err(|e| format!("序列化 Gemini 配置失败: {e}"))?;
-                self.db
-                    .save_live_backup("gemini", &json_str)
-                    .await
-                    .map_err(|e| format!("备份 Gemini 配置失败: {e}"))?;
-            }
-        }
-
-        // Grok Build
-        if let Ok(config) = self.read_grok_live() {
-            if Self::live_has_proxy_placeholder_for_app(&AppType::GrokBuild, &config) {
-                log::warn!("grokbuild Live 已被代理接管，不备份；下次 stop 会从 SSOT 重建 Live");
-            } else {
-                let json_str = serde_json::to_string(&config)
-                    .map_err(|e| format!("序列化 Grok Build 配置失败: {e}"))?;
-                self.db
-                    .save_live_backup("grokbuild", &json_str)
-                    .await
-                    .map_err(|e| format!("备份 Grok Build 配置失败: {e}"))?;
-            }
-        }
 
         log::info!("已备份所有应用的 Live 配置");
         Ok(())
@@ -1916,8 +1736,6 @@ impl ProxyService {
         let (app_type_str, mut config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
-            AppType::Gemini => ("gemini", self.read_gemini_live()?),
-            AppType::GrokBuild => ("grokbuild", self.read_grok_live()?),
             _ => return Err("该应用不支持代理功能".to_string()),
         };
 
@@ -1983,48 +1801,15 @@ impl ProxyService {
         Ok((proxy_url, proxy_codex_base_url))
     }
 
-    /// Grok Build live 是否具备可接管的自定义模型表。
-    ///
-    /// 官方态 live（Grok CLI 自带 OAuth 登录、无 `[model.*]` 表）没有注入
-    /// 占位符的落点：Grok CLI 以「config 是否为空」区分官方 OAuth / 自定义
-    /// 供应商两种模式，表达不出「官方 OAuth + 自定义 base_url」。官方供应商
-    /// 的接管能力门见 `official_provider_supports_proxy_takeover`（按应用逐个
-    /// 开，目前仅 Codex），调用方应跳过接管或直接报错。官方态的用量统计由
-    /// `session_usage_grokbuild` 从会话日志导入，不依赖代理。
-    fn grok_live_config_supports_takeover(config: &Value) -> bool {
-        config
-            .get("config")
-            .and_then(Value::as_str)
-            .and_then(crate::grok_config::extract_model_config)
-            .is_some()
-    }
-
-    fn apply_grok_takeover_fields(config: &mut Value, proxy_base_url: &str) -> Result<(), String> {
-        let config_toml = config
-            .get("config")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Grok Build 配置缺少 config 字段".to_string())?;
-        let updated = crate::grok_config::apply_proxy_takeover(
-            config_toml,
-            proxy_base_url,
-            PROXY_TOKEN_PLACEHOLDER,
-        )
-        .map_err(|e| format!("更新 Grok Build 接管配置失败: {e}"))?;
-        config["config"] = json!(updated);
-        Ok(())
-    }
-
     /// 接管各应用的 Live 配置（写入代理地址）
     ///
     /// 代理服务器的路由已经根据 API 端点自动区分应用类型：
     /// - `/v1/messages` → Claude
     /// - `/v1/chat/completions`, `/v1/responses` → Codex
-    /// - `/v1beta/*` → Gemini
     ///
     /// 因此不需要在 URL 中添加应用前缀。
     async fn takeover_live_configs(&self) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
-        let proxy_grok_base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
 
         // Claude: 修改 ANTHROPIC_BASE_URL，使用占位符替代真实 Token（代理会注入真实 Token）
         if let Ok(mut live_config) = self.read_claude_live() {
@@ -2047,40 +1832,12 @@ impl ProxyService {
             log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
         }
 
-        // Gemini: 修改 GOOGLE_GEMINI_BASE_URL，使用占位符替代真实 Token（代理会注入真实 Token）
-        if let Ok(mut live_config) = self.read_gemini_live() {
-            if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                // 使用占位符，避免显示缺少 key 的警告
-                env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-            } else {
-                live_config["env"] = json!({
-                    "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                    "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                });
-            }
-            self.write_gemini_live(&live_config)?;
-            log::info!("Gemini Live 配置已接管，代理地址: {proxy_url}");
-        }
-
-        // Grok Build: keep its own provider namespace while reusing Responses forwarding.
-        if let Ok(mut live_config) = self.read_grok_live() {
-            if Self::grok_live_config_supports_takeover(&live_config) {
-                Self::apply_grok_takeover_fields(&mut live_config, &proxy_grok_base_url)?;
-                self.write_grok_live(&live_config)?;
-                log::info!("Grok Build Live 配置已接管，代理地址: {proxy_grok_base_url}");
-            } else {
-                log::info!("Grok Build Live 处于官方登录态（无自定义模型表），跳过代理接管");
-            }
-        }
-
         Ok(())
     }
 
     /// 接管指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
     async fn takeover_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
-        let proxy_grok_base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
 
         match app_type {
             AppType::Claude => {
@@ -2103,36 +1860,6 @@ impl ProxyService {
                     .await?;
                 log::info!("Codex Live 配置已接管，代理地址: {proxy_codex_base_url}");
             }
-            AppType::Gemini => {
-                let mut live_config = self.read_gemini_live()?;
-
-                if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                    env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                    env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                } else {
-                    live_config["env"] = json!({
-                        "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                        "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                    });
-                }
-
-                self.write_gemini_live(&live_config)?;
-                log::info!("Gemini Live 配置已接管，代理地址: {proxy_url}");
-            }
-            AppType::GrokBuild => {
-                let mut live_config = self.read_grok_live()?;
-                if !Self::grok_live_config_supports_takeover(&live_config) {
-                    return Err(
-                        "Grok Build 当前为官方登录态（无自定义模型表），官方供应商不支持代理接管 \
-                         (Grok Build is using the official login without a custom model table; \
-                         official providers cannot be taken over by the proxy)"
-                            .to_string(),
-                    );
-                }
-                Self::apply_grok_takeover_fields(&mut live_config, &proxy_grok_base_url)?;
-                self.write_grok_live(&live_config)?;
-                log::info!("Grok Build Live 配置已接管，代理地址: {proxy_grok_base_url}");
-            }
             _ => return Err("该应用不支持代理功能".to_string()),
         }
 
@@ -2142,7 +1869,6 @@ impl ProxyService {
     /// 接管指定应用的 Live 配置（尽力而为：配置不存在/读取失败则跳过）
     async fn takeover_live_config_best_effort(&self, app_type: &AppType) -> Result<(), String> {
         let (proxy_url, _) = self.build_proxy_urls().await?;
-        let proxy_grok_base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
 
         match app_type {
             AppType::Claude => {
@@ -2172,33 +1898,6 @@ impl ProxyService {
                 let codex_provider = self.require_current_provider_for_app(&AppType::Codex)?;
                 self.sync_codex_live_from_provider_while_proxy_active(&codex_provider)
                     .await?;
-            }
-            AppType::Gemini => {
-                if let Ok(mut live_config) = self.read_gemini_live() {
-                    if let Some(env) = live_config.get_mut("env").and_then(|v| v.as_object_mut()) {
-                        env.insert("GOOGLE_GEMINI_BASE_URL".to_string(), json!(&proxy_url));
-                        env.insert("GEMINI_API_KEY".to_string(), json!(PROXY_TOKEN_PLACEHOLDER));
-                    } else {
-                        live_config["env"] = json!({
-                            "GOOGLE_GEMINI_BASE_URL": &proxy_url,
-                            "GEMINI_API_KEY": PROXY_TOKEN_PLACEHOLDER
-                        });
-                    }
-
-                    let _ = self.write_gemini_live(&live_config);
-                }
-            }
-            AppType::GrokBuild => {
-                if let Ok(mut live_config) = self.read_grok_live() {
-                    if Self::grok_live_config_supports_takeover(&live_config) {
-                        Self::apply_grok_takeover_fields(&mut live_config, &proxy_grok_base_url)?;
-                        let _ = self.write_grok_live(&live_config);
-                    } else {
-                        log::info!(
-                            "Grok Build Live 处于官方登录态（无自定义模型表），跳过代理接管"
-                        );
-                    }
-                }
             }
             _ => {}
         }
@@ -2253,22 +1952,6 @@ impl ProxyService {
                     log::info!("Codex Live 配置已恢复");
                 }
             }
-            AppType::Gemini => {
-                if let Ok(Some(backup)) = self.db.get_live_backup("gemini").await {
-                    let config: Value = serde_json::from_str(&backup.original_config)
-                        .map_err(|e| format!("解析 Gemini 备份失败: {e}"))?;
-                    self.write_gemini_live(&config)?;
-                    log::info!("Gemini Live 配置已恢复");
-                }
-            }
-            AppType::GrokBuild => {
-                if let Ok(Some(backup)) = self.db.get_live_backup("grokbuild").await {
-                    let config: Value = serde_json::from_str(&backup.original_config)
-                        .map_err(|e| format!("解析 Grok Build 备份失败: {e}"))?;
-                    self.write_grok_live(&config)?;
-                    log::info!("Grok Build Live 配置已恢复");
-                }
-            }
             _ => {}
         }
 
@@ -2282,8 +1965,6 @@ impl ProxyService {
         for app_type in [
             AppType::Claude,
             AppType::Codex,
-            AppType::Gemini,
-            AppType::GrokBuild,
         ] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
@@ -2372,8 +2053,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => self.write_claude_live(config),
             AppType::Codex => self.write_codex_restore_backup(config),
-            AppType::Gemini => self.write_gemini_live(config),
-            AppType::GrokBuild => self.write_grok_live(config),
             _ => Err("该应用不支持代理功能".to_string()),
         }
     }
@@ -2386,14 +2065,6 @@ impl ProxyService {
             },
             AppType::Codex => match self.read_codex_live() {
                 Ok(config) => Self::is_codex_live_taken_over(&config),
-                Err(_) => false,
-            },
-            AppType::Gemini => match self.read_gemini_live() {
-                Ok(config) => Self::is_gemini_live_taken_over(&config),
-                Err(_) => false,
-            },
-            AppType::GrokBuild => match self.read_grok_live() {
-                Ok(config) => Self::is_grok_live_taken_over(&config),
                 Err(_) => false,
             },
             _ => false,
@@ -2450,8 +2121,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => self.cleanup_claude_takeover_placeholders_in_live(),
             AppType::Codex => self.cleanup_codex_takeover_placeholders_in_live(),
-            AppType::Gemini => self.cleanup_gemini_takeover_placeholders_in_live(),
-            AppType::GrokBuild => self.cleanup_grok_takeover_placeholders_in_live(),
             _ => Ok(()),
         }
     }
@@ -2511,7 +2180,6 @@ impl ProxyService {
         app_type: &AppType,
     ) -> Result<bool, String> {
         let (proxy_url, proxy_codex_base_url) = self.build_proxy_urls().await?;
-        let proxy_grok_base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
 
         match app_type {
             AppType::Claude => {
@@ -2534,28 +2202,6 @@ impl ProxyService {
                         })
                     });
                 Ok(Self::is_codex_live_taken_over(&config) && base_url_matches)
-            }
-            AppType::Gemini => {
-                let config = self.read_gemini_live()?;
-                let base_url_matches = config
-                    .get("env")
-                    .and_then(|value| value.get("GOOGLE_GEMINI_BASE_URL"))
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|url| Self::proxy_urls_match(url, &proxy_url));
-                Ok(Self::is_gemini_live_taken_over(&config) && base_url_matches)
-            }
-            AppType::GrokBuild => {
-                let config = self.read_grok_live()?;
-                let base_url_matches =
-                    config
-                        .get("config")
-                        .and_then(Value::as_str)
-                        .is_some_and(|config_toml| {
-                            crate::grok_config::base_url_matches(config_toml, |url| {
-                                Self::proxy_urls_match(url, &proxy_grok_base_url)
-                            })
-                        });
-                Ok(Self::is_grok_live_taken_over(&config) && base_url_matches)
             }
             _ => Ok(false),
         }
@@ -2622,52 +2268,10 @@ impl ProxyService {
     fn remove_local_toml_base_url(toml_str: &str) -> String {
         crate::codex_config::remove_codex_toml_base_url_if(toml_str, Self::is_local_proxy_url)
     }
-
-    fn cleanup_gemini_takeover_placeholders_in_live(&self) -> Result<(), String> {
-        let mut config = self.read_gemini_live()?;
-
-        let Some(env) = config.get_mut("env").and_then(|v| v.as_object_mut()) else {
-            return Ok(());
-        };
-
-        if env.get("GEMINI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER) {
-            env.remove("GEMINI_API_KEY");
-        }
-
-        if env
-            .get("GOOGLE_GEMINI_BASE_URL")
-            .and_then(|v| v.as_str())
-            .map(Self::is_local_proxy_url)
-            .unwrap_or(false)
-        {
-            env.remove("GOOGLE_GEMINI_BASE_URL");
-        }
-
-        self.write_gemini_live(&config)?;
-        Ok(())
-    }
-
-    fn cleanup_grok_takeover_placeholders_in_live(&self) -> Result<(), String> {
-        let config = self.read_grok_live()?;
-        let Some(config_toml) = config.get("config").and_then(Value::as_str) else {
-            return Ok(());
-        };
-        if !crate::grok_config::has_proxy_placeholder(config_toml, PROXY_TOKEN_PLACEHOLDER) {
-            return Ok(());
-        }
-
-        // A valid provider snapshot should normally restore before this fallback.
-        // Clearing the token prevents a stale local route from looking usable.
-        let updated = crate::grok_config::update_api_key(config_toml, "")
-            .map_err(|e| format!("清理 Grok Build 接管占位符失败: {e}"))?;
-        crate::config::write_text_file(&crate::grok_config::get_grok_config_path(), &updated)
-            .map_err(|e| format!("写入 Grok Build 配置失败: {e}"))
-    }
-
     /// 检查是否处于 Live 接管模式
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.gemini || status.grokbuild)
+        Ok(status.claude || status.codex)
     }
 
     /// 从异常退出中恢复（启动时调用）
@@ -2707,18 +2311,6 @@ impl ProxyService {
 
         if let Ok(config) = self.read_codex_live() {
             if Self::is_codex_live_taken_over(&config) {
-                return true;
-            }
-        }
-
-        if let Ok(config) = self.read_gemini_live() {
-            if Self::is_gemini_live_taken_over(&config) {
-                return true;
-            }
-        }
-
-        if let Ok(config) = self.read_grok_live() {
-            if Self::is_grok_live_taken_over(&config) {
                 return true;
             }
         }
@@ -2772,24 +2364,6 @@ impl ProxyService {
                 .and_then(|v| v.as_str())
                 .is_some_and(crate::codex_config::codex_config_has_official_proxy_route)
     }
-
-    fn is_gemini_live_taken_over(config: &Value) -> bool {
-        let env = match config.get("env").and_then(|v| v.as_object()) {
-            Some(env) => env,
-            None => return false,
-        };
-        env.get("GEMINI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER)
-    }
-
-    fn is_grok_live_taken_over(config: &Value) -> bool {
-        config
-            .get("config")
-            .and_then(Value::as_str)
-            .is_some_and(|config_toml| {
-                crate::grok_config::has_proxy_placeholder(config_toml, PROXY_TOKEN_PLACEHOLDER)
-            })
-    }
-
     /// 判断给定的 Live/备份配置是否已被代理接管（包含占位符）
     ///
     /// 用途：检测"备份里存的其实是代理配置"这种异常历史状态。
@@ -2800,8 +2374,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => Self::is_claude_live_taken_over(config),
             AppType::Codex => Self::is_codex_live_taken_over(config),
-            AppType::Gemini => Self::is_gemini_live_taken_over(config),
-            AppType::GrokBuild => Self::is_grok_live_taken_over(config),
             _ => false,
         }
     }
@@ -2910,43 +2482,11 @@ impl ProxyService {
             }
         }
 
-        if matches!(app_type_enum, AppType::GrokBuild) {
-            let existing_value = self
-                .db
-                .get_live_backup(app_type)
-                .await
-                .map_err(|e| format!("读取 {app_type} 现有备份失败: {e}"))?
-                .map(|backup| {
-                    serde_json::from_str::<Value>(&backup.original_config)
-                        .map_err(|e| format!("解析 {app_type} 现有备份失败: {e}"))
-                })
-                .transpose()?
-                .or_else(|| self.read_grok_live().ok());
-            if let Some(existing_value) = existing_value.as_ref() {
-                Self::preserve_toml_mcp_servers_from_existing_config(
-                    &mut effective_settings,
-                    existing_value,
-                )?;
-            }
-        }
-
         let backup_json = match app_type_enum {
             AppType::Claude => serde_json::to_string(&effective_settings)
                 .map_err(|e| format!("序列化 Claude 配置失败: {e}"))?,
             AppType::Codex => serde_json::to_string(&effective_settings)
                 .map_err(|e| format!("序列化 Codex 配置失败: {e}"))?,
-            AppType::GrokBuild => serde_json::to_string(&effective_settings)
-                .map_err(|e| format!("序列化 Grok Build 配置失败: {e}"))?,
-            AppType::Gemini => {
-                // Gemini takeover 仅修改 .env；settings.json（含 mcpServers）保持原样。
-                let env_backup = if let Some(env) = effective_settings.get("env") {
-                    json!({ "env": env })
-                } else {
-                    json!({ "env": {} })
-                };
-                serde_json::to_string(&env_backup)
-                    .map_err(|e| format!("序列化 Gemini 配置失败: {e}"))?
-            }
             _ => return Err(format!("未知的应用类型: {app_type}")),
         };
 
@@ -3090,9 +2630,6 @@ impl ProxyService {
                         outgoing_live_auth_guard.as_ref(),
                     )
                     .await?;
-                } else if live_taken_over && matches!(app_type_enum, AppType::GrokBuild) {
-                    self.sync_grok_live_from_provider_while_proxy_active(&provider)
-                        .await?;
                 }
             }
 
@@ -3908,36 +3445,6 @@ impl ProxyService {
         Ok(())
     }
 
-    fn read_gemini_live(&self) -> Result<Value, String> {
-        use crate::gemini_config::{env_to_json, get_gemini_env_path, read_gemini_env};
-
-        let env_path = get_gemini_env_path();
-        if !env_path.exists() {
-            return Err("Gemini .env 文件不存在".to_string());
-        }
-
-        let env_map = read_gemini_env().map_err(|e| format!("读取 Gemini env 失败: {e}"))?;
-        Ok(env_to_json(&env_map))
-    }
-
-    fn write_gemini_live(&self, config: &Value) -> Result<(), String> {
-        use crate::gemini_config::{json_to_env, write_gemini_env_atomic};
-
-        let env_map = json_to_env(config).map_err(|e| format!("转换 Gemini 配置失败: {e}"))?;
-        write_gemini_env_atomic(&env_map).map_err(|e| format!("写入 Gemini env 失败: {e}"))?;
-        Ok(())
-    }
-
-    fn read_grok_live(&self) -> Result<Value, String> {
-        crate::grok_config::read_grok_live_settings()
-            .map_err(|e| format!("读取 Grok Build 配置失败: {e}"))
-    }
-
-    fn write_grok_live(&self, config: &Value) -> Result<(), String> {
-        crate::grok_config::write_grok_live_settings(config)
-            .map_err(|e| format!("写入 Grok Build 配置失败: {e}"))
-    }
-
     // ==================== 原有方法 ====================
 
     /// 获取服务器状态
@@ -4022,8 +3529,6 @@ impl ProxyService {
             for app_type in [
                 AppType::Claude,
                 AppType::Codex,
-                AppType::Gemini,
-                AppType::GrokBuild,
             ] {
                 updated_any |= self
                     .reproject_takeover_live_config_if_enabled(&app_type)
@@ -10556,15 +10061,7 @@ base_url = "https://third.example/v1"
             .await
             .expect("seed codex backup");
 
-        let gemini_good_backup = serde_json::to_string(&json!({
-            "env": { "GEMINI_API_KEY": "real-gemini-key" }
-        }))
-        .expect("serialize gemini good backup");
-        db.save_live_backup("gemini", &gemini_good_backup)
-            .await
-            .expect("seed gemini backup");
-
-        // Seed all three Live files with proxy placeholders
+        // Seed all Live files with proxy placeholders
         service
             .write_claude_live(&json!({
                 "env": {
@@ -10592,24 +10089,16 @@ experimental_bearer_token = "PROXY_MANAGED"
             r#"{"OPENAI_API_KEY":"PROXY_MANAGED"}"#,
         )
         .expect("seed codex auth.json");
-        let gemini_env_path = crate::gemini_config::get_gemini_env_path();
-        if let Some(parent) = gemini_env_path.parent() {
-            std::fs::create_dir_all(parent).expect("create gemini dir");
-        }
-        std::fs::write(&gemini_env_path, "GEMINI_API_KEY=PROXY_MANAGED\n")
-            .expect("seed gemini env");
-
-        // Call bulk backup: must skip all three apps
+        // Call bulk backup: must skip all apps
         service
             .backup_live_configs()
             .await
             .expect("bulk backup should succeed (no-op when all live are placeholders)");
 
-        // All three good backups must still be intact
+        // All good backups must still be intact
         for (app_type, original) in [
             ("claude", good_backup.as_str()),
             ("codex", codex_good_backup.as_str()),
-            ("gemini", gemini_good_backup.as_str()),
         ] {
             let backup_after = db
                 .get_live_backup(app_type)
@@ -10621,149 +10110,5 @@ experimental_bearer_token = "PROXY_MANAGED"
                 "must not overwrite good backup for {app_type} with proxy placeholder"
             );
         }
-    }
-
-    fn grok_provider_config(base_url: &str, api_key: &str) -> Value {
-        json!({
-            "config": format!(
-                "[models]\ndefault = \"grok-4.5\"\n\n[model.\"grok-4.5\"]\nmodel = \"grok-4.5\"\nbase_url = \"{base_url}\"\nname = \"Grok\"\napi_key = \"{api_key}\"\napi_backend = \"responses\"\ncontext_window = 500000\n"
-            )
-        })
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn hot_switch_grokbuild_updates_backup_and_current_provider() {
-        let _home = TempHome::new();
-        crate::settings::reload_settings().expect("reload settings");
-
-        let db = Arc::new(Database::memory().expect("init db"));
-        let service = ProxyService::new(db.clone());
-        let provider_a = Provider::with_id(
-            "grok-a".to_string(),
-            "Grok A".to_string(),
-            grok_provider_config("https://a.example.com/v1", "a-key"),
-            None,
-        );
-        let provider_b = Provider::with_id(
-            "grok-b".to_string(),
-            "Grok B".to_string(),
-            grok_provider_config("https://b.example.com/v1", "b-key"),
-            None,
-        );
-        db.save_provider("grokbuild", &provider_a)
-            .expect("save provider a");
-        db.save_provider("grokbuild", &provider_b)
-            .expect("save provider b");
-        db.set_current_provider("grokbuild", "grok-a")
-            .expect("set db current");
-        crate::settings::set_current_provider(&AppType::GrokBuild, Some("grok-a"))
-            .expect("set local current");
-        let mut original_settings = provider_a.settings_config.clone();
-        original_settings["config"] = json!(format!(
-            "{}\n[mcp_servers.demo]\ncommand = \"demo\"\n",
-            original_settings["config"]
-                .as_str()
-                .expect("provider config")
-        ));
-        db.save_live_backup(
-            "grokbuild",
-            &serde_json::to_string(&original_settings).expect("serialize backup"),
-        )
-        .await
-        .expect("seed backup");
-
-        service
-            .hot_switch_provider("grokbuild", "grok-b")
-            .await
-            .expect("hot switch Grok Build");
-
-        assert_eq!(
-            crate::settings::get_effective_current_provider(&db, &AppType::GrokBuild)
-                .expect("read current")
-                .as_deref(),
-            Some("grok-b")
-        );
-        let backup = db
-            .get_live_backup("grokbuild")
-            .await
-            .expect("read backup")
-            .expect("backup exists");
-        let backup: Value = serde_json::from_str(&backup.original_config).expect("parse backup");
-        assert!(backup["config"]
-            .as_str()
-            .is_some_and(|config| config.contains("https://b.example.com/v1")));
-        assert!(backup["config"]
-            .as_str()
-            .is_some_and(|config| config.contains("[mcp_servers.demo]")));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn failed_hot_switch_grokbuild_keeps_previous_current_and_backup() {
-        let _home = TempHome::new();
-        crate::settings::reload_settings().expect("reload settings");
-
-        let db = Arc::new(Database::memory().expect("init db"));
-        let service = ProxyService::new(db.clone());
-        let provider_a = Provider::with_id(
-            "grok-a".to_string(),
-            "Grok A".to_string(),
-            grok_provider_config("https://a.example.com/v1", "a-key"),
-            None,
-        );
-        let provider_b = Provider::with_id(
-            "grok-b".to_string(),
-            "Broken Grok".to_string(),
-            json!({ "config": "not valid toml = [" }),
-            None,
-        );
-        db.save_provider("grokbuild", &provider_a)
-            .expect("save provider a");
-        db.save_provider("grokbuild", &provider_b)
-            .expect("save provider b");
-        db.set_current_provider("grokbuild", "grok-a")
-            .expect("set db current");
-        crate::settings::set_current_provider(&AppType::GrokBuild, Some("grok-a"))
-            .expect("set local current");
-
-        let original_backup =
-            serde_json::to_string(&provider_a.settings_config).expect("serialize backup");
-        db.save_live_backup("grokbuild", &original_backup)
-            .await
-            .expect("seed backup");
-        let takeover = crate::grok_config::apply_proxy_takeover(
-            provider_a.settings_config["config"]
-                .as_str()
-                .expect("provider config"),
-            "http://127.0.0.1:15721/grokbuild/v1",
-            PROXY_TOKEN_PLACEHOLDER,
-        )
-        .expect("build takeover config");
-        service
-            .write_grok_live(&json!({ "config": takeover }))
-            .expect("seed taken-over live");
-
-        service
-            .hot_switch_provider("grokbuild", "grok-b")
-            .await
-            .expect_err("invalid Grok config must fail");
-
-        assert_eq!(
-            crate::settings::get_effective_current_provider(&db, &AppType::GrokBuild)
-                .expect("read current")
-                .as_deref(),
-            Some("grok-a")
-        );
-        assert_eq!(
-            crate::settings::get_current_provider(&AppType::GrokBuild).as_deref(),
-            Some("grok-a")
-        );
-        let backup = db
-            .get_live_backup("grokbuild")
-            .await
-            .expect("read backup")
-            .expect("backup exists");
-        assert_eq!(backup.original_config, original_backup);
     }
 }

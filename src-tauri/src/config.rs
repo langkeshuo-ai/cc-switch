@@ -269,6 +269,14 @@ pub fn get_app_config_dir() -> PathBuf {
     // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
     #[cfg(windows)]
     {
+        // 测试环境下（CC_SWITCH_TEST_HOME）禁用 legacy 回退，避免测试数据
+        // 泄漏到真实用户目录
+        let in_test = std::env::var("CC_SWITCH_TEST_HOME")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        if in_test {
+            return default_dir;
+        }
         let default_db = default_dir.join("cc-switch.db");
         if !default_db.exists() {
             if let Ok(home_env) = std::env::var("HOME") {

@@ -127,28 +127,8 @@ pub fn sync_all_unlocked(db: &Database) -> SessionSyncResult {
     );
     merge_sync_step(
         &mut result,
-        "Gemini",
-        crate::services::session_usage_gemini::sync_gemini_usage(db),
-    );
-    merge_sync_step(
-        &mut result,
-        "OpenCode",
-        crate::services::session_usage_opencode::sync_opencode_usage(db),
-    );
-    merge_sync_step(
-        &mut result,
-        "Grok Build",
-        crate::services::session_usage_grokbuild::sync_grokbuild_usage(db),
-    );
-    merge_sync_step(
-        &mut result,
         "Pi",
         crate::services::session_usage_pi::sync_pi_usage(db),
-    );
-    merge_sync_step(
-        &mut result,
-        "MCode",
-        crate::services::session_usage_mcode::sync_mcode_usage(db),
     );
     notify_sync_result(&result);
     result

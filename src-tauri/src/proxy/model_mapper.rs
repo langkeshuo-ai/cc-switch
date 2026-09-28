@@ -2,7 +2,6 @@
 //!
 //! 在请求转发前，根据 Provider 配置替换请求中的模型名称
 
-use crate::claude_desktop_config::ONE_M_CONTEXT_MARKER;
 use crate::provider::Provider;
 use serde_json::Value;
 
@@ -148,7 +147,7 @@ pub fn apply_model_mapping(
 /// 通常不接受这个本地能力标记，转发前需要剥离。
 pub fn strip_one_m_suffix_for_upstream(model: &str) -> &str {
     let trimmed = model.trim_end();
-    let marker = ONE_M_CONTEXT_MARKER.as_bytes();
+    let marker = b"[1m]";
     let bytes = trimmed.as_bytes();
     if bytes.len() >= marker.len()
         && bytes[bytes.len() - marker.len()..].eq_ignore_ascii_case(marker)

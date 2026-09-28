@@ -13,7 +13,7 @@ use super::{
     forwarder::ActiveConnectionGuard,
     handler_config::{
         claude_stream_usage_event_filter, codex_stream_usage_event_filter, CLAUDE_PARSER_CONFIG,
-        CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
+        CODEX_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
     },
     handler_context::RequestContext,
     providers::{
@@ -131,38 +131,6 @@ pub async fn handle_messages(
     handle_messages_for_app(state, request, AppType::Claude, "Claude", "claude", None).await
 }
 
-pub async fn handle_claude_desktop_messages(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    validate_claude_desktop_gateway_auth(&state, request.headers())?;
-    handle_messages_for_app(
-        state,
-        request,
-        AppType::ClaudeDesktop,
-        "Claude Desktop",
-        "claude-desktop",
-        Some("/claude-desktop"),
-    )
-    .await
-}
-
-pub async fn handle_claude_desktop_models(
-    State(state): State<ProxyState>,
-    headers: axum::http::HeaderMap,
-) -> Result<Json<Value>, ProxyError> {
-    validate_claude_desktop_gateway_auth(&state, &headers)?;
-    let providers = state
-        .provider_router
-        .select_providers("claude-desktop")
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-    let provider = providers.first().ok_or(ProxyError::NoAvailableProvider)?;
-    let response = crate::claude_desktop_config::model_list_response(provider)
-        .map_err(|e| ProxyError::ConfigError(e.to_string()))?;
-    Ok(Json(response))
-}
-
 async fn handle_messages_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -266,33 +234,6 @@ async fn handle_messages_for_app(
         connection_guard,
     )
     .await
-}
-
-fn validate_claude_desktop_gateway_auth(
-    state: &ProxyState,
-    headers: &axum::http::HeaderMap,
-) -> Result<(), ProxyError> {
-    let expected = crate::claude_desktop_config::get_or_create_gateway_token(state.db.as_ref())
-        .map_err(|e| ProxyError::AuthError(e.to_string()))?;
-    let Some(value) = headers.get(axum::http::header::AUTHORIZATION) else {
-        return Err(ProxyError::AuthError(
-            "Claude Desktop gateway 缺少 Authorization 头".to_string(),
-        ));
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ProxyError::AuthError("Authorization 头格式无效".to_string()))?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
-        .unwrap_or("")
-        .trim();
-    if token != expected {
-        return Err(ProxyError::AuthError(
-            "Claude Desktop gateway token 无效".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// Claude 格式转换处理（独有逻辑）
@@ -832,20 +773,6 @@ pub async fn handle_responses(
     handle_responses_for_app(state, request, AppType::Codex, "Codex", "codex").await
 }
 
-pub async fn handle_grokbuild_responses(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_responses_for_app(
-        state,
-        request,
-        AppType::GrokBuild,
-        "Grok Build",
-        "grokbuild",
-    )
-    .await
-}
-
 async fn handle_responses_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -1059,19 +986,6 @@ async fn handle_codex_standalone_passthrough(
     .await
 }
 
-pub async fn handle_grokbuild_responses_compact(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_responses_compact_for_app(
-        state,
-        request,
-        AppType::GrokBuild,
-        "Grok Build",
-        "grokbuild",
-    )
-    .await
-}
 
 async fn handle_responses_compact_for_app(
     state: ProxyState,
@@ -2068,88 +1982,6 @@ fn compact_error_message(message: &str, max_chars: usize) -> String {
         .trim_end()
         .to_string();
     format!("{truncated}…(truncated)")
-}
-
-// ============================================================================
-// Gemini API 处理器
-// ============================================================================
-
-/// 处理 Gemini API 请求（透传，包括查询参数）
-pub async fn handle_gemini(
-    State(state): State<ProxyState>,
-    uri: axum::http::Uri,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    let (parts, req_body) = request.into_parts();
-    let method = parts.method.clone();
-    let headers = parts.headers;
-    let extensions = parts.extensions;
-    let body_bytes = req_body
-        .collect()
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
-        .to_bytes();
-    // GET 类只读端点（/v1beta/models、/v1beta/models/<model> 等）没有请求体，
-    // 不能强制 parse 为 JSON —— 否则空 body 会被拒绝。
-    let body: Value = if body_bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&body_bytes)
-            .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?
-    };
-
-    // Gemini 的模型名称在 URI 中
-    let mut ctx = RequestContext::new(&state, &body, &headers, AppType::Gemini, "Gemini", "gemini")
-        .await?
-        .with_model_from_uri(&uri);
-
-    // 提取完整的路径和查询参数
-    let endpoint = uri
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or(uri.path());
-
-    let is_stream = body
-        .get("stream")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    let forwarder = ctx.create_forwarder(&state);
-    let mut result = match forwarder
-        .forward_with_retry(
-            &AppType::Gemini,
-            method,
-            endpoint,
-            body,
-            headers,
-            extensions,
-            ctx.get_providers(),
-        )
-        .await
-    {
-        Ok(result) => result,
-        Err(mut err) => {
-            if let Some(provider) = err.provider.take() {
-                ctx.provider = provider;
-            }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
-            return Err(err.error);
-        }
-    };
-
-    let connection_guard = result.connection_guard.take();
-    ctx.outbound_model = result.outbound_model.take();
-    ctx.provider = result.provider;
-    let response = result.response;
-
-    process_response(
-        response,
-        &ctx,
-        &state,
-        &GEMINI_PARSER_CONFIG,
-        connection_guard,
-    )
-    .await
 }
 
 fn should_use_claude_transform_streaming(
