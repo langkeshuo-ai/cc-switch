@@ -2326,19 +2326,31 @@ impl ProxyService {
         }
     }
 
+    /// 判断 URL 是否指向本机网关（host 精确匹配，L1）
+    ///
+    /// 旧实现用前缀匹配（`starts_with("127.0.0.1")` 等），会让
+    /// `http://127.0.0.1.evil.com:15721`、`http://localhost.attacker.io`
+    /// 之类的恶意 host 被当作本地网关（影响接管检测与占位符清理）。
+    /// 现改用 url crate 解析后按 host 精确比对：localhost、127.0.0.0/8、
+    /// 0.0.0.0、::1、::（Ipv4/Ipv6 归一化由 url crate 完成）。
+    ///
+    /// 端口有意不与网关配置端口比对：全部 4 处调用点（Pi 接管检测、SSOT
+    /// 还原兜底、Claude/Codex 占位符清理）必须在网关端口变更后仍能识别
+    /// 历史占位符（接管→改端口→清理的时间窗口），且端口不是本判定的
+    /// 安全边界（host 身份才是）。保持既有 any-port 语义。
     fn is_local_proxy_url(url: &str) -> bool {
-        let url = url.trim();
-        if !url.starts_with("http://") {
+        let Ok(parsed) = url.trim().parse::<url::Url>() else {
+            return false;
+        };
+        if parsed.scheme() != "http" {
             return false;
         }
-        let rest = &url["http://".len()..];
-        rest.starts_with("127.0.0.1")
-            || rest.starts_with("localhost")
-            || rest.starts_with("0.0.0.0")
-            || rest.starts_with("[::1]")
-            || rest.starts_with("[::]")
-            || rest.starts_with("::1")
-            || rest.starts_with("::")
+        match parsed.host() {
+            Some(url::Host::Domain(domain)) => domain == "localhost",
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+            None => false,
+        }
     }
 
     fn proxy_urls_match(actual: &str, expected: &str) -> bool {
@@ -2472,7 +2484,7 @@ impl ProxyService {
             config["config"] = json!(updated);
         }
 
-        self.write_codex_live(&config)?;
+        self.write_codex_live_verbatim(&config)?;
         Ok(())
     }
 
@@ -3294,14 +3306,12 @@ impl ProxyService {
             .map_err(|e| format!("读取 Codex Live 配置失败: {e}"))
     }
 
-    fn write_codex_live(&self, config: &Value) -> Result<(), String> {
-        self.write_codex_live_verbatim(config)
-    }
-
+    // L9：原 write_codex_live 只是 write_codex_live_verbatim 的同义薄包装
+    // （两个名字一种行为），已折叠为单一入口 write_codex_live_verbatim。
     fn write_codex_restore_backup(&self, config: &Value) -> Result<(), String> {
         let mut config = config.clone();
         let auth_snapshot = self.preserve_codex_oauth_login_on_restore(&mut config)?;
-        self.write_codex_live_verbatim_with_auth_guard(&config, Some(&auth_snapshot))
+        self.write_codex_live_verbatim_with_optional_auth_guard(&config, Some(&auth_snapshot))
     }
 
     fn write_codex_live_for_provider(
@@ -3506,10 +3516,10 @@ impl ProxyService {
     }
 
     fn write_codex_live_verbatim(&self, config: &Value) -> Result<(), String> {
-        self.write_codex_live_verbatim_with_auth_guard(config, None)
+        self.write_codex_live_verbatim_with_optional_auth_guard(config, None)
     }
 
-    fn write_codex_live_verbatim_with_auth_guard(
+    fn write_codex_live_verbatim_with_optional_auth_guard(
         &self,
         config: &Value,
         expected_auth: Option<&CodexAuthFileSnapshot>,
@@ -3986,6 +3996,56 @@ mod tests {
             .expect("serialize models_cache"),
         )
         .expect("write models_cache.json");
+    }
+
+    #[test]
+    fn is_local_proxy_url_accepts_exact_local_hosts() {
+        // 精确命中：默认网关写法 + 各等价本机 host
+        for url in [
+            "http://127.0.0.1:15721/v1",
+            "http://127.0.0.1/v1",
+            "http://localhost:15721/pi/anthropic",
+            "http://localhost/v1",
+            "http://0.0.0.0:15721",
+            "http://[::1]:15721/v1",
+            "http://[::]:15721",
+            "  http://127.0.0.1:15721  ", // 前后空白应被 trim
+        ] {
+            assert!(
+                ProxyService::is_local_proxy_url(url),
+                "应为本地网关 URL: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_local_proxy_url_rejects_evil_hosts_and_non_local() {
+        // 恶意 host：不得因前缀相似而误判（L1 核心）
+        for url in [
+            "http://127.0.0.1.evil.com:15721",
+            "http://localhost.attacker.io/v1",
+            "http://0.0.0.0.evil.com",
+            "http://127.0.0.2.notlocal.test",
+            "https://127.0.0.1:15721/v1", // 非 http scheme
+            "https://localhost",
+            "http://example.com/v1",
+            "ftp://127.0.0.1/v1",
+            "not a url",
+            "",
+        ] {
+            assert!(
+                !ProxyService::is_local_proxy_url(url),
+                "不应视为本地网关 URL: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_local_proxy_url_keeps_any_port_semantics() {
+        // 端口不参与判定（既有语义）：端口不匹配当前网关配置也判为本地，
+        // 以便网关端口变更后仍能识别/清理历史接管占位符
+        assert!(ProxyService::is_local_proxy_url("http://127.0.0.1:9999"));
+        assert!(ProxyService::is_local_proxy_url("http://localhost:1"));
     }
 
     #[test]
@@ -8400,7 +8460,7 @@ requires_openai_auth = true
         .await
         .expect("seed live backup");
         service
-            .write_codex_live(&json!({
+            .write_codex_live_verbatim(&json!({
                 "auth": {
                     "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER
                 },
@@ -8575,7 +8635,7 @@ requires_openai_auth = true
         .await
         .expect("seed live backup");
         service
-            .write_codex_live(&json!({
+            .write_codex_live_verbatim(&json!({
                 "auth": {
                     "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER
                 },
@@ -9742,7 +9802,7 @@ base_url = "https://third.example/v1"
         .expect("simulate concurrent login");
 
         let error = service
-            .write_codex_live_verbatim_with_auth_guard(
+            .write_codex_live_verbatim_with_optional_auth_guard(
                 &json!({
                     "auth": { "OPENAI_API_KEY": "stale-key" },
                     "config": "model_provider = \"any\"\n"
@@ -9828,7 +9888,7 @@ base_url = "https://third.example/v1"
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db);
         let error = service
-            .write_codex_live_verbatim_with_auth_guard(
+            .write_codex_live_verbatim_with_optional_auth_guard(
                 &json!({
                     "auth": { "OPENAI_API_KEY": "stale-key" },
                     "config": "model = \"model-a\"\n",
@@ -9944,7 +10004,7 @@ base_url = "https://third.example/v1"
         let db = Arc::new(Database::memory().expect("init db"));
         let service = ProxyService::new(db);
         let error = service
-            .write_codex_live_verbatim_with_auth_guard(
+            .write_codex_live_verbatim_with_optional_auth_guard(
                 &json!({
                     "auth": { "OPENAI_API_KEY": "restored-key" },
                     "config": "model = \"model-a\"\n",

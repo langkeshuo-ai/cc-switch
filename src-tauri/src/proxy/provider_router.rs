@@ -90,6 +90,11 @@ impl ProviderRouter {
                 }
             })
             .flatten();
+        // M7 决策：下方 get_current_provider / get_provider_by_id /
+        // get_all_providers 保持内联同步（不转 db_blocking）。三者都是
+        // 单行/小表查询（Mutex<Connection> 内 sub-ms），且 DAO 侧没有
+        // 现成的 _on_conn 核心可复用；转 blocking 变体每调用引入一次
+        // spawn_blocking 线程停靠，对小查询反而更慢（H4 结论）。
         let current_id = pi_proxy_override.or_else(|| {
             AppType::from_str(app_type)
                 .ok()
@@ -225,8 +230,9 @@ impl ProviderRouter {
         success: bool,
         error_msg: Option<String>,
     ) -> Result<(), AppError> {
-        // 1. 按应用独立获取熔断器配置
-        let failure_threshold = match self.db.get_proxy_config_for_app(app_type).await {
+        // 1. 按应用独立获取熔断器配置（每请求热路径，H4 blocking 变体，
+        //    把同步 DB 读移到 blocking 线程池，避免阻塞 tokio worker）
+        let failure_threshold = match self.db.get_proxy_config_for_app_blocking(app_type).await {
             Ok(app_config) => app_config.circuit_failure_threshold,
             Err(_) => 5, // 默认值
         };
@@ -298,21 +304,34 @@ impl ProviderRouter {
     }
 
     /// 更新所有熔断器的配置（热更新）
+    ///
+    /// L4：读锁临界区只做 Arc 快照收集（纯内存），update_config().await
+    /// 在锁外执行，避免读锁跨 .await 阻塞写者。新创建的熔断器直接从 DB
+    /// 读取最新配置（DB 先于本热更新写入），因此快照窗口无语义差异。
     pub async fn update_all_configs(&self, config: CircuitBreakerConfig) {
-        let breakers = self.circuit_breakers.read().await;
-        for breaker in breakers.values() {
+        let breakers: Vec<Arc<CircuitBreaker>> = {
+            let map = self.circuit_breakers.read().await;
+            map.values().cloned().collect()
+        };
+        for breaker in breakers {
             breaker.update_config(config.clone()).await;
         }
     }
 
     /// 更新指定应用已创建熔断器的配置（热更新）
+    ///
+    /// L4：同 update_all_configs，锁内只收集快照，await 在锁外。
     pub async fn update_app_configs(&self, app_type: &str, config: CircuitBreakerConfig) {
         let prefix = format!("{app_type}:");
-        let breakers = self.circuit_breakers.read().await;
-        for (key, breaker) in breakers.iter() {
-            if key.starts_with(&prefix) {
-                breaker.update_config(config.clone()).await;
-            }
+        let breakers: Vec<Arc<CircuitBreaker>> = {
+            let map = self.circuit_breakers.read().await;
+            map.iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(_, breaker)| breaker.clone())
+                .collect()
+        };
+        for breaker in breakers {
+            breaker.update_config(config.clone()).await;
         }
     }
 
@@ -334,6 +353,9 @@ impl ProviderRouter {
     }
 
     /// 获取或创建熔断器
+    ///
+    /// DB 配置读取在拿写锁之前完成（L4）：写锁临界区只做纯内存插入，
+    /// 不跨越 .await，避免持锁线程被调度阻塞时饿死其他等待者。
     async fn get_or_create_circuit_breaker(&self, key: &str) -> Arc<CircuitBreaker> {
         // 先尝试读锁获取
         {
@@ -343,19 +365,11 @@ impl ProviderRouter {
             }
         }
 
-        // 如果不存在，获取写锁创建
-        let mut breakers = self.circuit_breakers.write().await;
-
-        // 双重检查，防止竞争条件
-        if let Some(breaker) = breakers.get(key) {
-            return breaker.clone();
-        }
-
         // 从 key 中提取 app_type (格式: "app_type:provider_id")
         let app_type = key.split(':').next().unwrap_or("claude");
 
-        // 按应用独立读取熔断器配置
-        let config = match self.db.get_proxy_config_for_app(app_type).await {
+        // 按应用独立读取熔断器配置（热路径，使用 blocking 变体，见 M7）
+        let config = match self.db.get_proxy_config_for_app_blocking(app_type).await {
             Ok(app_config) => crate::proxy::circuit_breaker::CircuitBreakerConfig {
                 failure_threshold: app_config.circuit_failure_threshold,
                 success_threshold: app_config.circuit_success_threshold,
@@ -365,6 +379,14 @@ impl ProviderRouter {
             },
             Err(_) => crate::proxy::circuit_breaker::CircuitBreakerConfig::default(),
         };
+
+        // 如果不存在，获取写锁创建
+        let mut breakers = self.circuit_breakers.write().await;
+
+        // 双重检查，防止竞争条件（并发路径可能已用相同的 DB 配置创建）
+        if let Some(breaker) = breakers.get(key) {
+            return breaker.clone();
+        }
 
         let breaker = Arc::new(CircuitBreaker::new(config));
         breakers.insert(key.to_string(), breaker.clone());
