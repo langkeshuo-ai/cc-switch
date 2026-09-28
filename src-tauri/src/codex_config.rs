@@ -1151,7 +1151,14 @@ fn codex_config_item_has_comment(item: &toml_edit::Item) -> bool {
 }
 
 /// 让合并输出的换行风格跟随既有文件（CRLF 为主 → 统一 CRLF，否则统一 LF）。
+///
+/// 输出含 TOML 多行字符串字面量（`"""` / `'''`）时跳过统一：全局 `\n` ↔ `\r\n`
+/// 改写会把字面量内部的真实换行一并改写，直接改变其语义内容；而混合换行是
+/// 合法 TOML，只是美观问题。
 fn codex_config_merge_harmonize_newlines(output: &str, existing_text: &str) -> String {
+    if output.contains("\"\"\"") || output.contains("'''") {
+        return output.to_string();
+    }
     let crlf = existing_text.matches("\r\n").count();
     let lf_total = existing_text.matches('\n').count();
     let lf_only = lf_total.saturating_sub(crlf);
@@ -8599,6 +8606,24 @@ web_search_note = "keep-me"
         assert_eq!(
             merge_assert_toml(&merged).get("model"),
             Some(&toml::Value::from("gpt-5.2"))
+        );
+    }
+
+    #[test]
+    fn merge_does_not_rewrite_newlines_inside_multiline_literals() {
+        // 既有文件 CRLF 为主，新模板带一个内部为 LF 的多行字面量：
+        // 统一换行不得污染字面量内部内容（语义），允许外部保持混合换行。
+        let existing = "# top\r\nmodel = \"gpt-5.1\"\r\n";
+        let new_text = "model = \"gpt-5.2\"\nprompt = \"\"\"line one\nline two\n\"\"\"\n";
+        let merged = merge_codex_config_surgical(existing, new_text);
+
+        assert!(
+            merged.contains("line one\nline two"),
+            "multiline literal interior must keep LF: {merged:?}"
+        );
+        assert_eq!(
+            merge_assert_toml(&merged).get("prompt"),
+            Some(&toml::Value::from("line one\nline two\n"))
         );
     }
 }
