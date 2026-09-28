@@ -51,10 +51,6 @@ pub fn codex_stream_usage_event_filter(data: &str) -> bool {
     data.contains("\"response.completed\"") || data.contains("\"usage\"")
 }
 
-fn gemini_stream_usage_event_filter(data: &str) -> bool {
-    data.contains("\"usageMetadata\"")
-}
-
 // ============================================================================
 // 模型提取器实现
 // ============================================================================
@@ -120,17 +116,6 @@ fn codex_auto_model_extractor(events: &[Value], fallback_model: &str) -> String 
         .to_string()
 }
 
-/// Gemini 流式响应模型提取（优先使用 usage.model）
-fn gemini_model_extractor(events: &[Value], fallback_model: &str) -> String {
-    // 首先尝试从解析的 usage 中获取模型
-    if let Some(usage) = TokenUsage::from_gemini_stream_chunks(events) {
-        if let Some(model) = usage.model.filter(|m| !m.is_empty()) {
-            return model;
-        }
-    }
-    fallback_model.to_string()
-}
-
 // ============================================================================
 // 预定义配置
 // ============================================================================
@@ -160,15 +145,6 @@ pub const CODEX_PARSER_CONFIG: UsageParserConfig = UsageParserConfig {
     model_extractor: codex_auto_model_extractor,
     stream_event_filter: Some(codex_stream_usage_event_filter),
     app_type_str: "codex",
-};
-
-/// Gemini API 解析配置
-pub const GEMINI_PARSER_CONFIG: UsageParserConfig = UsageParserConfig {
-    stream_parser: TokenUsage::from_gemini_stream_chunks,
-    response_parser: TokenUsage::from_gemini_response,
-    model_extractor: gemini_model_extractor,
-    stream_event_filter: Some(gemini_stream_usage_event_filter),
-    app_type_str: "gemini",
 };
 
 // ============================================================================

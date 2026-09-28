@@ -110,14 +110,6 @@ pub(crate) fn url_for_log(url: &str) -> RedactedUrl<'_> {
     }
 }
 
-/// 为持有确切认证材料的调用方提供优先精确匹配、再启发式兜底的 URL 脱敏。
-pub(crate) fn url_for_log_with_secrets<'a>(
-    url: &'a str,
-    known_secrets: &'a [String],
-) -> RedactedUrl<'a> {
-    RedactedUrl { url, known_secrets }
-}
-
 /// 已知密钥参与子串脱敏的最短长度：过短的值(如 "api")当作子串会误伤无关文本，
 /// 所以只对足够长、几乎不可能是普通词的值做替换。
 const MIN_KNOWN_SECRET_LEN: usize = 8;
@@ -126,13 +118,6 @@ const MIN_KNOWN_SECRET_LEN: usize = 8;
 /// 不做任何“看起来像密钥”的形状猜测——只隐藏已知值，天然收敛、不误伤正常路径。
 pub(crate) fn redact_known_secrets(text: &str, known_secrets: &[String]) -> String {
     redact_known_secrets_with_min_length(text, known_secrets, MIN_KNOWN_SECRET_LEN)
-}
-
-/// Exact-value redaction for user-visible error text. Unlike URL logging, a
-/// short known credential must still be hidden because the result reaches the
-/// UI rather than a diagnostic-only path.
-pub(crate) fn redact_known_secrets_strict(text: &str, known_secrets: &[String]) -> String {
-    redact_known_secrets_with_min_length(text, known_secrets, 1)
 }
 
 fn redact_known_secrets_with_min_length(
