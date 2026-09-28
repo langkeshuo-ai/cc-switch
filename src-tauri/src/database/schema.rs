@@ -353,6 +353,18 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 20. 应用配置快照表（一键整体恢复：每条快照记录三个应用的
+        //     当前供应商 id 与代理接管状态，JSON 细节在 services/snapshots.rs）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_snapshots (
+                name TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 修复跑过未发布开发版的库：current 标记曾是全局 key，现按应用分组
         // （随 v12 定稿为 current_profile_id_<scope>，不单独 bump 版本）
         if conn
@@ -563,6 +575,11 @@ impl Database {
                             }
                         }
                         Self::set_user_version(conn, 19)?;
+                    }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（添加应用配置快照表）");
+                        Self::migrate_v19_to_v20(conn)?;
+                        Self::set_user_version(conn, 20)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1420,6 +1437,20 @@ impl Database {
             [],
         )
         .map_err(|e| AppError::Database(format!("v11 -> v12 创建 profiles 表失败: {e}")))?;
+        Ok(())
+    }
+
+    /// v19 -> v20：添加应用配置快照表（一键整体恢复当前供应商 + 接管状态）。
+    fn migrate_v19_to_v20(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_snapshots (
+                name TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("v19 -> v20 创建 app_snapshots 表失败: {e}")))?;
         Ok(())
     }
 

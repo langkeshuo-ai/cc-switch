@@ -5,6 +5,7 @@ export { settingsApi } from "./settings";
 export { backupsApi } from "./settings";
 export { mcpApi } from "./mcp";
 export { profilesApi } from "./profiles";
+export { snapshotsApi } from "./snapshots";
 export { promptsApi } from "./prompts";
 export { skillsApi } from "./skills";
 export { usageApi } from "./usage";
@@ -19,6 +20,12 @@ export * as copilotApi from "./copilot";
 export type { ProviderSwitchEvent } from "./providers";
 export type { Prompt } from "./prompts";
 export type { Profile, ProfilePayload, ProfilesResponse } from "./profiles";
+export type {
+  AppSnapshotMeta,
+  SnapshotApplyResult,
+  SnapshotAppId,
+  SnapshotAppMeta,
+} from "./snapshots";
 export type {
   CopilotDeviceCodeResponse,
   CopilotAuthStatus,

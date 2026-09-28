@@ -1326,6 +1326,11 @@ pub fn run() {
             commands::delete_profile,
             commands::clear_current_profile,
             commands::apply_profile,
+            // App snapshot management (应用配置快照)
+            commands::list_app_snapshots,
+            commands::save_app_snapshot,
+            commands::apply_app_snapshot,
+            commands::delete_app_snapshot,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
             commands::get_custom_endpoints,
