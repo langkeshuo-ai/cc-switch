@@ -16,6 +16,14 @@ impl Database {
     /// 获取设置值
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::get_setting_on_conn(&conn, key)
+    }
+
+    /// 读取设置值的同步核心（H4：供 `db_blocking` 闭包复用）
+    pub(crate) fn get_setting_on_conn(
+        conn: &rusqlite::Connection,
+        key: &str,
+    ) -> Result<Option<String>, AppError> {
         let mut stmt = conn
             .prepare("SELECT value FROM settings WHERE key = ?1")
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -242,7 +250,15 @@ impl Database {
     ///
     /// 返回整流器配置，如果不存在则返回默认值（全部开启）
     pub fn get_rectifier_config(&self) -> Result<crate::proxy::types::RectifierConfig, AppError> {
-        match self.get_setting("rectifier_config")? {
+        let conn = lock_conn!(self.conn);
+        Self::get_rectifier_config_on_conn(&conn)
+    }
+
+    /// 读取整流器配置的同步核心（H4：供 `db_blocking` 闭包复用）
+    pub(crate) fn get_rectifier_config_on_conn(
+        conn: &rusqlite::Connection,
+    ) -> Result<crate::proxy::types::RectifierConfig, AppError> {
+        match Self::get_setting_on_conn(conn, "rectifier_config")? {
             Some(json) => serde_json::from_str(&json)
                 .map_err(|e| AppError::Database(format!("解析整流器配置失败: {e}"))),
             None => Ok(crate::proxy::types::RectifierConfig::default()),
@@ -265,7 +281,15 @@ impl Database {
     ///
     /// 返回优化器配置，如果不存在则返回默认值（默认关闭）
     pub fn get_optimizer_config(&self) -> Result<crate::proxy::types::OptimizerConfig, AppError> {
-        match self.get_setting("optimizer_config")? {
+        let conn = lock_conn!(self.conn);
+        Self::get_optimizer_config_on_conn(&conn)
+    }
+
+    /// 读取优化器配置的同步核心（H4：供 `db_blocking` 闭包复用）
+    pub(crate) fn get_optimizer_config_on_conn(
+        conn: &rusqlite::Connection,
+    ) -> Result<crate::proxy::types::OptimizerConfig, AppError> {
+        match Self::get_setting_on_conn(conn, "optimizer_config")? {
             Some(json) => serde_json::from_str(&json)
                 .map_err(|e| AppError::Database(format!("解析优化器配置失败: {e}"))),
             None => Ok(crate::proxy::types::OptimizerConfig::default()),
@@ -290,7 +314,15 @@ impl Database {
     pub fn get_copilot_optimizer_config(
         &self,
     ) -> Result<crate::proxy::types::CopilotOptimizerConfig, AppError> {
-        match self.get_setting("copilot_optimizer_config")? {
+        let conn = lock_conn!(self.conn);
+        Self::get_copilot_optimizer_config_on_conn(&conn)
+    }
+
+    /// 读取 Copilot 优化器配置的同步核心（H4：供 `db_blocking` 闭包复用）
+    pub(crate) fn get_copilot_optimizer_config_on_conn(
+        conn: &rusqlite::Connection,
+    ) -> Result<crate::proxy::types::CopilotOptimizerConfig, AppError> {
+        match Self::get_setting_on_conn(conn, "copilot_optimizer_config")? {
             Some(json) => serde_json::from_str(&json)
                 .map_err(|e| AppError::Database(format!("解析 Copilot 优化器配置失败: {e}"))),
             None => Ok(crate::proxy::types::CopilotOptimizerConfig::default()),

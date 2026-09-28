@@ -3,6 +3,7 @@
 //! 提供请求生命周期的上下文管理，封装通用初始化逻辑
 
 use crate::app_config::AppType;
+use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::{
     extract_session_id,
@@ -96,16 +97,27 @@ impl RequestContext {
         let start_time = Instant::now();
 
         // 从数据库读取应用级代理配置（per-app）
+        // H4：每请求热路径的同步 rusqlite 调用移入 tokio blocking 线程池执行，
+        // 避免阻塞 axum handler 所在的 tokio worker 线程
         let app_config = state
             .db
-            .get_proxy_config_for_app(app_type_str)
+            .get_proxy_config_for_app_blocking(app_type_str)
             .await
             .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        // 从数据库读取整流器配置
-        let rectifier_config = state.db.get_rectifier_config().unwrap_or_default();
-        let optimizer_config = state.db.get_optimizer_config().unwrap_or_default();
-        let copilot_optimizer_config = state.db.get_copilot_optimizer_config().unwrap_or_default();
+        // 从数据库读取整流器/优化器配置（同上，移入 blocking 线程池；
+        // 保持原语义：读取失败时回退默认值）
+        let (rectifier_config, optimizer_config, copilot_optimizer_config) = state
+            .db
+            .db_blocking(|conn| {
+                Ok((
+                    Database::get_rectifier_config_on_conn(conn).unwrap_or_default(),
+                    Database::get_optimizer_config_on_conn(conn).unwrap_or_default(),
+                    Database::get_copilot_optimizer_config_on_conn(conn).unwrap_or_default(),
+                ))
+            })
+            .await
+            .unwrap_or_default();
 
         let current_provider_id = if app_type == AppType::Pi {
             // Pi：以 settings.json defaultProvider 为准（Pi CLI 唯一跟随的源），

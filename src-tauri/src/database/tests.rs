@@ -1366,3 +1366,84 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
 }
+
+// ==================== H4: db_blocking ====================
+
+/// db_blocking 基本功能：闭包在 blocking 线程池中拿到已锁定的 &Connection，
+/// 读写结果与内联执行一致。
+#[tokio::test]
+async fn db_blocking_executes_on_conn_and_returns_result() {
+    let db = Database::memory().expect("memory db");
+
+    let inserted = db
+        .db_blocking(|conn| {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('h4-test', 'ok')",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))
+        })
+        .await
+        .expect("db_blocking insert succeeds");
+    assert_eq!(inserted, 1);
+
+    let value = db
+        .db_blocking(|conn| {
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = 'h4-test'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))
+        })
+        .await
+        .expect("db_blocking query succeeds");
+    assert_eq!(value, "ok");
+}
+
+/// db_blocking 并发语义：多个并发调用共享同一 Mutex<Connection>，
+/// 全部完成且互不交错损坏（Mutex 串行化保持不变）。
+#[tokio::test]
+async fn db_blocking_concurrent_calls_serialize_on_single_connection() {
+    let db = std::sync::Arc::new(Database::memory().expect("memory db"));
+
+    let mut tasks = Vec::new();
+    for i in 0..8u32 {
+        let db = std::sync::Arc::clone(&db);
+        tasks.push(tokio::spawn(async move {
+            db.db_blocking(move |conn| -> Result<u32, AppError> {
+                conn.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![format!("h4-concurrent-{i}"), i],
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+                Ok(i)
+            })
+            .await
+        }));
+    }
+
+    let mut seen = Vec::new();
+    for task in tasks {
+        seen.push(task
+            .await
+            .expect("task not panicked")
+            .expect("db_blocking succeeds"));
+    }
+    seen.sort_unstable();
+    assert_eq!(seen, (0..8).collect::<Vec<_>>());
+
+    let count: i64 = {
+        let conn = db
+            .conn
+            .lock()
+            .expect("conn lock after concurrent inserts");
+        conn.query_row(
+            "SELECT COUNT(*) FROM settings WHERE key LIKE 'h4-concurrent-%'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count query")
+    };
+    assert_eq!(count, 8);
+}
