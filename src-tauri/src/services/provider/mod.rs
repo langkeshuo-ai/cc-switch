@@ -78,8 +78,10 @@ pub fn reapply_current_codex_official_live(state: &AppState) -> Result<bool, App
     if outcome == LiveSyncOutcome::BackupOnly {
         return Ok(true);
     }
-    // 重写 live 会整体替换 config.toml（有意设计），[mcp_servers] 随之丢失，
-    // 写完必须立刻从 DB 重新投影启用的 MCP。只投影 Codex 而非
+    // 重写 live 采用外科手术式 merge（codex_config::merge_codex_live_config_with_disk）：
+    // managed 键更新、用户注释与自定义段保留，[mcp_servers] 理论上不再丢失；
+    // 但 merge 以「盘上文本存在且可解析」为前提，仍需立刻从 DB 重新投影启用的
+    // MCP 兜底（清盘/非法 TOML 会回退整份替换）。只投影 Codex 而非
     // sync_all_enabled：后者按 AppType::all() 顺序逐应用短路，排在 Codex
     // 前面的无关应用 live 损坏（如 ~/.claude.json 坏 JSON）会阻断 Codex
     // 的重投影，让刚被清掉的 [mcp_servers] 无人补回。
