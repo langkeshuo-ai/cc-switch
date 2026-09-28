@@ -10,13 +10,6 @@ use crate::config::{self, get_claude_settings_path, ConfigStatus};
 use crate::settings;
 use crate::store::AppState;
 
-#[tauri::command]
-pub async fn get_claude_config_status() -> Result<ConfigStatus, String> {
-    Ok(config::get_claude_config_status())
-}
-
-use std::str::FromStr;
-
 fn invalid_json_format_error(error: serde_json::Error) -> String {
     let lang = settings::get_settings()
         .language
@@ -67,7 +60,7 @@ pub async fn get_config_status(
     _state: State<'_, AppState>,
     app: String,
 ) -> Result<ConfigStatus, String> {
-    match AppType::from_str(&app).map_err(|e| e.to_string())? {
+    match super::parse_app(&app)? {
         AppType::Claude => Ok(config::get_claude_config_status()),
         AppType::Codex => {
             let auth_path = codex_config::get_codex_auth_path();
@@ -100,7 +93,7 @@ pub async fn get_claude_code_config_path() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_config_dir(app: String) -> Result<String, String> {
-    let dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
+    let dir = match super::parse_app(&app)? {
         AppType::Claude => config::get_claude_config_dir(),
         AppType::Codex => codex_config::get_codex_config_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
@@ -111,7 +104,7 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, String> {
-    let config_dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
+    let config_dir = match super::parse_app(&app)? {
         AppType::Claude => config::get_claude_config_dir(),
         AppType::Codex => codex_config::get_codex_config_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
@@ -265,7 +258,7 @@ pub async fn set_common_config_snippet(
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
-            let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
+            let app = super::parse_app(&app_type)?;
             crate::services::provider::ProviderService::migrate_legacy_common_config_usage(
                 state.inner(),
                 app,
@@ -285,7 +278,7 @@ pub async fn set_common_config_snippet(
         .map_err(|e| e.to_string())?;
 
     if matches!(app_type.as_str(), "claude" | "codex") {
-        let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
+        let app = super::parse_app(&app_type)?;
         crate::services::provider::ProviderService::sync_current_provider_for_app(
             state.inner(),
             app,
@@ -323,7 +316,7 @@ pub async fn extract_common_config_snippet(
     settingsConfig: Option<String>,
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<String, String> {
-    let app = AppType::from_str(&appType).map_err(|e| e.to_string())?;
+    let app = super::parse_app(&appType)?;
 
     if let Some(settings_config) = settingsConfig.filter(|s| !s.trim().is_empty()) {
         let settings: serde_json::Value =

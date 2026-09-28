@@ -82,7 +82,7 @@ import {
   CLAUDE_DEFAULT_CONFIG,
   CODEX_DEFAULT_CONFIG,
   normalizePricingSource,
-} from "./helpers/opencodeFormUtils";
+} from "./helpers/providerFormUtils";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
 

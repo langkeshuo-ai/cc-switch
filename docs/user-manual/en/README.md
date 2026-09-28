@@ -64,7 +64,6 @@
 | [2.3-edit.md](./2-providers/2.3-edit.md) | Edit configuration, modify API Key, backfill mechanism |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | Drag-to-reorder, duplicate provider, delete |
 | [2.5-usage-query.md](./2-providers/2.5-usage-query.md) | Usage query, remaining balance, multi-plan display |
-| [2.6-claude-desktop.md](./2-providers/2.6-claude-desktop.md) | Claude Desktop third-party providers, direct mode, and model mapping |
 
 ### 3. Extensions
 
@@ -100,7 +99,6 @@
 - **New users**: Start with [1.1 Introduction](./1-getting-started/1.1-introduction.md)
 - **Installation issues**: See [1.2 Installation Guide](./1-getting-started/1.2-installation.md)
 - **Configure providers**: See [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Use Claude Desktop**: See [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
 - **Use local routing**: See [4.1 Local Routing Service](./4-proxy/4.1-service.md)
 - **Having trouble**: See [5.2 FAQ](./5-faq/5.2-questions.md)
 

@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::str::FromStr;
+
 mod auth;
 mod balance;
 mod codex_oauth;
@@ -62,3 +64,11 @@ pub use lightweight::*;
 pub use s3_sync::*;
 pub use usage::*;
 pub use webdav_sync::*;
+
+/// 解析 Tauri 命令的 `app` 字符串参数为 [`AppType`]。
+///
+/// 各命令模块共用的样板收敛点，等价于
+/// `AppType::from_str(s).map_err(|e| e.to_string())`。
+pub(crate) fn parse_app(s: &str) -> Result<crate::app_config::AppType, String> {
+    crate::app_config::AppType::from_str(s).map_err(|e| e.to_string())
+}

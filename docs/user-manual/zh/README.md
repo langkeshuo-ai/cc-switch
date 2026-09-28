@@ -64,7 +64,6 @@
 | [2.3-edit.md](./2-providers/2.3-edit.md) | 编辑配置、修改 API Key、回填机制 |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | 拖拽排序、复制供应商、删除 |
 | [2.5-usage-query.md](./2-providers/2.5-usage-query.md) | 用量查询、剩余额度、多套餐显示 |
-| [2.6-claude-desktop.md](./2-providers/2.6-claude-desktop.md) | Claude Desktop 第三方供应商、直连与模型映射 |
 
 ### 3. 扩展功能
 
@@ -100,7 +99,6 @@
 - **新用户**：从 [1.1 软件介绍](./1-getting-started/1.1-introduction.md) 开始
 - **安装问题**：查看 [1.2 安装指南](./1-getting-started/1.2-installation.md)
 - **配置供应商**：查看 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **使用 Claude Desktop**：查看 [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
 - **使用本地路由**：查看 [4.1 本地路由服务](./4-proxy/4.1-service.md)
 - **遇到问题**：查看 [5.2 FAQ](./5-faq/5.2-questions.md)
 
