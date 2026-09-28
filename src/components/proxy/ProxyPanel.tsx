@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { ToggleRow } from "@/components/ui/toggle-row";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { toast } from "sonner";
 import { useFailoverQueue } from "@/lib/query/failover";
 import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge";
@@ -64,6 +65,12 @@ export function ProxyPanel({
   // 监听地址/端口的本地状态（端口用字符串以支持完全清空）
   const [listenAddress, setListenAddress] = useState("127.0.0.1");
   const [listenPort, setListenPort] = useState("15721");
+
+  // 非回环地址保存前的确认门：确认后才会持久化到后端
+  const [pendingNonLoopbackSave, setPendingNonLoopbackSave] = useState<{
+    address: string;
+    port: number;
+  } | null>(null);
 
   // 同步全局配置到本地状态
   useEffect(() => {
@@ -185,10 +192,41 @@ export function ProxyPanel({
       );
       return;
     }
+
+    // 非回环地址（0.0.0.0 / 局域网 IP / 非 ::1 的 IPv6）会把代理和其携带的
+    // API Key 暴露给局域网内其他设备，必须经用户确认后才持久化。
+    const isLoopback =
+      normalizedAddress === "127.0.0.1" || normalizedAddress === "::1";
+    if (!isLoopback) {
+      setPendingNonLoopbackSave({ address: normalizedAddress, port });
+      return;
+    }
+
     try {
       await updateGlobalConfig.mutateAsync({
         ...globalConfig,
         listenAddress: normalizedAddress,
+        listenPort: port,
+      });
+      toast.success(
+        t("proxy.settings.configSaved", { defaultValue: "代理配置已保存" }),
+        { closeButton: true },
+      );
+    } catch (error) {
+      toast.error(
+        t("proxy.settings.configSaveFailed", { defaultValue: "保存配置失败" }),
+      );
+    }
+  };
+
+  const confirmNonLoopbackSave = async () => {
+    if (!pendingNonLoopbackSave || !globalConfig) return;
+    const { address, port } = pendingNonLoopbackSave;
+    setPendingNonLoopbackSave(null);
+    try {
+      await updateGlobalConfig.mutateAsync({
+        ...globalConfig,
+        listenAddress: address,
         listenPort: port,
       });
       toast.success(
@@ -593,6 +631,23 @@ export function ProxyPanel({
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        isOpen={pendingNonLoopbackSave !== null}
+        title={t("proxy.settings.nonLoopbackConfirm.title", {
+          defaultValue: "确认监听非回环地址？",
+        })}
+        message={t("proxy.settings.nonLoopbackConfirm.message", {
+          address: pendingNonLoopbackSave?.address ?? "",
+          defaultValue:
+            "监听地址 {{address}} 将向局域网开放。同一网络内的其他设备都能连接此代理，并可能使用你配置的 API Key 和供应商额度。\n\n如果只是本机使用，请保持 127.0.0.1。",
+        })}
+        confirmText={t("proxy.settings.nonLoopbackConfirm.confirm", {
+          defaultValue: "仍然保存",
+        })}
+        onConfirm={() => void confirmNonLoopbackSave()}
+        onCancel={() => setPendingNonLoopbackSave(null)}
+      />
     </>
   );
 }

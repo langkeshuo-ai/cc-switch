@@ -27,20 +27,49 @@ where
 
 // ─── File import/export ──────────────────────────────────────
 
+/// 校验导入/导出路径：必须是绝对路径、不含 `.`/`..` 游走段、且扩展名为 `.sql`。
+///
+/// 前端的正常流程是先弹出原生文件对话框（由用户亲自选择，后端返回绝对路径），
+/// 再把该路径传回这两个 command；这里的校验用于确保被攻陷的 webview 无法绕过
+/// 对话框直接指定任意路径读写用户文件。
+fn validate_transfer_path(raw: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err("文件路径必须是绝对路径".to_string());
+    }
+    if path
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        return Err("文件路径不允许包含路径游走段".to_string());
+    }
+    let is_sql = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("sql"));
+    if !is_sql {
+        return Err("仅支持 .sql 备份文件".to_string());
+    }
+    Ok(path)
+}
+
 /// 导出数据库为 SQL 备份
 #[tauri::command]
 pub async fn export_config_to_file(
     #[allow(non_snake_case)] filePath: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    let target_path =
+        validate_transfer_path(&filePath).map_err(|e| format!("导出配置失败: {e}"))?;
     let db = state.db.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let target_path = PathBuf::from(&filePath);
         db.export_sql(&target_path)?;
         Ok::<_, AppError>(json!({
             "success": true,
             "message": "SQL exported successfully",
-            "filePath": filePath
+            "filePath": target_path.to_string_lossy().into_owned()
         }))
     })
     .await
@@ -54,11 +83,12 @@ pub async fn import_config_from_file(
     #[allow(non_snake_case)] filePath: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
+    let path_buf =
+        validate_transfer_path(&filePath).map_err(|e| format!("导入配置失败: {e}"))?;
     let app_state_for_sync = state.inner().clone();
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
-            let path_buf = PathBuf::from(&filePath);
             let backup_id = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
