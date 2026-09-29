@@ -5,7 +5,6 @@
 use crate::app_config::AppType;
 use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
-use crate::error::format_structured_error;
 use crate::provider::Provider;
 use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::proxy::server::ProxyServer;
@@ -1095,21 +1094,9 @@ impl ProxyService {
     /// - 开启：自动启动代理服务，仅接管当前 app 的 Live 配置
     /// - 关闭：仅恢复当前 app 的 Live 配置；若无其它接管，则自动停止代理服务
     pub async fn set_takeover_for_app(&self, app_type: &str, enabled: bool) -> Result<(), String> {
-        let app = AppType::from_str(app_type).map_err(|e| {
-            format_structured_error(
-                "TAKEOVER_INVALID_APP_TYPE",
-                Some(&format!("无效的应用类型: {e}")),
-                &[("app", app_type)],
-                Some("reloadApps"),
-            )
-        })?;
+        let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
         if !app.supports_local_proxy() {
-            return Err(format_structured_error(
-                "TAKEOVER_UNSUPPORTED_APP",
-                Some(&format!("{} 不支持本地路由", app.as_str())),
-                &[("app", app.as_str())],
-                Some("disableTakeover"),
-            ));
+            return Err(format!("{} 不支持本地路由", app.as_str()));
         }
         let _guard = self.switch_locks.lock_for_app(app.as_str()).await;
 
@@ -3156,21 +3143,9 @@ impl ProxyService {
         app_type: &str,
         provider_id: &str,
     ) -> Result<(), String> {
-        let app = AppType::from_str(app_type).map_err(|e| {
-            format_structured_error(
-                "TAKEOVER_INVALID_APP_TYPE",
-                Some(&format!("无效的应用类型: {e}")),
-                &[("app", app_type)],
-                Some("reloadApps"),
-            )
-        })?;
+        let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
         if !app.supports_local_proxy() {
-            return Err(format_structured_error(
-                "TAKEOVER_UNSUPPORTED_APP",
-                Some(&format!("{} 不支持本地路由", app.as_str())),
-                &[("app", app.as_str())],
-                Some("disableTakeover"),
-            ));
+            return Err(format!("{} 不支持本地路由", app.as_str()));
         }
         let outcome = self.hot_switch_provider(app_type, provider_id).await?;
 
