@@ -50,3 +50,17 @@
 - `tests/msw/handlers.ts` · fixture 对齐 [claude,codex,pi]；get_config_dir 返回
   /default/{app}
 - `src/components/settings/SnapshotSection.tsx` · 加载失败 toast（L5）
+
+## 语义分歧登记（cherry-pick 上游功能时其测试的取舍）
+
+- `codex_config_value_is_cc_switch_owned`（a5b3dd3a）· **接受上游安全属性**：
+  顶层 `experimental_bearer_token` 切换时无论值一律剥离（新配置缺席时）——
+  残留 = A 的凭证发到 B 的端点。推翻了本 fork 引擎原先"仅 PROXY_MANAGED
+  占位符可剥离"的自设限制；注释/自定义段保留不变。
+- `tests/provider_service.rs::switch_codex_syncs_shared_keys_*`（4540d7e4）·
+  **拒绝上游全权重写语义**：上游 autosync 测试断言切换后 live 不得含顶层
+  `wire_api` 与 `[mcp_servers]`/`[mcp.servers]`；本 fork 外科手术式合并
+  （4f3e38f4）有意逐字保留用户可见配置（codex_config/tests.rs:220 断言
+  [mcp_servers] 存活），测试已改为断言 fork 行为。
+- 教训：pick 上游 PR 时，其测试断言默认编码上游引擎语义——必须逐条对照
+  fork 对应引擎（surgical merge / 保留特性）判定接受或改写，并把本表补记。
