@@ -94,7 +94,6 @@ impl PromptService {
             return upsert_pi_prompt(state, id, prompt);
         }
 
-
         // 检查是否为已启用的提示词
         let is_enabled = prompt.enabled;
 

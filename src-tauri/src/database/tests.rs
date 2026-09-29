@@ -1425,19 +1425,17 @@ async fn db_blocking_concurrent_calls_serialize_on_single_connection() {
 
     let mut seen = Vec::new();
     for task in tasks {
-        seen.push(task
-            .await
-            .expect("task not panicked")
-            .expect("db_blocking succeeds"));
+        seen.push(
+            task.await
+                .expect("task not panicked")
+                .expect("db_blocking succeeds"),
+        );
     }
     seen.sort_unstable();
     assert_eq!(seen, (0..8).collect::<Vec<_>>());
 
     let count: i64 = {
-        let conn = db
-            .conn
-            .lock()
-            .expect("conn lock after concurrent inserts");
+        let conn = db.conn.lock().expect("conn lock after concurrent inserts");
         conn.query_row(
             "SELECT COUNT(*) FROM settings WHERE key LIKE 'h4-concurrent-%'",
             [],

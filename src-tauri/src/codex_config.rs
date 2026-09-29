@@ -1142,7 +1142,8 @@ fn codex_config_item_has_comment(item: &toml_edit::Item) -> bool {
     item.as_value()
         .map(|value| {
             let has = |decor: Option<&toml_edit::RawString>| {
-                decor.and_then(|text| text.as_str())
+                decor
+                    .and_then(|text| text.as_str())
                     .is_some_and(|text| text.contains('#'))
             };
             has(value.decor().prefix()) || has(value.decor().suffix())
@@ -1191,7 +1192,11 @@ fn merge_codex_config_surgical(existing_text: &str, new_text: &str) -> String {
     };
 
     // 1) cc-switch 拥有、新配置不再携带的哨兵键 → 移除（陈旧值不得残留）。
-    for key in ["model_catalog_json", "web_search", "experimental_bearer_token"] {
+    for key in [
+        "model_catalog_json",
+        "web_search",
+        "experimental_bearer_token",
+    ] {
         let stale = doc
             .get(key)
             .is_some_and(|item| codex_config_value_is_cc_switch_owned(key, item))

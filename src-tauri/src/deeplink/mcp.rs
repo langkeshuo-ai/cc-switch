@@ -163,7 +163,11 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
             "codex" => apps.codex = true,
             // 已裁剪应用（gemini/grokbuild/opencode/openclaw/hermes/mcode）：
             // 旧 deeplink 可能仍携带这些名字，静默忽略以保持向前兼容
-            _ if matches!(app.trim(), "gemini" | "grokbuild" | "grok" | "opencode" | "openclaw" | "hermes" | "mcode") => {
+            _ if matches!(
+                app.trim(),
+                "gemini" | "grokbuild" | "grok" | "opencode" | "openclaw" | "hermes" | "mcode"
+            ) =>
+            {
                 log::debug!("trimmed app {:?} ignored in apps parameter", app.trim());
             }
             other => {

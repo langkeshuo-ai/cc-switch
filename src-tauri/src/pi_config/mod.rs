@@ -123,8 +123,8 @@ pub(crate) fn pi_proxy_current_provider_key() -> Option<String> {
 /// 安全定位替换点时退回整文档重写（此时注释会丢失）。
 pub(crate) fn set_pi_default_provider(provider_key: &str) -> Result<(), AppError> {
     let path = get_pi_settings_path()?;
-    let value_literal = serde_json::to_string(provider_key)
-        .map_err(|source| AppError::JsonSerialize { source })?;
+    let value_literal =
+        serde_json::to_string(provider_key).map_err(|source| AppError::JsonSerialize { source })?;
     if !path.exists() {
         // settings.json 尚不存在：写入最小文档（Pi CLI 的唯一权威源就是它）
         let mut bytes = format!("{{\"defaultProvider\":{value_literal}}}").into_bytes();
@@ -188,8 +188,8 @@ pub(crate) fn set_pi_default_provider(provider_key: &str) -> Result<(), AppError
         "defaultProvider".to_string(),
         Value::String(provider_key.to_string()),
     );
-    let mut bytes =
-        serde_json::to_vec_pretty(&document).map_err(|source| AppError::JsonSerialize { source })?;
+    let mut bytes = serde_json::to_vec_pretty(&document)
+        .map_err(|source| AppError::JsonSerialize { source })?;
     bytes.push(b'\n');
     ensure_private_models_parent(&path)?;
     atomic_write_private(&path, &bytes)
@@ -287,10 +287,7 @@ pub(crate) fn apply_pi_takeover_base_url(
             "Pi provider '{provider_key}' is not present in models.json"
         ))
     })?;
-    let api = node
-        .get("api")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let api = node.get("api").and_then(|v| v.as_str()).unwrap_or_default();
     let prefix = pi_takeover_prefix_for_api(api).ok_or_else(|| {
         AppError::InvalidInput(format!(
             "Pi provider '{provider_key}' 的 API 格式 '{api}' 不支持本地代理接管（仅支持 anthropic-messages / openai-completions / openai-responses）"
@@ -298,7 +295,10 @@ pub(crate) fn apply_pi_takeover_base_url(
     })?;
     let proxy_base = proxy_base_url.trim().trim_end_matches('/');
     let rewritten = format!("{proxy_base}/{prefix}");
-    let old_base_url = node.get("baseUrl").and_then(Value::as_str).map(str::to_string);
+    let old_base_url = node
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     // 接管只改 baseUrl 一个字符串值：优先手术式替换以保留注释与格式
     if write_provider_base_url_surgical(
@@ -320,10 +320,11 @@ pub(crate) fn apply_pi_takeover_base_url(
                 "Pi provider '{provider_key}' is not present in models.json"
             ))
         })?;
-        node.as_object_mut().ok_or_else(|| {
-            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
-        })?
-        .insert("baseUrl".to_string(), Value::String(rewritten));
+        node.as_object_mut()
+            .ok_or_else(|| {
+                AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+            })?
+            .insert("baseUrl".to_string(), Value::String(rewritten));
     }
     write_models_document(&path, &document, &expected_revision)
 }
@@ -333,10 +334,7 @@ pub(crate) fn apply_pi_takeover_base_url(
 /// Restore/cleanup path companion of [`apply_pi_takeover_base_url`]: no dialect
 /// validation, used to put back the original upstream URL from the DB profile.
 /// Missing key is an error (nothing to restore onto).
-pub(crate) fn set_pi_provider_base_url(
-    provider_key: &str,
-    base_url: &str,
-) -> Result<(), AppError> {
+pub(crate) fn set_pi_provider_base_url(provider_key: &str, base_url: &str) -> Result<(), AppError> {
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
     let (document, expected_revision) = read_models_document_with_revision(&path)?;
@@ -347,7 +345,10 @@ pub(crate) fn set_pi_provider_base_url(
         ))
     })?;
     let rewritten = base_url.trim().trim_end_matches('/').to_string();
-    let old_base_url = node.get("baseUrl").and_then(Value::as_str).map(str::to_string);
+    let old_base_url = node
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     if write_provider_base_url_surgical(
         &path,
@@ -368,13 +369,11 @@ pub(crate) fn set_pi_provider_base_url(
                 "Pi provider '{provider_key}' is not present in models.json"
             ))
         })?;
-        node.as_object_mut().ok_or_else(|| {
-            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
-        })?
-        .insert(
-            "baseUrl".to_string(),
-            Value::String(rewritten),
-        );
+        node.as_object_mut()
+            .ok_or_else(|| {
+                AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+            })?
+            .insert("baseUrl".to_string(), Value::String(rewritten));
     }
     write_models_document(&path, &document, &expected_revision)
 }
@@ -423,13 +422,14 @@ fn write_provider_base_url_surgical(
                 "Pi provider '{provider_key}' is not present in models.json"
             ))
         })?;
-        node.as_object_mut().ok_or_else(|| {
-            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
-        })?
-        .insert(
-            "baseUrl".to_string(),
-            Value::String(new_base_url.to_string()),
-        );
+        node.as_object_mut()
+            .ok_or_else(|| {
+                AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+            })?
+            .insert(
+                "baseUrl".to_string(),
+                Value::String(new_base_url.to_string()),
+            );
     }
     if new_document != expected_document {
         return Ok(false);
@@ -1015,12 +1015,20 @@ mod tests {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
             "pi-anthropic",
-            &takeover_provider("anthropic-messages", "https://anthropic.example.com", "sk-a"),
+            &takeover_provider(
+                "anthropic-messages",
+                "https://anthropic.example.com",
+                "sk-a",
+            ),
         )
         .expect("insert anthropic provider");
         insert_pi_provider(
             "pi-openai",
-            &takeover_provider("openai-completions", "https://openai.example.com/v1", "sk-o"),
+            &takeover_provider(
+                "openai-completions",
+                "https://openai.example.com/v1",
+                "sk-o",
+            ),
         )
         .expect("insert openai provider");
 
@@ -1031,24 +1039,18 @@ mod tests {
             .expect("read node")
             .expect("node exists");
         assert_eq!(
-            node["baseUrl"],
-            "http://127.0.0.1:15721/pi/anthropic",
+            node["baseUrl"], "http://127.0.0.1:15721/pi/anthropic",
             "baseUrl points at the gateway with the anthropic prefix"
         );
         assert_eq!(node["apiKey"], "sk-a", "apiKey must be preserved");
         assert_eq!(node["api"], "anthropic-messages", "api must be preserved");
-        assert_eq!(
-            node["models"][0]["id"],
-            "m1",
-            "models must be preserved"
-        );
+        assert_eq!(node["models"][0]["id"], "m1", "models must be preserved");
 
         let sibling = read_pi_native_provider("pi-openai")
             .expect("read sibling")
             .expect("sibling exists");
         assert_eq!(
-            sibling["baseUrl"],
-            "https://openai.example.com/v1",
+            sibling["baseUrl"], "https://openai.example.com/v1",
             "other provider nodes must stay untouched"
         );
     }
@@ -1104,7 +1106,11 @@ mod tests {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
             "pi-anthropic",
-            &takeover_provider("anthropic-messages", "https://anthropic.example.com", "sk-a"),
+            &takeover_provider(
+                "anthropic-messages",
+                "https://anthropic.example.com",
+                "sk-a",
+            ),
         )
         .expect("insert provider");
         let backup = read_models_document_raw()
@@ -1126,8 +1132,7 @@ mod tests {
             .expect("read node")
             .expect("node exists");
         assert_eq!(
-            node["baseUrl"],
-            "https://anthropic.example.com",
+            node["baseUrl"], "https://anthropic.example.com",
             "restored baseUrl must equal the original upstream URL"
         );
     }
@@ -1138,7 +1143,11 @@ mod tests {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
             "pi-openai",
-            &takeover_provider("openai-completions", "https://openai.example.com/v1", "sk-o"),
+            &takeover_provider(
+                "openai-completions",
+                "https://openai.example.com/v1",
+                "sk-o",
+            ),
         )
         .expect("insert provider");
 
@@ -1150,8 +1159,7 @@ mod tests {
             .expect("read node")
             .expect("node exists");
         assert_eq!(
-            node["baseUrl"],
-            "https://openai.example.com/v1",
+            node["baseUrl"], "https://openai.example.com/v1",
             "trailing slash normalized by the setter"
         );
     }
@@ -1254,12 +1262,16 @@ mod tests {
             "comments must survive: {after}"
         );
         assert_eq!(
-            read_pi_native_defaults().expect("read defaults").default_provider,
+            read_pi_native_defaults()
+                .expect("read defaults")
+                .default_provider,
             Some("cc-switch-test".to_string())
         );
         // 其余字段保持不变
         assert_eq!(
-            read_pi_native_defaults().expect("read defaults").default_model,
+            read_pi_native_defaults()
+                .expect("read defaults")
+                .default_model,
             Some("claude-opus-4-6".to_string())
         );
         // 幂等：相同值不再写盘
@@ -1278,11 +1290,15 @@ mod tests {
 
         set_pi_default_provider("cc-switch-test").expect("insert default provider");
         assert_eq!(
-            read_pi_native_defaults().expect("read defaults").default_provider,
+            read_pi_native_defaults()
+                .expect("read defaults")
+                .default_provider,
             Some("cc-switch-test".to_string())
         );
         assert_eq!(
-            read_pi_native_defaults().expect("read defaults").default_model,
+            read_pi_native_defaults()
+                .expect("read defaults")
+                .default_model,
             Some("m1".to_string())
         );
 
@@ -1290,7 +1306,9 @@ mod tests {
         fs::remove_file(&path).expect("remove settings");
         set_pi_default_provider("cc-switch-test").expect("create settings");
         assert_eq!(
-            read_pi_native_defaults().expect("read defaults").default_provider,
+            read_pi_native_defaults()
+                .expect("read defaults")
+                .default_provider,
             Some("cc-switch-test".to_string())
         );
     }

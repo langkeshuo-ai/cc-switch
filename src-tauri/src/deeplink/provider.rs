@@ -682,6 +682,4 @@ mod tests {
             Some("https://api.example.com/v1")
         );
     }
-
-
 }

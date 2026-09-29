@@ -663,10 +663,7 @@ impl ProxyService {
     }
 
     fn has_claude_one_m_marker(model: &str) -> bool {
-        model
-            .trim_end()
-            .to_ascii_lowercase()
-            .ends_with("[1m]")
+        model.trim_end().to_ascii_lowercase().ends_with("[1m]")
     }
 
     fn strip_claude_one_m_marker(model: &str) -> String {
@@ -1116,9 +1113,8 @@ impl ProxyService {
         if !matches!(app, AppType::Codex) {
             return Ok(());
         }
-        if let Some(provider_id) =
-            crate::settings::get_effective_current_provider(&self.db, app)
-                .map_err(|error| error.to_string())?
+        if let Some(provider_id) = crate::settings::get_effective_current_provider(&self.db, app)
+            .map_err(|error| error.to_string())?
         {
             if let Some(account_id) = self
                 .db
@@ -1269,7 +1265,8 @@ impl ProxyService {
             self.refresh_active_target_from_current_provider(app).await;
 
             // 8) Warn if the current provider is official (risk of account ban via proxy)
-            if let Ok(Some(current_id)) = crate::settings::get_effective_current_provider(&self.db, app)
+            if let Ok(Some(current_id)) =
+                crate::settings::get_effective_current_provider(&self.db, app)
             {
                 if let Ok(Some(provider)) = self.db.get_provider_by_id(&current_id, app_type_str) {
                     if provider.category.as_deref() == Some("official")
@@ -1461,11 +1458,10 @@ impl ProxyService {
             }
         }
 
-        if let Err(e) = self.db.update_provider_settings_config(
-            db_app,
-            provider_id,
-            &provider.settings_config,
-        ) {
+        if let Err(e) =
+            self.db
+                .update_provider_settings_config(db_app, provider_id, &provider.settings_config)
+        {
             log::warn!("同步 {app_label} Token 到数据库失败: {e}");
         } else {
             log::info!("已同步 {app_label} Token 到数据库 (provider: {provider_id})");
@@ -1551,7 +1547,8 @@ impl ProxyService {
                         .map_err(|e| format!("获取 Codex 当前供应商失败: {e}"))?;
 
                 if let Some(provider_id) = provider_id {
-                    if let Ok(Some(mut provider)) = self.db.get_provider_by_id(&provider_id, "codex")
+                    if let Ok(Some(mut provider)) =
+                        self.db.get_provider_by_id(&provider_id, "codex")
                     {
                         // Official rows are routing/account selectors, not
                         // credential stores. Their auth must remain empty even
@@ -1598,7 +1595,6 @@ impl ProxyService {
             self.sync_live_config_to_provider(&AppType::Codex, &live_config)
                 .await?;
         }
-
 
         log::info!("Live 配置 Token 同步完成");
         Ok(())
@@ -1740,7 +1736,6 @@ impl ProxyService {
             }
         }
 
-
         log::info!("已备份所有应用的 Live 配置");
         Ok(())
     }
@@ -1809,10 +1804,7 @@ impl ProxyService {
     fn restore_pi_base_url_from_ssot(&self) -> Result<bool, String> {
         let defaults = crate::pi_config::read_pi_native_defaults()
             .map_err(|e| format!("读取 Pi settings.json 失败: {e}"))?;
-        let Some(provider_key) = defaults
-            .default_provider
-            .filter(|k| !k.trim().is_empty())
-        else {
+        let Some(provider_key) = defaults.default_provider.filter(|k| !k.trim().is_empty()) else {
             return Ok(false);
         };
         let Some(provider) = self
@@ -1846,9 +1838,8 @@ impl ProxyService {
         // restore_models_document_raw 字节级原样写回，注释与格式不丢失；
         // JSON5 解析仅用于接管占位符检查。
         if matches!(app_type, AppType::Pi) {
-            let raw = crate::pi_config::read_models_document_raw()?.ok_or_else(|| {
-                "Pi models.json 不存在，无法备份".to_string()
-            })?;
+            let raw = crate::pi_config::read_models_document_raw()?
+                .ok_or_else(|| "Pi models.json 不存在，无法备份".to_string())?;
             let config = crate::pi_config::parse_models_document_raw(&raw)
                 .map_err(|e| format!("解析 Pi models.json 失败: {e}"))?;
             if Self::live_has_proxy_placeholder_for_app(app_type, &config) {
@@ -1995,7 +1986,9 @@ impl ProxyService {
                 let (provider_key, _prefix) = self.resolve_pi_takeover_target()?;
                 crate::pi_config::apply_pi_takeover_base_url(&provider_key, &proxy_url)
                     .map_err(|e| format!("写入 Pi 接管配置失败: {e}"))?;
-                log::info!("Pi Live 配置已接管（供应商 {provider_key}），网关地址: {proxy_url}/...");
+                log::info!(
+                    "Pi Live 配置已接管（供应商 {provider_key}），网关地址: {proxy_url}/..."
+                );
             }
         }
 
@@ -2106,8 +2099,10 @@ impl ProxyService {
             }
             AppType::Pi => {
                 if let Ok(Some(backup)) = self.db.get_live_backup("pi").await {
-                    crate::pi_config::restore_models_document_raw(backup.original_config.as_bytes())
-                        .map_err(|e| format!("恢复 Pi models.json 失败: {e}"))?;
+                    crate::pi_config::restore_models_document_raw(
+                        backup.original_config.as_bytes(),
+                    )
+                    .map_err(|e| format!("恢复 Pi models.json 失败: {e}"))?;
                     log::info!("Pi Live 配置已恢复");
                 }
             }
@@ -2120,11 +2115,7 @@ impl ProxyService {
     async fn restore_live_configs(&self) -> Result<(), String> {
         let mut errors = Vec::new();
 
-        for app_type in [
-            AppType::Claude,
-            AppType::Codex,
-            AppType::Pi,
-        ] {
+        for app_type in [AppType::Claude, AppType::Codex, AppType::Pi] {
             if let Err(e) = self
                 .restore_live_config_for_app_with_fallback(&app_type)
                 .await
@@ -2296,9 +2287,7 @@ impl ProxyService {
             AppType::Claude => self.cleanup_claude_takeover_placeholders_in_live(),
             AppType::Codex => self.cleanup_codex_takeover_placeholders_in_live(),
             // Pi：把指向本网关的 baseUrl 还原为档案中的原始地址
-            AppType::Pi => self
-                .restore_pi_base_url_from_ssot()
-                .map(|_| ()),
+            AppType::Pi => self.restore_pi_base_url_from_ssot().map(|_| ()),
         }
     }
 
@@ -3476,8 +3465,7 @@ impl ProxyService {
                     None => injected,
                 }
             };
-            let live_config =
-                crate::codex_config::merge_codex_live_config_with_disk(&live_config);
+            let live_config = crate::codex_config::merge_codex_live_config_with_disk(&live_config);
             crate::codex_config::write_codex_live_config_atomic(Some(&live_config))
                 .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
             return Ok(());
@@ -3706,10 +3694,7 @@ impl ProxyService {
             // 按 switch lock -> server lock 的顺序执行，反向持锁会造成死锁。
             drop(server_guard);
             let mut updated_any = false;
-            for app_type in [
-                AppType::Claude,
-                AppType::Codex,
-            ] {
+            for app_type in [AppType::Claude, AppType::Codex] {
                 updated_any |= self
                     .reproject_takeover_live_config_if_enabled(&app_type)
                     .await?;

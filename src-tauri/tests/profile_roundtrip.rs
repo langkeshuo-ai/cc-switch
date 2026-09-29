@@ -702,4 +702,3 @@ fn profile_switch_auto_disables_takeover_before_apply() {
         "live config should point to real endpoint after auto-disable"
     );
 }
-

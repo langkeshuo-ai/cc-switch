@@ -1342,13 +1342,11 @@ mod tests {
         );
 
         // finish guard 在 drop 时触发：部分收集到的事件被尽力上报
-        let (events, _first_token_ms) = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            callback_rx.recv(),
-        )
-        .await
-        .expect("finish guard must fire after client disconnect")
-        .expect("callback channel must stay open until finish");
+        let (events, _first_token_ms) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), callback_rx.recv())
+                .await
+                .expect("finish guard must fire after client disconnect")
+                .expect("callback channel must stay open until finish");
         assert_eq!(
             events.len(),
             2,

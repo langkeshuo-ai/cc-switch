@@ -1,8 +1,8 @@
-use indexmap::IndexMap;
 use crate::app_config::{AppType, McpServer};
 use crate::error::AppError;
 use crate::mcp;
 use crate::store::AppState;
+use indexmap::IndexMap;
 
 /// MCP 相关业务逻辑（v3.7.0 统一结构）
 pub struct McpService;

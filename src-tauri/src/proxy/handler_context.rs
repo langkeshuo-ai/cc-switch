@@ -155,7 +155,9 @@ impl RequestContext {
             .provider_router
             .select_providers(
                 app_type_str,
-                session_result.client_provided.then_some(session_id.as_str()),
+                session_result
+                    .client_provided
+                    .then_some(session_id.as_str()),
             )
             .await
             .map_err(|e| match e {
@@ -287,4 +289,3 @@ impl RequestContext {
         }
     }
 }
-

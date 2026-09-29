@@ -264,8 +264,14 @@ impl ProviderRouter {
     /// 记录会话粘性：session 成功使用某 provider 后更新映射
     ///
     /// 仅应由请求成功路径调用（forwarder 成功埋点）。
-    pub(crate) fn record_session_affinity(&self, app_type: &str, session_id: &str, provider_id: &str) {
-        self.session_affinity.record(app_type, session_id, provider_id);
+    pub(crate) fn record_session_affinity(
+        &self,
+        app_type: &str,
+        session_id: &str,
+        provider_id: &str,
+    ) {
+        self.session_affinity
+            .record(app_type, session_id, provider_id);
         log::debug!(
             "[{app_type}] [SessionAffinity] 记录粘性: session={session_id} → provider={provider_id}"
         );
@@ -919,6 +925,9 @@ mod tests {
             .select_providers("pi", None)
             .await
             .expect_err("no provider configured anywhere");
-        assert!(matches!(error, crate::error::AppError::NoProvidersConfigured));
+        assert!(matches!(
+            error,
+            crate::error::AppError::NoProvidersConfigured
+        ));
     }
 }

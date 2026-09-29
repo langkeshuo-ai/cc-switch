@@ -836,6 +836,4 @@ mod ensure_official_seed_tests {
         let result = db.ensure_official_seed_by_id("nonexistent-id", AppType::Codex);
         assert!(result.is_err(), "unknown seed id should be Err");
     }
-
-
 }

@@ -1993,7 +1993,6 @@ impl SkillService {
             let mut apps = selection.apps;
             apps.pi = Self::skill_exists_in_app(&dir_name, &AppType::Pi);
 
-
             // 从 lock 文件提取仓库信息
             let (id, repo_owner, repo_name, repo_branch, readme_url) =
                 build_repo_info_from_lock(&agents_lock, &dir_name);
@@ -2237,8 +2236,7 @@ impl SkillService {
 
         let dest = app_dir.join(&directory);
 
-        if matches!(app, AppType::Pi) && (dest.exists() || Self::is_symlink(&dest))
-        {
+        if matches!(app, AppType::Pi) && (dest.exists() || Self::is_symlink(&dest)) {
             Self::ensure_pi_skill_destination_matches(&source, &dest, &directory)?;
         }
 
@@ -5708,7 +5706,7 @@ mod tests {
             .join("skills")
             .join("test-skill");
 
-assert_eq!(result.migrated_count, 1);
+        assert_eq!(result.migrated_count, 1);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert!(new_source.join("SKILL.md").exists());
         assert!(

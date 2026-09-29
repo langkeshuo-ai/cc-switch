@@ -83,8 +83,7 @@ pub async fn import_config_from_file(
     #[allow(non_snake_case)] filePath: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let path_buf =
-        validate_transfer_path(&filePath).map_err(|e| format!("导入配置失败: {e}"))?;
+    let path_buf = validate_transfer_path(&filePath).map_err(|e| format!("导入配置失败: {e}"))?;
     let app_state_for_sync = state.inner().clone();
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {

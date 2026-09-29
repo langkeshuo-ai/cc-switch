@@ -162,8 +162,7 @@ fn extract_responses_session(
         if let Some(value) = headers.get(*header_name) {
             if let Ok(session_id) = value.to_str() {
                 // Responses 客户端的 Session ID 通常较长（UUID 格式）
-                if let Some(session_id) =
-                    normalize_session_id(session_id).filter(|s| s.len() > 20)
+                if let Some(session_id) = normalize_session_id(session_id).filter(|s| s.len() > 20)
                 {
                     if let Some(full) = normalize_session_id(&format!("{prefix}_{session_id}")) {
                         return Some(SessionIdResult {
@@ -493,7 +492,10 @@ mod tests {
     fn test_normalize_session_id_normal_uuid_passes_unchanged() {
         let uuid = "d937243f-2702-4f20-97b6-c9682235ab81";
         assert_eq!(normalize_session_id(uuid), Some(uuid));
-        assert_eq!(normalize_session_id("my-session-123"), Some("my-session-123"));
+        assert_eq!(
+            normalize_session_id("my-session-123"),
+            Some("my-session-123")
+        );
         assert_eq!(normalize_session_id("codex_abc_123"), Some("codex_abc_123"));
         // 前后空白被裁剪
         assert_eq!(normalize_session_id("  sess-1  "), Some("sess-1"));

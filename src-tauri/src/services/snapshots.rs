@@ -238,11 +238,7 @@ impl SnapshotService {
                 });
                 let mut apps = BTreeMap::new();
                 for app in AppType::all() {
-                    let entry = data
-                        .apps
-                        .get(app.as_str())
-                        .cloned()
-                        .unwrap_or_default();
+                    let entry = data.apps.get(app.as_str()).cloned().unwrap_or_default();
                     let provider_name = entry
                         .provider_id
                         .as_ref()
@@ -311,11 +307,7 @@ impl SnapshotService {
     }
 
     /// 恢复单个应用，失败返回 "原因码: 详情"
-    fn apply_one(
-        state: &AppState,
-        app: &AppType,
-        entry: &SnapshotAppEntry,
-    ) -> Result<(), String> {
+    fn apply_one(state: &AppState, app: &AppType, entry: &SnapshotAppEntry) -> Result<(), String> {
         // 供应商已被删除 → 跳过（其余步骤也没有意义：接管恢复依赖切换后的 live）
         if let Some(pid) = entry.provider_id.as_deref() {
             let providers = state
@@ -335,7 +327,9 @@ impl SnapshotService {
         for step in steps {
             match step {
                 ApplyStep::DisableTakeover => tauri::async_runtime::block_on(
-                    state.proxy_service.set_takeover_for_app(app.as_str(), false),
+                    state
+                        .proxy_service
+                        .set_takeover_for_app(app.as_str(), false),
                 )
                 .map_err(|e| format!("takeover_off_failed: {e}"))?,
                 ApplyStep::SwitchProvider => {
@@ -377,8 +371,8 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::fs;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     /// 测试期把 HOME/CC_SWITCH_TEST_HOME 指向临时目录，隔离 claude/codex
     /// 的真实用户配置（与 provider 模块测试的 TempHome 同一套路）。
@@ -493,10 +487,8 @@ mod tests {
     /// 建立三应用各两个供应商，并让 current 指向各自的 "a" 槽位
     /// （claude/codex = DB + 本地 settings，pi = settings.json defaultProvider）。
     fn seed_three_apps_with_current(state: &AppState) {
-        ProviderService::add(state, AppType::Pi, pi_provider("pi-a"), false)
-            .expect("add pi-a");
-        ProviderService::add(state, AppType::Pi, pi_provider("pi-b"), false)
-            .expect("add pi-b");
+        ProviderService::add(state, AppType::Pi, pi_provider("pi-a"), false).expect("add pi-a");
+        ProviderService::add(state, AppType::Pi, pi_provider("pi-b"), false).expect("add pi-b");
         state
             .db
             .save_provider("claude", &claude_provider("cl-a"))
@@ -670,10 +662,8 @@ mod tests {
         let state = AppState::new(Arc::new(
             Database::memory().expect("create in-memory database"),
         ));
-        ProviderService::add(&state, AppType::Pi, pi_provider("pi-a"), false)
-            .expect("add pi-a");
-        ProviderService::add(&state, AppType::Pi, pi_provider("pi-b"), false)
-            .expect("add pi-b");
+        ProviderService::add(&state, AppType::Pi, pi_provider("pi-a"), false).expect("add pi-a");
+        ProviderService::add(&state, AppType::Pi, pi_provider("pi-b"), false).expect("add pi-b");
 
         write_pi_settings(r#"{"defaultProvider":"pi-a"}"#);
         SnapshotService::save(&state, "route").expect("save snapshot");
@@ -710,7 +700,9 @@ mod tests {
         let saved = state.db.get_app_snapshot("pi-work").unwrap().unwrap();
         let data: AppSnapshotData = serde_json::from_str(&saved.data).unwrap();
         assert_eq!(
-            data.apps.get("pi").and_then(|entry| entry.provider_id.clone()),
+            data.apps
+                .get("pi")
+                .and_then(|entry| entry.provider_id.clone()),
             Some("cc-switch-test".to_string()),
             "capture must record the actual Pi defaultProvider"
         );
@@ -753,7 +745,9 @@ mod tests {
         let saved = state.db.get_app_snapshot("pi-work").unwrap().unwrap();
         let data: AppSnapshotData = serde_json::from_str(&saved.data).unwrap();
         assert_eq!(
-            data.apps.get("pi").and_then(|entry| entry.provider_id.clone()),
+            data.apps
+                .get("pi")
+                .and_then(|entry| entry.provider_id.clone()),
             Some("cc-switch-test".to_string()),
             "unreadable settings.json must fall back to the DB current provider"
         );
@@ -782,9 +776,10 @@ mod tests {
     #[test]
     fn test_snapshot_data_tolerates_missing_fields() {
         // 前向兼容：缺失的 app 槽位在应用时按 snapshot_entry_missing 跳过
-        let back: AppSnapshotData =
-            serde_json::from_str(r#"{"name":"x","created_at":1,"apps":{"claude":{"provider_id":"p1","takeover":true}}}"#)
-                .unwrap();
+        let back: AppSnapshotData = serde_json::from_str(
+            r#"{"name":"x","created_at":1,"apps":{"claude":{"provider_id":"p1","takeover":true}}}"#,
+        )
+        .unwrap();
         assert_eq!(back.apps.get("claude"), Some(&entry(Some("p1"), true)));
         assert_eq!(back.apps.get("codex"), None);
 

@@ -300,7 +300,10 @@ impl ProxyServer {
             // - anthropic-messages → baseUrl=http://host:port/pi/anthropic
             // - openai-completions / openai-responses → baseUrl=.../pi/openai
             .route("/pi/anthropic/*rest", post(handlers::handle_pi_messages))
-            .route("/pi/openai/chat/completions", post(handlers::handle_pi_chat_completions))
+            .route(
+                "/pi/openai/chat/completions",
+                post(handlers::handle_pi_chat_completions),
+            )
             .route("/pi/openai/responses", post(handlers::handle_pi_responses))
             // OpenAI Chat Completions API (Codex CLI，支持带前缀和不带前缀)
             .route("/chat/completions", post(handlers::handle_chat_completions))

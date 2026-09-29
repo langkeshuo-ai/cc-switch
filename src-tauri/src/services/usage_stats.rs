@@ -2161,10 +2161,7 @@ fn clean_model_id_for_pricing(model_id: &str) -> String {
         .replace('@', "-")
         .to_ascii_lowercase();
 
-    normalized
-        .trim_end_matches("[1m]")
-        .trim()
-        .to_string()
+    normalized.trim_end_matches("[1m]").trim().to_string()
 }
 
 fn push_unique_candidate(candidates: &mut Vec<String>, candidate: String) -> bool {

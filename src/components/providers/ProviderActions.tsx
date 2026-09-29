@@ -235,7 +235,11 @@ export function ProviderActions({
 
   const buttonState = getMainButtonState();
   const canDelete =
-    appId === "pi" ? !isStateChangeProtected : isOmo || isAdditiveMode ? true : !isCurrent;
+    appId === "pi"
+      ? !isStateChangeProtected
+      : isOmo || isAdditiveMode
+        ? true
+        : !isCurrent;
   const deleteHint =
     appId === "pi" && isStateChangeProtected
       ? t("pi.current.stateUnavailableHint")

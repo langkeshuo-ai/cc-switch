@@ -196,7 +196,9 @@ export function SnapshotSection() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setConfirm({ kind: "apply", target: snapshot.name })}
+                    onClick={() =>
+                      setConfirm({ kind: "apply", target: snapshot.name })
+                    }
                     disabled={busy}
                   >
                     <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -206,7 +208,9 @@ export function SnapshotSection() {
                     variant="ghost"
                     size="sm"
                     className="text-destructive hover:text-destructive"
-                    onClick={() => setConfirm({ kind: "delete", target: snapshot.name })}
+                    onClick={() =>
+                      setConfirm({ kind: "delete", target: snapshot.name })
+                    }
                     disabled={busy}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -224,7 +228,8 @@ export function SnapshotSection() {
                     >
                       <span className="capitalize">{app}</span>
                       <span className="text-foreground">
-                        {entry.providerName ?? t("settings.snapshot.deletedProvider")}
+                        {entry.providerName ??
+                          t("settings.snapshot.deletedProvider")}
                       </span>
                       <Badge
                         variant={entry.takeover ? "default" : "outline"}

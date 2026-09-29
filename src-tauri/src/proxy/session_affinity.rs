@@ -76,10 +76,7 @@ impl SessionAffinityMap {
         let Some(session_id) = normalize_session_id(session_id) else {
             return;
         };
-        let mut entries = self
-            .entries
-            .lock()
-            .expect("session affinity lock poisoned");
+        let mut entries = self.entries.lock().expect("session affinity lock poisoned");
         let key = Self::key(app_type, session_id);
 
         // 超容量时淘汰最旧 last_seen，为新键腾位

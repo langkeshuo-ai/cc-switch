@@ -1,14 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { exit } from "@tauri-apps/plugin-process";
-import {
-  ExternalLink,
-  FolderOpen,
-  AlertTriangle,
-} from "lucide-react";
+import { ExternalLink, FolderOpen, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const RELEASES_URL = "https://github.com/langkeshuo-ai/cc-switch/releases/latest";
+const RELEASES_URL =
+  "https://github.com/langkeshuo-ai/cc-switch/releases/latest";
 
 interface DatabaseUpgradeProps {
   payload: {

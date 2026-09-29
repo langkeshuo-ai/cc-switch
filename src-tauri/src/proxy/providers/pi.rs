@@ -80,10 +80,9 @@ impl ProviderAdapter for PiAdapter {
         use http::HeaderName;
         let bearer = format!("Bearer {}", auth.api_key);
         Ok(match auth.strategy {
-            AuthStrategy::Anthropic => vec![(
-                HeaderName::from_static("x-api-key"),
-                hv(&auth.api_key)?,
-            )],
+            AuthStrategy::Anthropic => {
+                vec![(HeaderName::from_static("x-api-key"), hv(&auth.api_key)?)]
+            }
             AuthStrategy::ClaudeAuth | AuthStrategy::Bearer => {
                 vec![(HeaderName::from_static("authorization"), hv(&bearer)?)]
             }

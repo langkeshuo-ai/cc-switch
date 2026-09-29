@@ -193,4 +193,3 @@ pub const CODEX_RESPONSES_HANDLER_CONFIG: HandlerConfig = HandlerConfig {
     app_type_str: "codex",
     parser_config: &CODEX_PARSER_CONFIG,
 };
-

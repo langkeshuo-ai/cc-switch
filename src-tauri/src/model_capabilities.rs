@@ -198,9 +198,7 @@ fn normalize_model_id(value: &str) -> String {
         .trim_start_matches("models/")
         .trim()
         .to_ascii_lowercase();
-    if let Some(stripped) =
-        normalized.strip_suffix("[1m]")
-    {
+    if let Some(stripped) = normalized.strip_suffix("[1m]") {
         normalized = stripped.trim().to_string();
     }
     normalized

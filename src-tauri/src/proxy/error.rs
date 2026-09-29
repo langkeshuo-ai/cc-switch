@@ -117,10 +117,9 @@ impl IntoResponse for ProxyError {
             _ => {
                 // 状态码统一走 error_mapper 的映射表（已与逐 variant 状态码对齐），
                 // 此处只负责构造错误响应体。
-                let status = StatusCode::from_u16(
-                    super::error_mapper::map_proxy_error_to_status(&self),
-                )
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let status =
+                    StatusCode::from_u16(super::error_mapper::map_proxy_error_to_status(&self))
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
                 let error_body = json!({
                     "error": {

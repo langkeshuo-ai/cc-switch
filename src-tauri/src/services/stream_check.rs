@@ -282,7 +282,6 @@ impl StreamCheckService {
             .as_ref()
             .and_then(|meta| meta.custom_user_agent_header().ok().flatten())
     }
-
 }
 
 #[cfg(test)]

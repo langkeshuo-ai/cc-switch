@@ -256,7 +256,6 @@ describe("providerNeedsRouting", () => {
         ),
       ).toBe(true);
     });
-
   });
 
   describe("Claude 非 OAuth 按格式判定", () => {

@@ -411,5 +411,4 @@ fn migration_snapshot_overrides_multi_source_directory_inference() {
         migrated.apps.claude,
         "legacy snapshot should preserve Claude enablement"
     );
-
 }

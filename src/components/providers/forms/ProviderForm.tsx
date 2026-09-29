@@ -11,11 +11,7 @@ import {
   buildLocalProxyRequestOverrides,
   formatRequestOverrideObject,
 } from "@/lib/requestOverrides";
-import {
-  settingsApi,
-  type AppId,
-  type ManagedAuthProvider,
-} from "@/lib/api";
+import { settingsApi, type AppId, type ManagedAuthProvider } from "@/lib/api";
 import type {
   ProviderCategory,
   ProviderMeta,

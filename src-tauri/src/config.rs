@@ -152,7 +152,6 @@ fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-
 fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
     let default_config_dir = get_home_dir().join(".claude");
     if path_eq_lexical(dir, &default_config_dir) {
@@ -652,7 +651,6 @@ mod tests {
             PathBuf::from(r"\\wsl.localhost\Ubuntu\root\.claude.json")
         );
     }
-
 
     #[cfg(windows)]
     #[test]

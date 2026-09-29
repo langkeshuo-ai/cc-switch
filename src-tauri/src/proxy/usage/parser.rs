@@ -391,7 +391,6 @@ impl TokenUsage {
         log::debug!("[Codex] 未找到 usage 信息");
         None
     }
-
 }
 
 #[cfg(test)]
@@ -459,7 +458,6 @@ mod tests {
                 .as_deref(),
             Some("chatcmpl_123")
         );
-
     }
 
     #[test]

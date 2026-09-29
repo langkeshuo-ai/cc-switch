@@ -73,9 +73,7 @@ export function useApiKeyLink({
 
   return {
     shouldShowApiKeyLink:
-      appId === "claude" || appId === "codex"
-        ? shouldShowApiKeyLink
-        : false,
+      appId === "claude" || appId === "codex" ? shouldShowApiKeyLink : false,
     websiteUrl: getWebsiteUrl,
     isPartner,
     partnerPromotionKey,

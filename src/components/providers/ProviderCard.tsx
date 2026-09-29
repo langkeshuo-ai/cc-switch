@@ -246,7 +246,8 @@ export function ProviderCard({
   const usageEnabled =
     provider.meta?.usage_script?.enabled ?? isBoundCodexOfficial;
   const isOfficial = isOfficialProvider(provider, appId);
-  const supportsOfficialSubscription = isOfficial && ["claude", "codex"].includes(appId);
+  const supportsOfficialSubscription =
+    isOfficial && ["claude", "codex"].includes(appId);
   const isOfficialSubscriptionUsage =
     provider.meta?.usage_script?.templateType ===
     TEMPLATE_TYPES.OFFICIAL_SUBSCRIPTION;

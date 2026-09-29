@@ -33,10 +33,7 @@ export const PresetSortMode = {
 export type PresetSortMode =
   (typeof PresetSortMode)[keyof typeof PresetSortMode];
 
-export type AnyPreset =
-  | ProviderPreset
-  | CodexProviderPreset
-  | PiProviderPreset;
+export type AnyPreset = ProviderPreset | CodexProviderPreset | PiProviderPreset;
 
 export type PresetEntry = {
   id: string;

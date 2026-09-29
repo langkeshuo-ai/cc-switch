@@ -3139,7 +3139,6 @@ wire_api = "responses"
     }
 }
 
-
 impl ProviderService {
     fn managed_codex_oauth_account_id(provider: &Provider) -> Option<String> {
         provider
@@ -3995,7 +3994,9 @@ impl ProviderService {
         let is_app_taken_over =
             futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
                 .map_err(|e| {
-                    log::warn!("读取 {app_type:?} Live 备份状态失败，中止切换以防破坏接管状态: {e}");
+                    log::warn!(
+                        "读取 {app_type:?} Live 备份状态失败，中止切换以防破坏接管状态: {e}"
+                    );
                     e
                 })?
                 .is_some();

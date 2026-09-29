@@ -60,7 +60,11 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
         let h1 = s.spawn(codex::scan_sessions);
         let h2 = s.spawn(claude::scan_sessions);
         let h3 = s.spawn(pi::scan_sessions);
-        (h1.join().unwrap_or_default(), h2.join().unwrap_or_default(), h3.join().unwrap_or_default())
+        (
+            h1.join().unwrap_or_default(),
+            h2.join().unwrap_or_default(),
+            h3.join().unwrap_or_default(),
+        )
     });
 
     let mut sessions = Vec::new();
