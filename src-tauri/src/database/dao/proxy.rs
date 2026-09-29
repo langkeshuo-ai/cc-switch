@@ -463,7 +463,6 @@ impl Database {
                         max_retries: row.get::<_, i32>(2)? as u8,
                         request_timeout: 600, // 废弃字段，返回默认值
                         enable_logging: row.get::<_, i32>(3)? != 0,
-                        live_takeover_active: false, // 废弃字段
                         streaming_first_byte_timeout: row.get::<_, i32>(4).unwrap_or(60) as u64,
                         streaming_idle_timeout: row.get::<_, i32>(5).unwrap_or(120) as u64,
                         non_streaming_timeout: row.get::<_, i32>(6).unwrap_or(600) as u64,
@@ -511,13 +510,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        Ok(())
-    }
-
-    /// 设置 Live 接管状态（兼容旧版本，更新 enabled 字段）
-    pub async fn set_live_takeover_active(&self, _active: bool) -> Result<(), AppError> {
-        // 不再使用此字段，由 enabled 字段替代
-        // 保留空实现以兼容旧代码
         Ok(())
     }
 

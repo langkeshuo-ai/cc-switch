@@ -167,7 +167,7 @@ export function AddProviderDialog({
         providerData.meta?.custom_endpoints &&
         Object.keys(providerData.meta.custom_endpoints).length > 0;
 
-      if (!hasCustomEndpoints && values.presetCategory !== "omo") {
+      if (!hasCustomEndpoints) {
         const urlSet = new Set<string>();
 
         const addUrl = (rawUrl?: string) => {

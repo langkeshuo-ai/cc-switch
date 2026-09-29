@@ -79,12 +79,11 @@ fn parse_provider_deeplink(
         .clone();
 
     // Validate app type
-    if !matches!(
-        app.as_str(),
-        "claude" | "codex" | "gemini" | "grokbuild" | "opencode" | "openclaw" | "hermes"
-    ) {
+    // 仅接受当前支持的应用；旧链接携带已裁剪应用（gemini/grokbuild/opencode/
+    // openclaw/hermes 等）时明确报错——单值导入静默忽略会让用户点了没反应
+    if !matches!(app.as_str(), "claude" | "codex" | "pi") {
         return Err(AppError::InvalidInput(format!(
-            "Invalid provider app type: '{app}'"
+            "Invalid provider app type: '{app}' (supported: claude, codex, pi)"
         )));
     }
 
@@ -187,13 +186,10 @@ fn parse_prompt_deeplink(
         .ok_or_else(|| AppError::InvalidInput("Missing 'app' parameter for prompt".to_string()))?
         .clone();
 
-    // Validate app type
-    if !matches!(
-        app.as_str(),
-        "claude" | "codex" | "gemini" | "grokbuild" | "opencode" | "openclaw" | "hermes" | "pi"
-    ) {
+    // Validate app type（同上：单值参数，裁剪应用明确报错而非静默忽略）
+    if !matches!(app.as_str(), "claude" | "codex" | "pi") {
         return Err(AppError::InvalidInput(format!(
-            "Invalid app type: must be 'claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', 'hermes', or 'pi', got '{app}'"
+            "Invalid app type: must be 'claude', 'codex', or 'pi', got '{app}'"
         )));
     }
 

@@ -1246,8 +1246,6 @@ pub fn run() {
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,
-            commands::get_claude_common_config_snippet,
-            commands::set_claude_common_config_snippet,
             commands::get_common_config_snippet,
             commands::set_common_config_snippet,
             commands::update_toml_common_config_snippet,
@@ -1292,10 +1290,6 @@ pub fn run() {
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)
-            commands::get_mcp_config,
-            commands::upsert_mcp_server_in_config,
-            commands::delete_mcp_server_in_config,
-            commands::set_mcp_enabled,
             // Unified MCP management
             commands::get_mcp_servers,
             commands::upsert_mcp_server,

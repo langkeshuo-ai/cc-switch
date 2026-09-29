@@ -522,8 +522,7 @@ export function DeepLinkImportDialog() {
                             )}
 
                           {/* Codex config */}
-                          {(parsedConfig.type === "codex" ||
-                            parsedConfig.type === "grokbuild") && (
+                          {parsedConfig.type === "codex" && (
                             <div className="space-y-2">
                               {parsedConfig.type === "codex" &&
                                 parsedConfig.auth &&
@@ -557,22 +556,6 @@ export function DeepLinkImportDialog() {
                               )}
                             </div>
                           )}
-
-                          {/* Gemini config */}
-                          {parsedConfig.type === "gemini" &&
-                            parsedConfig.env && (
-                              <div className="space-y-1.5">
-                                {Object.entries(parsedConfig.env).map(
-                                  ([key, value]) => (
-                                    <EnvRow
-                                      key={key}
-                                      envKey={key}
-                                      value={String(value)}
-                                    />
-                                  ),
-                                )}
-                              </div>
-                            )}
                         </div>
                       )}
 

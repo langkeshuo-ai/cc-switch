@@ -46,10 +46,6 @@ fn get_keywords_for_app(app: &str) -> Vec<EnvKeyword> {
             EnvKeyword::Prefix("GEMINI"),
             EnvKeyword::Prefix("GOOGLE_GEMINI"),
         ],
-        "grokbuild" | "grok" => vec![
-            EnvKeyword::Exact("XAI_API_KEY"),
-            EnvKeyword::Exact("GROK_DEFAULT_MODEL"),
-        ],
         _ => vec![],
     }
 }
@@ -193,34 +189,7 @@ mod tests {
                 EnvKeyword::Prefix("GOOGLE_GEMINI")
             ]
         );
-        assert_eq!(
-            get_keywords_for_app("grokbuild"),
-            vec![
-                EnvKeyword::Exact("XAI_API_KEY"),
-                EnvKeyword::Exact("GROK_DEFAULT_MODEL")
-            ]
-        );
-        assert_eq!(
-            get_keywords_for_app("grok"),
-            get_keywords_for_app("grokbuild")
-        );
         assert_eq!(get_keywords_for_app("unknown"), Vec::<EnvKeyword>::new());
-    }
-
-    #[test]
-    fn grok_keywords_only_match_credentials() {
-        let keywords = get_keywords_for_app("grokbuild");
-
-        assert!(matches_env_keyword("XAI_API_KEY", &keywords));
-        assert!(matches_env_keyword("xai_api_key", &keywords));
-        assert!(matches_env_keyword("GROK_DEFAULT_MODEL", &keywords));
-        assert!(matches_env_keyword("grok_default_model", &keywords));
-        assert!(!matches_env_keyword("MY_XAI_API_KEY", &keywords));
-        assert!(!matches_env_keyword("XAI_API_KEY_BACKUP", &keywords));
-        assert!(!matches_env_keyword("MY_GROK_DEFAULT_MODEL", &keywords));
-        assert!(!matches_env_keyword("GROK_DEFAULT_MODEL_BACKUP", &keywords));
-        assert!(!matches_env_keyword("GROK_BIN_DIR", &keywords));
-        assert!(!matches_env_keyword("GROK_HOME", &keywords));
     }
 
     #[test]

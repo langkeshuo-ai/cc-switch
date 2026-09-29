@@ -4,9 +4,7 @@ export type ProviderCategory =
   | "cloud_provider" // 云服务商（AWS Bedrock 等）
   | "aggregator" // 聚合网站
   | "third_party" // 第三方供应商
-  | "custom" // 自定义
-  | "omo" // Oh My OpenCode
-  | "omo-slim"; // Oh My OpenCode Slim
+  | "custom"; // 自定义
 
 export interface Provider {
   id: string;
@@ -517,12 +515,6 @@ export interface McpStatus {
   userConfigPath: string;
   userConfigExists: boolean;
   serverCount: number;
-}
-
-// 新：来自 config.json 的 MCP 列表响应
-export interface McpConfigResponse {
-  configPath: string;
-  servers: Record<string, McpServer>;
 }
 
 // ============================================================================

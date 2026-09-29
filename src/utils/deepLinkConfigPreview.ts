@@ -4,7 +4,7 @@ import { decodeBase64Utf8 } from "@/lib/utils/base64";
 import { isSensitiveConfigKey, maskSensitiveValue } from "@/utils/deeplinkRisk";
 
 export interface ParsedDeepLinkConfig {
-  type: "claude" | "codex" | "gemini" | "grokbuild";
+  type: "claude" | "codex";
   env?: Record<string, string>;
   auth?: Record<string, string>;
   tomlConfig?: string;
@@ -47,14 +47,6 @@ export function parseDeepLinkConfigPreview(
 
   try {
     const decoded = decodeBase64Utf8(request.config);
-    const format = request.configFormat?.trim().toLowerCase();
-
-    if (request.app === "grokbuild" && format === "toml") {
-      return {
-        type: "grokbuild",
-        tomlConfig: sanitizeTomlForPreview(decoded),
-      };
-    }
 
     const parsed = JSON.parse(decoded) as Record<string, unknown>;
     if (request.app === "claude") {
@@ -69,22 +61,6 @@ export function parseDeepLinkConfigPreview(
         type: "codex",
         auth: (parsed.auth as Record<string, string>) || {},
         tomlConfig: config ? sanitizeTomlForPreview(config) : "",
-      };
-    }
-    if (request.app === "gemini") {
-      return {
-        type: "gemini",
-        env: parsed as Record<string, string>,
-      };
-    }
-    if (request.app === "grokbuild") {
-      const config =
-        typeof parsed.config === "string"
-          ? parsed.config
-          : stringifyToml(parsed);
-      return {
-        type: "grokbuild",
-        tomlConfig: sanitizeTomlForPreview(config),
       };
     }
     return null;

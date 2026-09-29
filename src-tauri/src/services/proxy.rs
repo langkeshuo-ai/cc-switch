@@ -1023,25 +1023,12 @@ impl ProxyService {
                 }
             };
 
-        // 3. 在写入接管配置之前先落盘接管标志：
-        //    这样即使在接管过程中断电/kill，下次启动也能检测到并自动恢复。
-        if let Err(e) = self.db.set_live_takeover_active(true).await {
-            if let Err(clean_err) = self.db.delete_all_live_backups().await {
-                log::warn!("清理 Live 备份失败: {clean_err}");
-            }
-            if started_proxy_before_takeover {
-                let _ = self.stop().await;
-            }
-            return Err(format!("设置接管状态失败: {e}"));
-        }
-
         // 4. 接管各应用的 Live 配置（写入代理地址，清空 Token）
         if let Err(e) = self.takeover_live_configs().await {
             // 接管失败（可能是部分写入），尝试恢复原始配置；若恢复失败则保留标志与备份，等待下次启动自动恢复。
             log::error!("接管 Live 配置失败，尝试恢复原始配置: {e}");
             match self.restore_live_configs().await {
                 Ok(()) => {
-                    let _ = self.db.set_live_takeover_active(false).await;
                     let _ = self.db.delete_all_live_backups().await;
                 }
                 Err(restore_err) => {
@@ -1062,7 +1049,6 @@ impl ProxyService {
                 log::error!("代理启动失败，尝试恢复原始配置: {e}");
                 match self.restore_live_configs().await {
                     Ok(()) => {
-                        let _ = self.db.set_live_takeover_active(false).await;
                         let _ = self.db.delete_all_live_backups().await;
                     }
                     Err(restore_err) => {
@@ -1280,9 +1266,6 @@ impl ProxyService {
                 return Err(error);
             }
 
-            // 7) 兼容旧逻辑：写入 any-of 标志（失败不影响功能）
-            let _ = self.db.set_live_takeover_active(true).await;
-
             self.refresh_active_target_from_current_provider(app).await;
 
             // 8) Warn if the current provider is official (risk of account ban via proxy)
@@ -1367,8 +1350,6 @@ impl ProxyService {
             .map_err(|e| format!("检查接管状态失败: {e}"))?;
 
         if !any_enabled {
-            let _ = self.db.set_live_takeover_active(false).await;
-
             if self.is_running().await {
                 // 此时没有任何 app 处于接管状态，停止服务即可
                 let _ = self.stop().await;
@@ -1387,7 +1368,11 @@ impl ProxyService {
     ///
     /// 代理服务本身保持运行；当最后一个应用也关闭接管后，下次用户手动关闭
     /// 代理或程序退出时会自然停止。
-    pub fn disable_takeover_for_app_sync(&self, app_type: &AppType) -> Result<(), String> {
+    ///
+    /// 命名含 `blocking`：本方法内部 `block_on` 等待异步步骤，供同步 Tauri
+    /// 命令/托盘线程调用。切勿在 tokio 上下文中调用，也不要在未核查调用方的
+    /// 情况下"现代化"为 async。
+    pub fn disable_takeover_for_app_blocking(&self, app_type: &AppType) -> Result<(), String> {
         let app_type_str = app_type.as_str();
 
         // 1) 恢复原始 Live 配置（备份 → SSOT → 清理占位符 三层兜底）
@@ -1411,9 +1396,6 @@ impl ProxyService {
         // 4) 清除该应用的健康状态
         futures::executor::block_on(self.db.clear_provider_health_for_app(app_type_str))
             .map_err(|e| format!("清除 {app_type_str} 健康状态失败: {e}"))?;
-
-        // 5) 清旧标志
-        let _ = futures::executor::block_on(self.db.set_live_takeover_active(false));
 
         Ok(())
     }
@@ -1663,13 +1645,7 @@ impl ProxyService {
         // 2. 恢复原始 Live 配置
         self.restore_live_configs().await?;
 
-        // 3. 清除 proxy_config 表中的接管状态（兼容旧版）
-        self.db
-            .set_live_takeover_active(false)
-            .await
-            .map_err(|e| format!("清除接管状态失败: {e}"))?;
-
-        // 4. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
+        // 3. 清除所有应用的 enabled 状态（用户手动关闭，不需要下次自动恢复）
         for app_type in ["claude", "codex"] {
             if let Ok(mut config) = self.db.get_proxy_config_for_app(app_type).await {
                 if config.enabled {
@@ -2507,11 +2483,6 @@ impl ProxyService {
         self.restore_live_configs().await?;
 
         // 2. 清除接管标志
-        self.db
-            .set_live_takeover_active(false)
-            .await
-            .map_err(|e| format!("清除接管状态失败: {e}"))?;
-
         // 3. 删除备份
         self.db
             .delete_all_live_backups()
@@ -3688,9 +3659,7 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
-        // 保存到数据库（保持 live_takeover_active 状态不变）
         let mut new_config = config.clone();
-        new_config.live_takeover_active = previous.live_takeover_active;
 
         self.db
             .update_proxy_config(new_config.clone())

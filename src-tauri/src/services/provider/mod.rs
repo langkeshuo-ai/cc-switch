@@ -1219,7 +1219,6 @@ command = "legacy-cmd"
             .expect("set local current provider");
 
         db.update_proxy_config(ProxyConfig {
-            live_takeover_active: true,
             listen_port: 0,
             ..Default::default()
         })
@@ -1353,7 +1352,6 @@ requires_openai_auth = true
             .expect("set local current provider");
 
         db.update_proxy_config(ProxyConfig {
-            live_takeover_active: true,
             listen_port: 0,
             ..Default::default()
         })

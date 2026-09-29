@@ -176,40 +176,6 @@ pub async fn open_app_config_folder(handle: AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn get_claude_common_config_snippet(
-    state: tauri::State<'_, crate::store::AppState>,
-) -> Result<Option<String>, String> {
-    state
-        .db
-        .get_config_snippet("claude")
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn set_claude_common_config_snippet(
-    snippet: String,
-    state: tauri::State<'_, crate::store::AppState>,
-) -> Result<(), String> {
-    let is_cleared = snippet.trim().is_empty();
-
-    if !snippet.trim().is_empty() {
-        serde_json::from_str::<serde_json::Value>(&snippet).map_err(invalid_json_format_error)?;
-    }
-
-    let value = if is_cleared { None } else { Some(snippet) };
-
-    state
-        .db
-        .set_config_snippet("claude", value)
-        .map_err(|e| e.to_string())?;
-    state
-        .db
-        .set_config_snippet_cleared("claude", is_cleared)
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn get_common_config_snippet(
     app_type: String,
     state: tauri::State<'_, crate::store::AppState>,
