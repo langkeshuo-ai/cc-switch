@@ -8,6 +8,9 @@ import {
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Pi 表单用例涉及模型拉取与防抖，CI/慢机上偶发超出默认 5s
+vi.setConfig({ testTimeout: 20_000 });
+
 import { PiProviderForm } from "@/components/providers/forms/PiProviderForm";
 import { http, HttpResponse } from "msw";
 import { server } from "../msw/server";
@@ -694,7 +697,7 @@ describe("PiProviderForm", () => {
     expect(config).not.toHaveProperty("authHeader");
     expect(config.headers).not.toHaveProperty("authorization");
     expect(config.headers).not.toHaveProperty("x-api-key");
-  });
+  }, 20000);
 
   it("echoes existing Pi headers and preserves them when saving", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);

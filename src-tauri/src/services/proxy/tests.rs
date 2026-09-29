@@ -153,9 +153,15 @@ async fn unsupported_apps_are_rejected_before_proxy_side_effects() {
     let db = Arc::new(Database::memory().expect("init db"));
     let service = ProxyService::new(db);
 
-    assert!(service.set_takeover_for_app("pi", true).await.is_err());
+    assert!(service
+        .set_takeover_for_app("gemini", true)
+        .await
+        .is_err());
     assert!(!service.is_running().await);
-    assert!(service.switch_proxy_target("pi", "missing").await.is_err());
+    assert!(service
+        .switch_proxy_target("gemini", "missing")
+        .await
+        .is_err());
 }
 
 async fn running_codex_base_url(service: &ProxyService) -> String {
