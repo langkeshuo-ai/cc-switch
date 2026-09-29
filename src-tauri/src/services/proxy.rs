@@ -5,6 +5,7 @@
 use crate::app_config::AppType;
 use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
+use crate::error::format_structured_error;
 use crate::provider::Provider;
 use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::proxy::server::ProxyServer;
@@ -1094,9 +1095,21 @@ impl ProxyService {
     /// - 开启：自动启动代理服务，仅接管当前 app 的 Live 配置
     /// - 关闭：仅恢复当前 app 的 Live 配置；若无其它接管，则自动停止代理服务
     pub async fn set_takeover_for_app(&self, app_type: &str, enabled: bool) -> Result<(), String> {
-        let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
+        let app = AppType::from_str(app_type).map_err(|e| {
+            format_structured_error(
+                "TAKEOVER_INVALID_APP_TYPE",
+                Some(&format!("无效的应用类型: {e}")),
+                &[("app", app_type)],
+                Some("reloadApps"),
+            )
+        })?;
         if !app.supports_local_proxy() {
-            return Err(format!("{} 不支持本地路由", app.as_str()));
+            return Err(format_structured_error(
+                "TAKEOVER_UNSUPPORTED_APP",
+                Some(&format!("{} 不支持本地路由", app.as_str())),
+                &[("app", app.as_str())],
+                Some("disableTakeover"),
+            ));
         }
         let _guard = self.switch_locks.lock_for_app(app.as_str()).await;
 
@@ -1150,6 +1163,26 @@ impl ProxyService {
                 .get_proxy_config_for_app(app_type_str)
                 .await
                 .map_err(|e| format!("获取 {app_type_str} 配置失败: {e}"))?;
+
+            // 残留备份：状态标记为「未接管」但备份还在，说明上一次接管没有干净收尾
+            // （例如 enabled 没落库——Pi 长期就是这个状态）。先把 Live 还原回真实
+            // 原始配置并清掉残留备份，否则下面的 backup_live_config_strict 会把已经
+            // 指向网关的 Live 当成原始配置再备份一次，用户的真实 baseUrl 就永久丢了。
+            if !current_config.enabled {
+                match self.db.get_live_backup(app_type_str).await {
+                    Ok(Some(_)) => {
+                        log::warn!(
+                            "{app_type_str} 存在残留备份但状态为未接管，先还原真实配置再重新接管"
+                        );
+                        if let Err(e) = self.restore_live_config_for_app_inner(app).await {
+                            log::warn!("{app_type_str} 残留备份还原失败（按首次接管继续）: {e}");
+                        }
+                        let _ = self.db.delete_live_backup(app_type_str).await;
+                    }
+                    Ok(None) => {}
+                    Err(e) => log::warn!("读取 {app_type_str} 备份失败（将按首次接管处理）: {e}"),
+                }
+            }
 
             let mut restore_existing_backup_before_takeover = false;
             if current_config.enabled {
@@ -3123,9 +3156,21 @@ impl ProxyService {
         app_type: &str,
         provider_id: &str,
     ) -> Result<(), String> {
-        let app = AppType::from_str(app_type).map_err(|e| format!("无效的应用类型: {e}"))?;
+        let app = AppType::from_str(app_type).map_err(|e| {
+            format_structured_error(
+                "TAKEOVER_INVALID_APP_TYPE",
+                Some(&format!("无效的应用类型: {e}")),
+                &[("app", app_type)],
+                Some("reloadApps"),
+            )
+        })?;
         if !app.supports_local_proxy() {
-            return Err(format!("{} 不支持本地路由", app.as_str()));
+            return Err(format_structured_error(
+                "TAKEOVER_UNSUPPORTED_APP",
+                Some(&format!("{} 不支持本地路由", app.as_str())),
+                &[("app", app.as_str())],
+                Some("disableTakeover"),
+            ));
         }
         let outcome = self.hot_switch_provider(app_type, provider_id).await?;
 

@@ -686,10 +686,11 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     );
 
     // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
+    // v21 起 migrate_v20_to_v21 再补一行 Pi，因此这里是 5 行
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 4);
+    assert_eq!(proxy_rows, 5);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

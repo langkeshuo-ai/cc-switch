@@ -126,7 +126,7 @@ impl Database {
 
         // 8. Proxy Config 表（三行结构，app_type 主键）
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -183,6 +183,11 @@ impl Database {
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
+        // 注意：这里刻意不 seed Pi。
+        // 历史迁移 v13 -> v14 会把 proxy_config 重建成只放行
+        // claude/codex/gemini/grokbuild 的旧表并用 SELECT 整行搬数据，若此刻已存在
+        // 'pi' 行，那条迁移会撞 CHECK 约束直接失败。Pi 的行改由 v20 -> v21 迁移补齐，
+        // 全新库则在首次写入时由 ensure_proxy_config_row_exists_on_conn 惰性创建。
 
         // 9. Provider Health 表
         conn.execute("CREATE TABLE IF NOT EXISTS provider_health (
@@ -580,6 +585,11 @@ impl Database {
                         log::info!("迁移数据库从 v19 到 v20（添加应用配置快照表）");
                         Self::migrate_v19_to_v20(conn)?;
                         Self::set_user_version(conn, 20)?;
+                    }
+                    20 => {
+                        log::info!("迁移数据库从 v20 到 v21（放行 Pi 的代理配置行）");
+                        Self::migrate_v20_to_v21(conn)?;
+                        Self::set_user_version(conn, 21)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1451,6 +1461,118 @@ impl Database {
             [],
         )
         .map_err(|e| AppError::Database(format!("v19 -> v20 创建 app_snapshots 表失败: {e}")))?;
+        Ok(())
+    }
+
+    /// v20 -> v21: 放行 Pi 的 proxy_config 行。
+    ///
+    /// v13 -> v14 那次重建补的是 Grok Build，漏掉了 Pi，于是 `proxy_config`
+    /// 的 `app_type` CHECK 约束一直把 'pi' 拒之门外，Pi 永远没有自己的行。
+    /// 后果：`update_proxy_config_for_app` 是裸 UPDATE，匹配 0 行也不报错；
+    /// `get_takeover_status()` 读 `proxy_config.enabled` 恒为 false，所以 Pi 的
+    /// 路由开关打开后界面永远显示未开启，尽管接管本身已经成功。
+    ///
+    /// 这里重建表以放宽 CHECK，逐列照搬既有数据，并补上 Pi 的默认行。
+    fn migrate_v20_to_v21(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_config")? {
+            return Ok(());
+        }
+
+        // 幂等：建表语句里已经出现 'pi' 说明约束已放宽，无需重建
+        let existing_sql: Option<String> = match conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+            [],
+            |row| row.get(0),
+        ) {
+            Ok(sql) => Some(sql),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(AppError::Database(e.to_string())),
+        };
+        if existing_sql
+            .as_deref()
+            .is_some_and(|sql| sql.contains("'pi'"))
+        {
+            return Ok(());
+        }
+
+        // 逐列取现有列名，避免历史迁移造成的列差异导致 COPY 失败或丢列
+        let old_columns = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(proxy_config)")
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::Database(e.to_string()))?
+        };
+
+        conn.execute("DROP TABLE IF EXISTS proxy_config_v21", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "CREATE TABLE proxy_config_v21 (
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
+                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("v20 -> v21 重建 proxy_config 表失败: {e}")))?;
+
+        let target_columns = [
+            "app_type",
+            "proxy_enabled",
+            "listen_address",
+            "listen_port",
+            "enable_logging",
+            "enabled",
+            "auto_failover_enabled",
+            "max_retries",
+            "streaming_first_byte_timeout",
+            "streaming_idle_timeout",
+            "non_streaming_timeout",
+            "circuit_failure_threshold",
+            "circuit_success_threshold",
+            "circuit_timeout_seconds",
+            "circuit_error_rate_threshold",
+            "circuit_min_requests",
+            "default_cost_multiplier",
+            "pricing_model_source",
+            "live_takeover_active",
+            "created_at",
+            "updated_at",
+        ];
+        let shared_columns = target_columns
+            .into_iter()
+            .filter(|column| old_columns.iter().any(|old| old == column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        conn.execute(
+            &format!("INSERT INTO proxy_config_v21 ({shared_columns}) SELECT {shared_columns} FROM proxy_config"),
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("v20 -> v21 迁移 proxy_config 数据失败: {e}")))?;
+
+        conn.execute("DROP TABLE proxy_config", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("ALTER TABLE proxy_config_v21 RENAME TO proxy_config", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (app_type) VALUES ('pi')",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         Ok(())
     }
 
@@ -3952,6 +4074,66 @@ mod tests {
         )?;
         assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
         assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v20_to_v21_adds_pi_proxy_row_and_preserves_values() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        // 复刻 v20 时代的表结构：CHECK 只放行四个 app，Pi 根本建不出行
+        conn.execute(
+            "CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
+                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO proxy_config (app_type, enabled, max_retries) VALUES ('claude', 1, 9)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 20)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+
+        let pi_rows: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(pi_rows, 1, "v20 -> v21 必须为 Pi 建出 proxy_config 行");
+
+        let (enabled, retries): (i64, i64) = conn.query_row(
+            "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'claude'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!((enabled, retries), (1, 9), "重建表不能丢已有取值");
+
+        // 放宽后的约束必须真的接受 Pi（否则接管状态依旧写不进去）
+        conn.execute(
+            "UPDATE proxy_config SET enabled = 1 WHERE app_type = 'pi'",
+            [],
+        )?;
+        let pi_enabled: i64 = conn.query_row(
+            "SELECT enabled FROM proxy_config WHERE app_type = 'pi'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(pi_enabled, 1);
         Ok(())
     }
 }

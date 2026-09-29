@@ -268,6 +268,11 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 注意：这里刻意不 seed Pi（理由同 schema.rs：v13 -> v14 的历史迁移会把
+        // proxy_config 重建成不含 'pi' 的旧约束并整行搬数据，提前存在的 'pi' 行会让
+        // 那条迁移撞 CHECK 失败）。Pi 的行由 v20 -> v21 迁移补齐，全新库在首次写入时
+        // 由 ensure_proxy_config_row_exists_on_conn 惰性创建。
+
         Ok(())
     }
 
@@ -357,6 +362,10 @@ impl Database {
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
 
+        // UPDATE 匹配不到行时 SQLite 不报错、静默影响 0 行——Pi 的接管状态就是
+        // 这么丢的（表里没有 'pi' 行）。写之前先确保行存在。
+        Self::ensure_proxy_config_row_exists_on_conn(&conn, &config.app_type)?;
+
         conn.execute(
             "UPDATE proxy_config SET
                 enabled = ?2,
@@ -400,7 +409,18 @@ impl Database {
             .conn
             .lock()
             .map_err(|e| AppError::Lock(e.to_string()))?;
+        Self::ensure_proxy_config_row_exists_on_conn(&conn, app_type)
+    }
 
+    /// `ensure_proxy_config_row_exists` 的连接版，供已持有连接锁的调用方复用。
+    ///
+    /// `INSERT OR IGNORE` 违反 `proxy_config.app_type` CHECK 约束时会静默跳过
+    /// （不报错、影响 0 行）。这里在插入后显式复查行数，把「写不进去却无人
+    /// 察觉」变成硬错误——Pi 当初就是因为约束未放行而长期静默失败。
+    fn ensure_proxy_config_row_exists_on_conn(
+        conn: &rusqlite::Connection,
+        app_type: &str,
+    ) -> Result<(), AppError> {
         // 根据 app_type 使用不同的默认值（与 schema.rs seed 保持一致）
         let (retries, fb_timeout, idle_timeout, cb_fail, cb_succ, cb_timeout, cb_rate, cb_min) =
             match app_type {
@@ -431,6 +451,20 @@ impl Database {
             ],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // 复查：CHECK 约束未放行时 INSERT OR IGNORE 会静默跳过
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
+                [app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        if exists == 0 {
+            return Err(AppError::Database(format!(
+                "proxy_config 不接受 app_type '{app_type}'（CHECK 约束未放行），请检查数据库迁移是否已执行"
+            )));
+        }
 
         Ok(())
     }
