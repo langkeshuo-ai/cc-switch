@@ -2790,17 +2790,25 @@ command = "ghost-cmd"
         !live_after.contains("sk-a-live-secret"),
         "provider A's bearer token must not leak into B's live, got: {live_after}"
     );
+    // fork 分歧（4f3e38f4 外科手术式合并）：live 的 [mcp_servers] 与 legacy
+    // [mcp.servers] 属于用户自定义段落，切换时逐字保留——与上游"全权重写、
+    // 无 DB 服务器即清空"的语义相反。此处断言 fork 语义：投影段落原样存活，
+    // MCP 重投影（sync_all_enabled）负责后续增删。
     assert!(
-        !live_after.contains("mcp_servers"),
-        "no DB-enabled MCP servers, so live must not resurrect stale entries, got: {live_after}"
+        live_after.contains("[mcp_servers.echo]"),
+        "surgical merge must preserve the seeded [mcp_servers] section, got: {live_after}"
     );
     assert!(
-        !live_after.contains("ghost-legacy"),
-        "the legacy [mcp.servers] orphan must not propagate to B's live, got: {live_after}"
+        live_after.contains("[mcp.servers.ghost-legacy]"),
+        "surgical merge must preserve the legacy [mcp.servers] section, got: {live_after}"
     );
+    // fork 分歧（4f3e38f4）：顶层 wire_api 是 A 的路由语义、用户可见配置，
+    // 外科手术式合并逐字保留（B 走 [model_providers.bprov].wire_api，顶层值
+    // 对 B 的协议无影响；回填已把该键留在 A 的快照里）。上游"切换即重写、
+    // 路由键不跨供应商"的语义在此不适用。
     assert!(
-        !live_after.contains("wire_api = \"chat\""),
-        "provider A's top-level wire_api must not rewrite B's protocol, got: {live_after}"
+        live_after.contains("wire_api = \"chat\""),
+        "surgical merge must preserve A's top-level wire_api as user content, got: {live_after}"
     );
 
     // A 的存储配置：回填后不残留片段内容 / MCP 投影 / 注入产物
