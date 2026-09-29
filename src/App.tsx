@@ -13,7 +13,6 @@ import {
   Minimize2,
   X,
   Book,
-  Wrench,
   History,
   BarChart2,
   Download,
@@ -82,7 +81,7 @@ import { DeepLinkImportDialog } from "@/components/DeepLinkImportDialog";
 import { FirstRunNoticeDialog } from "@/components/FirstRunNoticeDialog";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
 import { UniversalProviderPanel } from "@/components/universal";
-import { McpIcon } from "@/components/BrandIcons";
+import { McpIcon, SkillsIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
 import { invalidatePiProviderCaches, usePiCurrentState } from "@/lib/query/pi";
@@ -1426,7 +1425,7 @@ function App() {
                             )}
                             title={t("skills.manage")}
                           >
-                            <Wrench className="flex-shrink-0 w-4 h-4" />
+                            <SkillsIcon className="flex-shrink-0 w-4 h-4" />
                           </Button>
                           <Button
                             variant="ghost"
