@@ -79,11 +79,12 @@ fn parse_provider_deeplink(
         .clone();
 
     // Validate app type
-    // 仅接受当前支持的应用；旧链接携带已裁剪应用（gemini/grokbuild/opencode/
-    // openclaw/hermes 等）时明确报错——单值导入静默忽略会让用户点了没反应
-    if !matches!(app.as_str(), "claude" | "codex" | "pi") {
+    // 仅接受当前支持且开放 deeplink 导入的应用；已裁剪应用（gemini/grokbuild/
+    // opencode/openclaw/hermes 等）与 pi（有意不开放 provider deeplink 入口，
+    // 见 pi_provider_deeplink_is_not_a_second_add_provider_entry）均明确报错
+    if !matches!(app.as_str(), "claude" | "codex") {
         return Err(AppError::InvalidInput(format!(
-            "Invalid provider app type: '{app}' (supported: claude, codex, pi)"
+            "Invalid provider app type: '{app}' (supported: claude, codex)"
         )));
     }
 
