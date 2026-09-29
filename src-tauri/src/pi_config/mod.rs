@@ -386,6 +386,7 @@ pub(crate) fn set_pi_provider_base_url(provider_key: &str, base_url: &str) -> Re
 /// - 旧值的双引号字面量在全文恰好出现一次；
 /// - 替换后重新解析的结果除该 baseUrl 外与原文档完全一致
 ///   （旧值只出现在注释里等歧义场景会被此验证拦截）。
+///
 /// 旧值与新值一致时无需写盘，直接返回 `Ok(true)`。
 #[allow(clippy::too_many_arguments)]
 fn write_provider_base_url_surgical(

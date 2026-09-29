@@ -33,7 +33,6 @@ pub fn check_env_conflicts(app: &str) -> Result<Vec<EnvConflict>, String> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EnvKeyword {
-    Exact(&'static str),
     Prefix(&'static str),
 }
 
@@ -53,7 +52,6 @@ fn get_keywords_for_app(app: &str) -> Vec<EnvKeyword> {
 fn matches_env_keyword(name: &str, keywords: &[EnvKeyword]) -> bool {
     let upper_name = name.to_uppercase();
     keywords.iter().any(|keyword| match keyword {
-        EnvKeyword::Exact(name) => upper_name == *name,
         EnvKeyword::Prefix(prefix) => upper_name.starts_with(prefix),
     })
 }

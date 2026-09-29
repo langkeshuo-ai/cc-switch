@@ -341,7 +341,7 @@ describe("ProviderList Component", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not expose proxy or failover actions on Pi provider cards", async () => {
+  it("exposes proxy takeover state on Pi provider cards like other proxy apps", async () => {
     const currentProvider = createProvider({
       id: "current-pi",
       name: "Current Pi",
@@ -391,19 +391,18 @@ describe("ProviderList Component", () => {
         .filter((props) => props.provider.id === "inactive-pi");
       expect(currentCards).not.toHaveLength(0);
       expect(inactiveCards).not.toHaveLength(0);
+      // pi 是 proxy app（fork 核心能力：pi 接管），卡片应透传接管与故障转移接线
       expect(currentCards.at(-1)).toMatchObject({
         isCurrent: false,
-        isRemovalProtected: false,
-        isProxyRunning: false,
-        isProxyTakeover: false,
-        isAutoFailoverEnabled: false,
-        activeProviderId: undefined,
-        onToggleFailover: undefined,
+        isProxyRunning: true,
+        isProxyTakeover: true,
+        activeProviderId: "current-pi",
       });
+      expect(currentCards.at(-1)?.onToggleFailover).toBeTypeOf("function");
       expect(inactiveCards.at(-1)).toMatchObject({
         isCurrent: false,
-        isProxyRunning: false,
-        isProxyTakeover: false,
+        isProxyRunning: true,
+        isProxyTakeover: true,
       });
       expect(currentCards.at(-1)).not.toHaveProperty("piCurrentRoute");
     });
@@ -449,7 +448,6 @@ describe("ProviderList Component", () => {
       expect(latestCardProps).toMatchObject({
         isCurrent: false,
         isInConfig: true,
-        isRemovalProtected: false,
         isStateChangeProtected: false,
       });
     });

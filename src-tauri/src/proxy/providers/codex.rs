@@ -457,7 +457,7 @@ pub fn codex_provider_upstream_model(provider: &Provider) -> Option<String> {
                 .settings_config
                 .get("config")
                 .and_then(|v| v.as_str())
-                .and_then(|config| extract_codex_model_from_toml(config))
+                .and_then(extract_codex_model_from_toml)
         })
 }
 

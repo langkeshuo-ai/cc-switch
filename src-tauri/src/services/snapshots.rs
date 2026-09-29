@@ -28,22 +28,13 @@ use crate::services::ProviderService;
 use crate::store::AppState;
 
 /// 单个应用在快照中的槽位
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SnapshotAppEntry {
     /// 快照时的当前供应商 id（None = 快照时无有效供应商，应用时跳过切换）
     pub provider_id: Option<String>,
     /// 快照时的代理接管状态
     pub takeover: bool,
-}
-
-impl Default for SnapshotAppEntry {
-    fn default() -> Self {
-        Self {
-            provider_id: None,
-            takeover: false,
-        }
-    }
 }
 
 /// 快照 JSON 结构（存入 app_snapshots.data，与规格书定义一致）

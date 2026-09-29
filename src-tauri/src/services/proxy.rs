@@ -1346,11 +1346,9 @@ impl ProxyService {
             .await
             .map_err(|e| format!("检查接管状态失败: {e}"))?;
 
-        if !any_enabled {
-            if self.is_running().await {
-                // 此时没有任何 app 处于接管状态，停止服务即可
-                let _ = self.stop().await;
-            }
+        if !any_enabled && self.is_running().await {
+            // 此时没有任何 app 处于接管状态，停止服务即可
+            let _ = self.stop().await;
         }
 
         Ok(())
@@ -1422,6 +1420,7 @@ impl ProxyService {
     ///   API_KEY 双键联动，Codex 为单键插入）。
     ///
     /// 持久化失败仅记录日志，不中断同步流程（与原两分支行为一致）。
+    #[allow(clippy::too_many_arguments)]
     fn write_token_into_provider_settings<F>(
         &self,
         app_label: &str,
@@ -3647,7 +3646,7 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
-        let mut new_config = config.clone();
+        let new_config = config.clone();
 
         self.db
             .update_proxy_config(new_config.clone())

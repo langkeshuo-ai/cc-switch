@@ -29,21 +29,6 @@ fn claude_provider(id: &str, token: &str) -> Provider {
     )
 }
 
-/// Claude Desktop 供应商：无 meta 时默认 Direct 模式，只要求 env 里有 token + base_url
-fn desktop_provider(id: &str, token: &str) -> Provider {
-    Provider::with_id(
-        id.to_string(),
-        id.to_uppercase(),
-        json!({
-            "env": {
-                "ANTHROPIC_AUTH_TOKEN": token,
-                "ANTHROPIC_BASE_URL": "https://desktop.test"
-            }
-        }),
-        None,
-    )
-}
-
 fn mcp_server(id: &str, claude_enabled: bool) -> McpServer {
     serde_json::from_value(json!({
         "id": id,

@@ -240,12 +240,10 @@ mod tests {
         let original = test_server();
         db.save_mcp_server(&original).expect("seed server");
 
-        for app in [AppType::Pi] {
-            let returned = db
-                .update_mcp_server_app_enabled("shared-server", &app, true)
-                .expect("toggle unsupported app")
-                .expect("server exists");
-            assert_eq!(returned.apps, original.apps);
-        }
+        let returned = db
+            .update_mcp_server_app_enabled("shared-server", &AppType::Pi, true)
+            .expect("toggle unsupported app")
+            .expect("server exists");
+        assert_eq!(returned.apps, original.apps);
     }
 }

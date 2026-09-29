@@ -1032,7 +1032,6 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::AppType;
 
     #[test]
     fn override_paths_expand_windows_style_tilde_separators() {

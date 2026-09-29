@@ -6,7 +6,7 @@ use serde_json::json;
 use cc_switch_lib::{
     get_claude_mcp_path, get_claude_mcp_status, get_claude_settings_path,
     import_default_config_test_hook, read_claude_mcp_config, update_settings, AppError,
-    AppSettings, AppType, McpApps, McpServer, McpService, MultiAppConfig, ProviderService,
+    AppSettings, AppType, McpApps, McpServer, McpService, MultiAppConfig,
 };
 
 #[path = "support.rs"]

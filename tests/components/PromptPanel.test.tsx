@@ -102,26 +102,29 @@ vi.mock("@/components/prompts/PromptFormPanel", () => ({
 
 vi.mock("@/components/ConfirmDialog", () => ({
   ConfirmDialog: ({
+    isOpen,
     message,
     onConfirm,
     onCancel,
     pending,
   }: {
+    isOpen?: boolean;
     message: string;
     onConfirm: (checked: boolean) => void;
     onCancel: () => void;
     pending?: boolean;
-  }) => (
-    <div role="dialog">
-      <span>{message}</span>
-      <button type="button" disabled={pending} onClick={() => onConfirm(false)}>
-        confirm-dialog
-      </button>
-      <button type="button" disabled={pending} onClick={onCancel}>
-        cancel-dialog
-      </button>
-    </div>
-  ),
+  }) =>
+    isOpen === false ? null : (
+      <div role="dialog">
+        <span>{message}</span>
+        <button type="button" disabled={pending} onClick={() => onConfirm(false)}>
+          confirm-dialog
+        </button>
+        <button type="button" disabled={pending} onClick={onCancel}>
+          cancel-dialog
+        </button>
+      </div>
+    ),
 }));
 
 const createPrompts = () => ({

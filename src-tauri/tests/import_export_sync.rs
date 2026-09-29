@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use cc_switch_lib::{
     get_claude_settings_path, read_json_file, AppError, AppType, ConfigService, MultiAppConfig,
-    Provider, ProviderMeta,
+    Provider,
 };
 
 #[path = "support.rs"]

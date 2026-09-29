@@ -1223,7 +1223,6 @@ mod tests {
     use super::{
         format_script_summary, format_subscription_summary, format_usage_suffix,
         provider_uses_official_subscription, tray_usage_source, TrayUsageSource, TRAY_ID,
-        TRAY_SECTIONS,
     };
     use crate::app_config::AppType;
     use crate::provider::{Provider, UsageData, UsageResult};

@@ -245,8 +245,6 @@ describe("McpFormModal", () => {
       apps: {
         claude: true,
         codex: true,
-        gemini: true,
-        grokbuild: true,
       },
     });
     expect(onSave).toHaveBeenCalledTimes(1);
@@ -358,7 +356,7 @@ type = "stdio"
       enabled: true,
       description: "Old desc",
       server: { type: "stdio", command: "old" },
-      apps: { claude: true, codex: false, gemini: false },
+      apps: { claude: true, codex: false },
     } as McpServer;
 
     const { onSave } = renderForm({
@@ -391,9 +389,6 @@ type = "stdio"
     expect(entry.apps).toEqual({
       claude: true,
       codex: false,
-      gemini: false,
-      grokbuild: false,
-      mcode: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith();
@@ -421,18 +416,6 @@ type = "stdio"
     expect(codexCheckbox.checked).toBe(true);
     fireEvent.click(codexCheckbox);
 
-    const geminiCheckbox = screen.getByLabelText(
-      "mcp.unifiedPanel.apps.gemini",
-    ) as HTMLInputElement;
-    expect(geminiCheckbox.checked).toBe(true);
-    fireEvent.click(geminiCheckbox);
-
-    const grokbuildCheckbox = screen.getByLabelText(
-      "mcp.unifiedPanel.apps.grokbuild",
-    ) as HTMLInputElement;
-    expect(grokbuildCheckbox.checked).toBe(true);
-    fireEvent.click(grokbuildCheckbox);
-
     fireEvent.click(screen.getByText("common.add"));
 
     await waitFor(() => expect(upsertMock).toHaveBeenCalledTimes(1));
@@ -441,12 +424,6 @@ type = "stdio"
     expect(entry.apps).toEqual({
       claude: false,
       codex: false,
-      gemini: false,
-      grokbuild: false,
-      opencode: false,
-      openclaw: false,
-      hermes: false,
-      mcode: false,
     });
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(toastErrorMock).not.toHaveBeenCalled();

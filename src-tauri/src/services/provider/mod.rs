@@ -120,7 +120,7 @@ mod tests {
     use serial_test::serial;
     use std::env;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::TempDir;
 
@@ -716,7 +716,6 @@ mod tests {
         });
     }
 
-    #[test]
     #[test]
     fn sensitive_key_matcher_covers_common_credential_namings() {
         for key in [
@@ -2345,8 +2344,6 @@ wire_api = "responses"
 
     #[test]
     #[serial]
-    #[test]
-    #[serial]
     fn missing_codex_account_preserves_native_login_but_corrupt_store_blocks_recovery() {
         for takeover in [false, true] {
             for corrupt in [false, true] {
@@ -3061,28 +3058,6 @@ wire_api = "responses"
         });
     }
 
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
-    #[test]
-    #[serial]
     #[test]
     #[serial]
     fn sync_universal_to_apps_reprojects_current_child_to_live() {

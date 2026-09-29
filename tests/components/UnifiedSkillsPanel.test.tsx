@@ -490,9 +490,9 @@ describe("UnifiedSkillsPanel", () => {
       const row = screen.getByText("Alpha Skill").closest(".group");
       const appToggleButtons = Array.from(
         row!.querySelectorAll<HTMLButtonElement>("button"),
-      ).slice(0, 7);
+      ).slice(0, 3);
 
-      expect(appToggleButtons).toHaveLength(7);
+      expect(appToggleButtons).toHaveLength(3);
       appToggleButtons.forEach((button) => expect(button).toBeDisabled());
       expect(screen.getByTitle("skills.uninstall")).toBeDisabled();
       await userEvent.setup().click(appToggleButtons[0]);

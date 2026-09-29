@@ -132,7 +132,7 @@ impl<'a> UsageLogger<'a> {
                 INPUT_TOKEN_SEMANTICS_FRESH
             };
         let semantic = UsageSemantic::from_log(log, input_token_semantics);
-        let existing = Self::load_existing_semantic(&conn, &log.request_id)?;
+        let existing = Self::load_existing_semantic(conn, &log.request_id)?;
 
         let (request_id, replace_session_log, collision) = match existing {
             None => (log.request_id.clone(), false, false),
@@ -150,7 +150,7 @@ impl<'a> UsageLogger<'a> {
             Some(_) => {
                 let fallback = format!("{}:collision:{}", log.request_id, semantic.sha256());
                 if let Some((data_source, existing_semantic)) =
-                    Self::load_existing_semantic(&conn, &fallback)?
+                    Self::load_existing_semantic(conn, &fallback)?
                 {
                     if data_source.as_deref().unwrap_or("proxy") == "proxy"
                         && existing_semantic == semantic
