@@ -38,7 +38,7 @@ import appIcon from "@/assets/icons/app-icon.png";
 import { APP_ICON_MAP } from "@/config/appConfig";
 import type { AppId } from "@/lib/api/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { isWindows } from "@/lib/platform";
+import { isMac, isWindows } from "@/lib/platform";
 import { isUpdateAvailable } from "@/lib/version";
 import { ToolUpgradeConfirmDialog } from "./ToolUpgradeConfirmDialog";
 import { ToolInstallRow } from "./ToolInstallRow";
@@ -167,6 +167,14 @@ ${MCODE_WINDOWS_INSTALL_COMMAND}`;
 const ONE_CLICK_INSTALL_COMMANDS = isWindows()
   ? WINDOWS_ONE_CLICK_INSTALL_COMMANDS
   : POSIX_ONE_CLICK_INSTALL_COMMANDS;
+
+// 未受管工具的「按原方式升级」示例随平台变化：winget/Scoop 只存在于 Windows，
+// macOS / Linux 上照抄会误导用户。示例文案放在 i18n 里，这里只决定取哪个键。
+const TOOL_UPGRADE_UNMANAGED_EXAMPLE_KEY = isWindows()
+  ? "settings.toolUpgradeUnmanagedExampleWin"
+  : isMac()
+    ? "settings.toolUpgradeUnmanagedExampleMac"
+    : "settings.toolUpgradeUnmanagedExampleLinux";
 
 const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
   claude: "Claude Code",
@@ -755,6 +763,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
                   path:
                     (r.installs.find((i) => i.is_path_default) ?? r.installs[0])
                       ?.path ?? "",
+                  example: t(TOOL_UPGRADE_UNMANAGED_EXAMPLE_KEY),
                 }),
               )
               .join("\n"),
