@@ -1444,6 +1444,8 @@ async fn db_blocking_concurrent_calls_serialize_on_single_connection() {
         .expect("count query")
     };
     assert_eq!(count, 8);
+}
+
 #[test]
 fn incremental_vacuum_reclaims_entire_freelist() {
     let temp = NamedTempFile::new().expect("create temp db file");
