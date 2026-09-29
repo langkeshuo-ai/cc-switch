@@ -1219,7 +1219,6 @@ command = "legacy-cmd"
             .expect("set local current provider");
 
         db.update_proxy_config(ProxyConfig {
-            live_takeover_active: true,
             listen_port: 0,
             ..Default::default()
         })
@@ -1353,7 +1352,6 @@ requires_openai_auth = true
             .expect("set local current provider");
 
         db.update_proxy_config(ProxyConfig {
-            live_takeover_active: true,
             listen_port: 0,
             ..Default::default()
         })
@@ -3991,10 +3989,15 @@ impl ProviderService {
         // Backup or live placeholders mean the live file is owned by proxy
         // takeover, even if the proxy server is temporarily stopped or is in the
         // activation window before enabled=true is committed.
+        // L7：DB 错误必须传播而非吞成「未接管」——本判定参与 should_hot_switch
+        // 分流，吞错会在接管激活时误走 switch_normal 直接覆写被代理接管的
+        // Live 文件（破坏接管状态），因此这里属于破坏性动作闸门。
         let is_app_taken_over =
             futures::executor::block_on(state.db.get_live_backup(app_type.as_str()))
-                .ok()
-                .flatten()
+                .map_err(|e| {
+                    log::warn!("读取 {app_type:?} Live 备份状态失败，中止切换以防破坏接管状态: {e}");
+                    e
+                })?
                 .is_some();
         let live_taken_over = state
             .proxy_service

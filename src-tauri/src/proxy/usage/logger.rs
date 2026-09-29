@@ -100,7 +100,11 @@ impl<'a> UsageLogger<'a> {
     /// 记录成功的请求
     pub fn log_request(&self, log: &RequestLog) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
+        Self::log_request_on_conn(&conn, log)
+    }
 
+    /// 写入请求日志的同步核心（H4：供 `db_blocking` 闭包复用）
+    fn log_request_on_conn(conn: &rusqlite::Connection, log: &RequestLog) -> Result<(), AppError> {
         let (input_cost, output_cost, cache_read_cost, cache_creation_cost, total_cost) =
             if let Some(cost) = &log.cost {
                 (
@@ -291,12 +295,9 @@ impl<'a> UsageLogger<'a> {
         self.log_request(&log)
     }
 
-    /// 记录失败的请求（带更多上下文信息）
-    ///
-    /// 相比 log_error，这个方法接受更多参数以提供完整的请求上下文
+    /// 构造错误请求日志（log_error_with_context 的同步/异步变体共用）
     #[allow(clippy::too_many_arguments)]
-    pub fn log_error_with_context(
-        &self,
+    fn error_request_log(
         request_id: String,
         provider_id: String,
         app_type: String,
@@ -307,9 +308,9 @@ impl<'a> UsageLogger<'a> {
         is_streaming: bool,
         session_id: Option<String>,
         provider_type: Option<String>,
-    ) -> Result<(), AppError> {
+    ) -> RequestLog {
         let request_model = model.clone();
-        let log = RequestLog {
+        RequestLog {
             request_id,
             provider_id,
             app_type,
@@ -327,15 +328,96 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             cost_multiplier: "1.0".to_string(),
-        };
+        }
+    }
+
+    /// 记录失败的请求（带更多上下文信息）
+    ///
+    /// 相比 log_error，这个方法接受更多参数以提供完整的请求上下文。
+    /// 同步内联版本：仅同步上下文/测试使用；async 上下文请用
+    /// [`UsageLogger::log_error_with_context_async`]（H4）。
+    #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
+    pub fn log_error_with_context(
+        &self,
+        request_id: String,
+        provider_id: String,
+        app_type: String,
+        model: String,
+        status_code: u16,
+        error_message: String,
+        latency_ms: u64,
+        is_streaming: bool,
+        session_id: Option<String>,
+        provider_type: Option<String>,
+    ) -> Result<(), AppError> {
+        let log = Self::error_request_log(
+            request_id,
+            provider_id,
+            app_type,
+            model,
+            status_code,
+            error_message,
+            latency_ms,
+            is_streaming,
+            session_id,
+            provider_type,
+        );
 
         self.log_request(&log)
     }
 
+    /// H4：异步上下文专用——错误日志写入移入 blocking 线程池执行，
+    /// 避免阻塞 tokio worker。只能在 tokio runtime 上下文中调用。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_error_with_context_async(
+        &self,
+        request_id: String,
+        provider_id: String,
+        app_type: String,
+        model: String,
+        status_code: u16,
+        error_message: String,
+        latency_ms: u64,
+        is_streaming: bool,
+        session_id: Option<String>,
+        provider_type: Option<String>,
+    ) -> Result<(), AppError> {
+        self.db
+            .db_blocking(move |conn| {
+                let log = Self::error_request_log(
+                    request_id,
+                    provider_id,
+                    app_type,
+                    model,
+                    status_code,
+                    error_message,
+                    latency_ms,
+                    is_streaming,
+                    session_id,
+                    provider_type,
+                );
+                Self::log_request_on_conn(conn, &log)
+            })
+            .await
+    }
+
     /// 获取模型定价
+    ///
+    /// 同步内联版本：仅同步上下文/测试使用（H4 后 async 路径走
+    /// `log_with_calculation_async` → `_on_conn` 核心）。
+    #[allow(dead_code)]
     pub fn get_model_pricing(&self, model_id: &str) -> Result<Option<ModelPricing>, AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
-        let row = find_model_pricing_row(&conn, model_id)?;
+        Self::get_model_pricing_on_conn(&conn, model_id)
+    }
+
+    /// 查询模型定价的同步核心（H4：供 `db_blocking` 闭包复用）
+    fn get_model_pricing_on_conn(
+        conn: &rusqlite::Connection,
+        model_id: &str,
+    ) -> Result<Option<ModelPricing>, AppError> {
+        let row = find_model_pricing_row(conn, model_id)?;
         match row {
             Some((input, output, cache_read, cache_creation)) => {
                 ModelPricing::from_strings(&input, &output, &cache_read, &cache_creation)
@@ -442,7 +524,11 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 计算并记录请求
+    ///
+    /// 同步内联版本：仅同步上下文/测试使用；async 上下文请用
+    /// [`UsageLogger::log_with_calculation_async`]（H4）。
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn log_with_calculation(
         &self,
         request_id: String,
@@ -460,7 +546,46 @@ impl<'a> UsageLogger<'a> {
         provider_type: Option<String>,
         is_streaming: bool,
     ) -> Result<(), AppError> {
-        let pricing = self.get_model_pricing(&pricing_model)?;
+        let conn = crate::database::lock_conn!(self.db.conn);
+        Self::log_with_calculation_on_conn(
+            &conn,
+            request_id,
+            provider_id,
+            app_type,
+            model,
+            request_model,
+            pricing_model,
+            usage,
+            cost_multiplier,
+            latency_ms,
+            first_token_ms,
+            status_code,
+            session_id,
+            provider_type,
+            is_streaming,
+        )
+    }
+
+    /// 计算并记录请求的同步核心（H4：供 `db_blocking` 闭包复用）
+    #[allow(clippy::too_many_arguments)]
+    fn log_with_calculation_on_conn(
+        conn: &rusqlite::Connection,
+        request_id: String,
+        provider_id: String,
+        app_type: String,
+        model: String,
+        request_model: String,
+        pricing_model: String,
+        usage: TokenUsage,
+        cost_multiplier: Decimal,
+        latency_ms: u64,
+        first_token_ms: Option<u64>,
+        status_code: u16,
+        session_id: Option<String>,
+        provider_type: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(), AppError> {
+        let pricing = Self::get_model_pricing_on_conn(conn, &pricing_model)?;
 
         let has_usage = usage.input_tokens > 0
             || usage.output_tokens > 0
@@ -497,7 +622,50 @@ impl<'a> UsageLogger<'a> {
             cost_multiplier: cost_multiplier.to_string(),
         };
 
-        self.log_request(&log)
+        Self::log_request_on_conn(conn, &log)
+    }
+
+    /// H4：异步上下文专用——定价查询与日志写入整体移入 blocking 线程池执行，
+    /// 避免阻塞 tokio worker。参数均为 owned 值；只能在 tokio runtime 上下文中调用。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_with_calculation_async(
+        &self,
+        request_id: String,
+        provider_id: String,
+        app_type: String,
+        model: String,
+        request_model: String,
+        pricing_model: String,
+        usage: TokenUsage,
+        cost_multiplier: Decimal,
+        latency_ms: u64,
+        first_token_ms: Option<u64>,
+        status_code: u16,
+        session_id: Option<String>,
+        provider_type: Option<String>,
+        is_streaming: bool,
+    ) -> Result<(), AppError> {
+        self.db
+            .db_blocking(move |conn| {
+                Self::log_with_calculation_on_conn(
+                    conn,
+                    request_id,
+                    provider_id,
+                    app_type,
+                    model,
+                    request_model,
+                    pricing_model,
+                    usage,
+                    cost_multiplier,
+                    latency_ms,
+                    first_token_ms,
+                    status_code,
+                    session_id,
+                    provider_type,
+                    is_streaming,
+                )
+            })
+            .await
     }
 }
 

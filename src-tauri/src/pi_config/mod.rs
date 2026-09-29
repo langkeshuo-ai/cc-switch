@@ -115,6 +115,124 @@ pub(crate) fn pi_proxy_current_provider_key() -> Option<String> {
         .filter(|key| !key.trim().is_empty())
 }
 
+/// 把 Pi settings.json 的 `defaultProvider` 指向给定供应商 key。
+///
+/// Pi CLI 只跟随 settings.json 的 defaultProvider（membership 变更不影响它），
+/// 快照恢复等需要让 Pi "真正切换" 的路径通过本函数写回。写入尽量手术式：
+/// 仅替换该字段的字符串值字节，保留文件其余内容（含 JSON5 注释）；无法
+/// 安全定位替换点时退回整文档重写（此时注释会丢失）。
+pub(crate) fn set_pi_default_provider(provider_key: &str) -> Result<(), AppError> {
+    let path = get_pi_settings_path()?;
+    let value_literal = serde_json::to_string(provider_key)
+        .map_err(|source| AppError::JsonSerialize { source })?;
+    if !path.exists() {
+        // settings.json 尚不存在：写入最小文档（Pi CLI 的唯一权威源就是它）
+        let mut bytes = format!("{{\"defaultProvider\":{value_literal}}}").into_bytes();
+        bytes.push(b'\n');
+        ensure_private_models_parent(&path)?;
+        return atomic_write_private(&path, &bytes);
+    }
+
+    let old_document = read_json5_value(&path, "Pi settings")?;
+    let existing = old_document
+        .as_object()
+        .and_then(|object| object.get("defaultProvider"));
+    if existing.and_then(Value::as_str) == Some(provider_key) {
+        return Ok(());
+    }
+
+    let raw_bytes = read_file_limited(&path, "Pi settings")?;
+    let raw = String::from_utf8(raw_bytes).map_err(|error| {
+        AppError::Config(format!(
+            "Pi settings file must be UTF-8 ({}): {error}",
+            path.display()
+        ))
+    })?;
+    let field_json = format!("\"defaultProvider\":{value_literal}");
+    let surgical = match existing {
+        Some(Value::String(value)) if !value.is_empty() => {
+            replace_unique_string_literal(&raw, value, provider_key)
+        }
+        // 非 string 值（null/数字等）无法安全做字面量替换
+        Some(_) => None,
+        // 字段缺失：在第一个 `{` 后插入
+        None => insert_field_after_first_brace(&raw, &field_json),
+    };
+    if let Some(new_raw) = surgical {
+        // 语义验证：除 defaultProvider 外整份文档不得有任何变化
+        //（例如字面量恰好只出现在注释里时，验证会失败并退回整文档重写）
+        if let Ok(new_document) = json5::from_str::<Value>(&new_raw) {
+            let mut expected_document = old_document.clone();
+            if let Some(object) = expected_document.as_object_mut() {
+                object.insert(
+                    "defaultProvider".to_string(),
+                    Value::String(provider_key.to_string()),
+                );
+                if new_document == expected_document {
+                    ensure_private_models_parent(&path)?;
+                    return atomic_write_private(&path, new_raw.as_bytes());
+                }
+            }
+        }
+    }
+
+    // 退化路径：整文档重写（会丢失注释，仅在手术式替换不可行时发生）
+    let mut document = old_document;
+    let object = document.as_object_mut().ok_or_else(|| {
+        AppError::Config(format!(
+            "Pi settings root must be an object: {}",
+            path.display()
+        ))
+    })?;
+    object.insert(
+        "defaultProvider".to_string(),
+        Value::String(provider_key.to_string()),
+    );
+    let mut bytes =
+        serde_json::to_vec_pretty(&document).map_err(|source| AppError::JsonSerialize { source })?;
+    bytes.push(b'\n');
+    ensure_private_models_parent(&path)?;
+    atomic_write_private(&path, &bytes)
+}
+
+/// 解析 models.json 原始字节（JSON5 兼容：文件可能带注释）。
+///
+/// 代理接管路径统一经由本函数解析，避免 serde_json 直接解析在含注释的
+/// 文件上失败，与 pi_config 内部读取保持同一解析器。
+pub(crate) fn parse_models_document_raw(raw: &[u8]) -> Result<Value, AppError> {
+    let path = get_pi_models_path()?;
+    parse_json5_value(&path, "Pi models", raw.to_vec())
+}
+
+/// 在原始文本中把唯一的 JSON 双引号字符串字面量替换为另一字面量。
+///
+/// 仅当旧值字面量在全文恰好出现一次时返回替换结果；否则返回 None
+///（调用方退回整文档重写）。引号锚定避免了旧值是更长字符串前缀的误匹配。
+fn replace_unique_string_literal(raw: &str, old: &str, new: &str) -> Option<String> {
+    let old_literal = serde_json::to_string(old).ok()?;
+    let new_literal = serde_json::to_string(new).ok()?;
+    if raw.matches(&old_literal).count() == 1 {
+        Some(raw.replacen(&old_literal, &new_literal, 1))
+    } else {
+        None
+    }
+}
+
+/// 在 JSON/JSON5 文本的第一个 `{` 之后插入一个字段（不足时补逗号）。
+/// 找不到 `{` 时返回 None。
+fn insert_field_after_first_brace(raw: &str, field_json: &str) -> Option<String> {
+    let brace = raw.find('{')?;
+    let mut out = String::with_capacity(raw.len() + field_json.len() + 1);
+    out.push_str(&raw[..=brace]);
+    out.push_str(field_json);
+    let rest = &raw[brace + 1..];
+    if !rest.trim_start().starts_with('}') {
+        out.push(',');
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
 /// Read the entire raw `models.json` bytes (None = file does not exist).
 ///
 /// Used by proxy takeover to back up the original file verbatim so that a
@@ -162,7 +280,39 @@ pub(crate) fn apply_pi_takeover_base_url(
 ) -> Result<(), AppError> {
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
-    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    let (document, expected_revision) = read_models_document_with_revision(&path)?;
+    let providers = providers(&document, &path)?;
+    let node = providers.get(provider_key).ok_or_else(|| {
+        AppError::Config(format!(
+            "Pi provider '{provider_key}' is not present in models.json"
+        ))
+    })?;
+    let api = node
+        .get("api")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let prefix = pi_takeover_prefix_for_api(api).ok_or_else(|| {
+        AppError::InvalidInput(format!(
+            "Pi provider '{provider_key}' 的 API 格式 '{api}' 不支持本地代理接管（仅支持 anthropic-messages / openai-completions / openai-responses）"
+        ))
+    })?;
+    let proxy_base = proxy_base_url.trim().trim_end_matches('/');
+    let rewritten = format!("{proxy_base}/{prefix}");
+    let old_base_url = node.get("baseUrl").and_then(Value::as_str).map(str::to_string);
+
+    // 接管只改 baseUrl 一个字符串值：优先手术式替换以保留注释与格式
+    if write_provider_base_url_surgical(
+        &path,
+        &document,
+        &expected_revision,
+        provider_key,
+        old_base_url.as_deref(),
+        &rewritten,
+    )? {
+        return Ok(());
+    }
+
+    let mut document = document;
     {
         let providers = providers_mut(&mut document, &path)?;
         let node = providers.get_mut(provider_key).ok_or_else(|| {
@@ -170,17 +320,6 @@ pub(crate) fn apply_pi_takeover_base_url(
                 "Pi provider '{provider_key}' is not present in models.json"
             ))
         })?;
-        let api = node
-            .get("api")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let prefix = pi_takeover_prefix_for_api(api).ok_or_else(|| {
-            AppError::InvalidInput(format!(
-                "Pi provider '{provider_key}' 的 API 格式 '{api}' 不支持本地代理接管（仅支持 anthropic-messages / openai-completions / openai-responses）"
-            ))
-        })?;
-        let proxy_base = proxy_base_url.trim().trim_end_matches('/');
-        let rewritten = format!("{proxy_base}/{prefix}");
         node.as_object_mut().ok_or_else(|| {
             AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
         })?
@@ -200,7 +339,28 @@ pub(crate) fn set_pi_provider_base_url(
 ) -> Result<(), AppError> {
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
-    let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
+    let (document, expected_revision) = read_models_document_with_revision(&path)?;
+    let providers = providers(&document, &path)?;
+    let node = providers.get(provider_key).ok_or_else(|| {
+        AppError::Config(format!(
+            "Pi provider '{provider_key}' is not present in models.json"
+        ))
+    })?;
+    let rewritten = base_url.trim().trim_end_matches('/').to_string();
+    let old_base_url = node.get("baseUrl").and_then(Value::as_str).map(str::to_string);
+
+    if write_provider_base_url_surgical(
+        &path,
+        &document,
+        &expected_revision,
+        provider_key,
+        old_base_url.as_deref(),
+        &rewritten,
+    )? {
+        return Ok(());
+    }
+
+    let mut document = document;
     {
         let providers = providers_mut(&mut document, &path)?;
         let node = providers.get_mut(provider_key).ok_or_else(|| {
@@ -213,10 +373,71 @@ pub(crate) fn set_pi_provider_base_url(
         })?
         .insert(
             "baseUrl".to_string(),
-            Value::String(base_url.trim().trim_end_matches('/').to_string()),
+            Value::String(rewritten),
         );
     }
     write_models_document(&path, &document, &expected_revision)
+}
+
+/// 手术式写回 `providers.<key>.baseUrl`：仅替换原文本中该字符串值的字节，
+/// 保留文件其余全部内容（含 JSON5 注释与格式）。
+///
+/// 任一约束不满足即返回 `Ok(false)`，调用方退回整文档重写：
+/// - 节点当前 baseUrl 是非空字符串（旧值字面量可定位）；
+/// - 旧值的双引号字面量在全文恰好出现一次；
+/// - 替换后重新解析的结果除该 baseUrl 外与原文档完全一致
+///   （旧值只出现在注释里等歧义场景会被此验证拦截）。
+/// 旧值与新值一致时无需写盘，直接返回 `Ok(true)`。
+#[allow(clippy::too_many_arguments)]
+fn write_provider_base_url_surgical(
+    path: &Path,
+    document: &Value,
+    expected_revision: &str,
+    provider_key: &str,
+    old_base_url: Option<&str>,
+    new_base_url: &str,
+) -> Result<bool, AppError> {
+    let Some(old) = old_base_url else {
+        return Ok(false);
+    };
+    if old == new_base_url {
+        // 目标值与现值一致：无需写盘（避免把整份文件无谓重写掉注释）
+        return Ok(true);
+    }
+    let raw_bytes = read_file_limited(path, "Pi models")?;
+    let raw = String::from_utf8(raw_bytes).map_err(|error| {
+        AppError::Config(format!(
+            "Pi models file must be UTF-8 ({}): {error}",
+            path.display()
+        ))
+    })?;
+    let Some(new_raw) = replace_unique_string_literal(&raw, old, new_base_url) else {
+        return Ok(false);
+    };
+    let new_document = parse_json5_value(path, "Pi models", new_raw.clone().into_bytes())?;
+    let mut expected_document = document.clone();
+    {
+        let providers = providers_mut(&mut expected_document, path)?;
+        let node = providers.get_mut(provider_key).ok_or_else(|| {
+            AppError::Config(format!(
+                "Pi provider '{provider_key}' is not present in models.json"
+            ))
+        })?;
+        node.as_object_mut().ok_or_else(|| {
+            AppError::Config(format!("Pi provider '{provider_key}' must be an object"))
+        })?
+        .insert(
+            "baseUrl".to_string(),
+            Value::String(new_base_url.to_string()),
+        );
+    }
+    if new_document != expected_document {
+        return Ok(false);
+    }
+    ensure_private_models_parent(path)?;
+    ensure_models_revision(path, expected_revision)?;
+    atomic_write_private(path, new_raw.as_bytes())?;
+    Ok(true)
 }
 
 pub(crate) fn read_pi_native_provider(provider_key: &str) -> Result<Option<Value>, AppError> {
@@ -507,6 +728,12 @@ fn empty_json_object() -> &'static Map<String, Value> {
     &EMPTY
 }
 
+/// 整文档重写 models.json（pretty JSON，带冲突revision检查）。
+///
+/// 注意：本路径会丢失文件中的 JSON5 注释。仅改 `providers.<key>.baseUrl`
+/// 单字段的调用方（接管开启/恢复）已优先走 [`write_provider_base_url_surgical`]
+/// 保留注释；节点级增删改（insert/replace/remove/restore provider）仍是
+/// 整文档重写，注释丢失是已知限制。
 fn write_models_document(
     path: &Path,
     document: &Value,
@@ -926,6 +1153,145 @@ mod tests {
             node["baseUrl"],
             "https://openai.example.com/v1",
             "trailing slash normalized by the setter"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn takeover_base_url_rewrite_preserves_json5_comments() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_models_path().expect("models path");
+        fs::create_dir_all(path.parent().unwrap()).expect("create agent directory");
+        let original = r#"{
+    // 用户的注释
+    "providers": {
+        /* 行内注释 */
+        "pi-anthropic": {
+            "baseUrl": "https://anthropic.example.com",
+            "api": "anthropic-messages"
+        }
+    }
+}"#;
+        fs::write(&path, original).expect("write commented models");
+
+        apply_pi_takeover_base_url("pi-anthropic", "http://127.0.0.1:15721")
+            .expect("takeover rewrite");
+
+        let after = fs::read_to_string(&path).expect("read rewritten models");
+        assert!(
+            after.contains("// 用户的注释") && after.contains("/* 行内注释 */"),
+            "comments must survive the surgical rewrite: {after}"
+        );
+        assert!(
+            after.contains("http://127.0.0.1:15721/pi/anthropic"),
+            "baseUrl must be rewritten: {after}"
+        );
+        assert_eq!(
+            read_pi_native_provider("pi-anthropic")
+                .expect("read node")
+                .expect("node exists")["baseUrl"],
+            "http://127.0.0.1:15721/pi/anthropic"
+        );
+
+        // 恢复路径同样保留注释，且字节级回到原文
+        set_pi_provider_base_url("pi-anthropic", "https://anthropic.example.com")
+            .expect("restore baseUrl");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read restored models"),
+            original,
+            "restore must return the file to its original bytes"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn base_url_rewrite_falls_back_when_surgical_replace_is_ambiguous() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_models_path().expect("models path");
+        fs::create_dir_all(path.parent().unwrap()).expect("create agent directory");
+        // 单引号字符串字面量无法被双引号字面量定位 → 退回整文档重写，
+        // 注释允许丢失，但语义必须正确
+        fs::write(
+            &path,
+            r#"{
+    "providers": {
+        "pi-openai": {
+            'baseUrl': 'https://openai.example.com/v1',
+            "api": "openai-completions"
+        }
+    }
+}"#,
+        )
+        .expect("write single-quoted models");
+
+        apply_pi_takeover_base_url("pi-openai", "http://127.0.0.1:15721")
+            .expect("takeover rewrite via fallback");
+
+        let node = read_pi_native_provider("pi-openai")
+            .expect("read node")
+            .expect("node exists");
+        assert_eq!(node["baseUrl"], "http://127.0.0.1:15721/pi/openai");
+    }
+
+    #[test]
+    #[serial]
+    fn set_default_provider_replaces_value_and_preserves_comments() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_settings_path().expect("settings path");
+        fs::create_dir_all(path.parent().unwrap()).expect("create agent directory");
+        let original = r#"{
+    // Pi 全局偏好
+    "defaultProvider": "anthropic",
+    "defaultModel": "claude-opus-4-6"
+}"#;
+        fs::write(&path, original).expect("write commented settings");
+
+        set_pi_default_provider("cc-switch-test").expect("set default provider");
+
+        let after = fs::read_to_string(&path).expect("read settings");
+        assert!(
+            after.contains("// Pi 全局偏好"),
+            "comments must survive: {after}"
+        );
+        assert_eq!(
+            read_pi_native_defaults().expect("read defaults").default_provider,
+            Some("cc-switch-test".to_string())
+        );
+        // 其余字段保持不变
+        assert_eq!(
+            read_pi_native_defaults().expect("read defaults").default_model,
+            Some("claude-opus-4-6".to_string())
+        );
+        // 幂等：相同值不再写盘
+        let before = fs::read_to_string(&path).expect("read settings");
+        set_pi_default_provider("cc-switch-test").expect("idempotent set");
+        assert_eq!(fs::read_to_string(&path).expect("read settings"), before);
+    }
+
+    #[test]
+    #[serial]
+    fn set_default_provider_inserts_when_missing_and_creates_missing_file() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_settings_path().expect("settings path");
+        fs::create_dir_all(path.parent().unwrap()).expect("create agent directory");
+        fs::write(&path, "{\n    \"defaultModel\": \"m1\"\n}").expect("write settings");
+
+        set_pi_default_provider("cc-switch-test").expect("insert default provider");
+        assert_eq!(
+            read_pi_native_defaults().expect("read defaults").default_provider,
+            Some("cc-switch-test".to_string())
+        );
+        assert_eq!(
+            read_pi_native_defaults().expect("read defaults").default_model,
+            Some("m1".to_string())
+        );
+
+        // settings.json 不存在时创建最小文档
+        fs::remove_file(&path).expect("remove settings");
+        set_pi_default_provider("cc-switch-test").expect("create settings");
+        assert_eq!(
+            read_pi_native_defaults().expect("read defaults").default_provider,
+            Some("cc-switch-test".to_string())
         );
     }
 }

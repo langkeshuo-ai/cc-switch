@@ -351,7 +351,7 @@ impl ProfileService {
             // 1. 切换项目前无条件关闭当前应用的代理接管。
             // 接管态下 live 文件属于代理；用户希望切换工作目录时总是退出当前
             // 代理环境，再按快照写入真实供应商配置。
-            if let Err(e) = state.proxy_service.disable_takeover_for_app_sync(app) {
+            if let Err(e) = state.proxy_service.disable_takeover_for_app_blocking(app) {
                 warnings.push(format!(
                     "[{app_str}] auto-disable proxy takeover before profile switch failed: {e}"
                 ));

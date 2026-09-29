@@ -39,10 +39,11 @@ export function SnapshotSection() {
       setSnapshots(list);
     } catch (error) {
       console.error("[SnapshotSection] Failed to load snapshots", error);
+      toast.error(t("settings.snapshot.loadFailed"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     refresh();

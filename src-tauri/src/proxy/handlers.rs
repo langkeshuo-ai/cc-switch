@@ -223,7 +223,7 @@ async fn handle_messages_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
+            log_forward_error(&state, &ctx, is_stream, &err.error).await;
             return Err(err.error);
         }
     };
@@ -792,7 +792,7 @@ pub(crate) async fn handle_chat_completions_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
+            log_forward_error(&state, &ctx, is_stream, &err.error).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
     };
@@ -876,7 +876,7 @@ async fn handle_responses_for_app(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
-            log_forward_error(&state, &ctx, is_stream, &err.error);
+            log_forward_error(&state, &ctx, is_stream, &err.error).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
     };
@@ -1018,7 +1018,7 @@ async fn handle_codex_standalone_passthrough(
             if let Some(provider) = err.provider.take() {
                 ctx.provider = provider;
             }
-            log_forward_error(&state, &ctx, false, &err.error);
+            log_forward_error(&state, &ctx, false, &err.error).await;
             return build_codex_proxy_error_response(&ctx, &endpoint, &err.error);
         }
     };
@@ -2544,7 +2544,7 @@ fn merge_tool_call_delta(
 // 使用量记录（保留用于 Claude 转换逻辑）
 // ============================================================================
 
-fn log_forward_error(
+async fn log_forward_error(
     state: &ProxyState,
     ctx: &RequestContext,
     is_streaming: bool,
@@ -2557,18 +2557,22 @@ fn log_forward_error(
     let error_message = get_error_message(error);
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    if let Err(e) = logger.log_error_with_context(
-        request_id,
-        ctx.provider.id.clone(),
-        ctx.app_type_str.to_string(),
-        ctx.request_model.clone(),
-        status_code,
-        error_message,
-        ctx.latency_ms(),
-        is_streaming,
-        Some(ctx.session_id.clone()),
-        None,
-    ) {
+    // H4：日志写入移入 blocking 线程池，避免阻塞 tokio worker
+    if let Err(e) = logger
+        .log_error_with_context_async(
+            request_id,
+            ctx.provider.id.clone(),
+            ctx.app_type_str.to_string(),
+            ctx.request_model.clone(),
+            status_code,
+            error_message,
+            ctx.latency_ms(),
+            is_streaming,
+            Some(ctx.session_id.clone()),
+            None,
+        )
+        .await
+    {
         log::warn!("记录失败请求日志失败: {e}");
     }
 }
@@ -2611,22 +2615,25 @@ async fn log_usage(
     let dedup_scope = super::usage::parser::dedup_scope_for_app(app_type, provider_id);
     let request_id = usage.dedup_request_id(dedup_scope);
 
-    if let Err(e) = logger.log_with_calculation(
-        request_id,
-        provider_id.to_string(),
-        app_type.to_string(),
-        model.to_string(),
-        request_model.to_string(),
-        pricing_model.to_string(),
-        usage,
-        multiplier,
-        latency_ms,
-        first_token_ms,
-        status_code,
-        session_id,
-        None, // provider_type
-        is_streaming,
-    ) {
+    if let Err(e) = logger
+        .log_with_calculation_async(
+            request_id,
+            provider_id.to_string(),
+            app_type.to_string(),
+            model.to_string(),
+            request_model.to_string(),
+            pricing_model.to_string(),
+            usage,
+            multiplier,
+            latency_ms,
+            first_token_ms,
+            status_code,
+            session_id,
+            None, // provider_type
+            is_streaming,
+        )
+        .await
+    {
         log::warn!("[USG-001] 记录使用量失败: {e}");
     }
 }

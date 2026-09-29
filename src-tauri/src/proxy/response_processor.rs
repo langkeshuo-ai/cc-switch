@@ -659,22 +659,25 @@ async fn log_usage_internal(
         usage.cache_creation_tokens
     );
 
-    if let Err(e) = logger.log_with_calculation(
-        request_id,
-        provider_id.to_string(),
-        app_type.to_string(),
-        model.to_string(),
-        request_model.to_string(),
-        pricing_model.to_string(),
-        usage,
-        multiplier,
-        latency_ms,
-        first_token_ms,
-        status_code,
-        session_id,
-        None, // provider_type
-        is_streaming,
-    ) {
+    if let Err(e) = logger
+        .log_with_calculation_async(
+            request_id,
+            provider_id.to_string(),
+            app_type.to_string(),
+            model.to_string(),
+            request_model.to_string(),
+            pricing_model.to_string(),
+            usage,
+            multiplier,
+            latency_ms,
+            first_token_ms,
+            status_code,
+            session_id,
+            None, // provider_type
+            is_streaming,
+        )
+        .await
+    {
         log::warn!("[USG-001] 记录使用量失败: {e}");
     }
 }
@@ -1279,5 +1282,77 @@ mod tests {
             Decimal::from_str("1.5").unwrap()
         );
         Ok(())
+    }
+
+    /// 客户端在 SSE 流中途断开（axum 会 drop body stream）：透传流连同
+    /// 上游生成器被一起丢弃，必须不 panic、干净终止，且已收集的部分
+    /// usage 数据经 finish guard 尽力上报（best-effort）。
+    #[tokio::test]
+    async fn client_disconnect_mid_stream_finishes_usage_collector_with_partial_events() {
+        // 上游 SSE 流：两个完整事件后进入慢速循环。透传流被 drop 时，
+        // pinned 的上游生成器随之被丢弃，循环干净终止（不泄漏任务）。
+        let upstream = async_stream::stream! {
+            yield Ok::<Bytes, std::io::Error>(Bytes::from_static(b"data: {\"type\":\"a\"}\n\n"));
+            yield Ok(Bytes::from_static(b"data: {\"type\":\"b\"}\n\n"));
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                yield Ok(Bytes::from_static(b"data: {\"type\":\"noise\"}\n\n"));
+            }
+        };
+
+        let (callback_tx, mut callback_rx) = tokio::sync::mpsc::unbounded_channel();
+        let collector = SseUsageCollector::new(
+            std::time::Instant::now(),
+            None,
+            move |events, first_token_ms| {
+                let _ = callback_tx.send((events, first_token_ms));
+            },
+        );
+
+        let passthrough = create_logged_passthrough_stream(
+            upstream,
+            "test",
+            Some(collector),
+            // 关闭超时，隔离出纯粹的断开路径
+            StreamingTimeoutConfig {
+                first_byte_timeout: 0,
+                idle_timeout: 0,
+            },
+            None,
+        );
+
+        // 读完两个已解析的事件后 drop：与 axum 在客户端断开时丢弃
+        // body stream 的行为一致。（stream 被 std::pin::pin! 固定到外层
+        // 作用域，必须用内层块让它在断言前真正 drop）
+        let first_and_second = {
+            let mut pinned = std::pin::pin!(passthrough);
+            let first = pinned.next().await.expect("first chunk").unwrap();
+            let second = pinned.next().await.expect("second chunk").unwrap();
+            (first, second)
+        };
+        assert_eq!(
+            &first_and_second.0[..],
+            b"data: {\"type\":\"a\"}\n\n",
+            "first chunk must be forwarded untouched"
+        );
+        assert_eq!(
+            &first_and_second.1[..],
+            b"data: {\"type\":\"b\"}\n\n",
+            "second chunk must be forwarded untouched"
+        );
+
+        // finish guard 在 drop 时触发：部分收集到的事件被尽力上报
+        let (events, _first_token_ms) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            callback_rx.recv(),
+        )
+        .await
+        .expect("finish guard must fire after client disconnect")
+        .expect("callback channel must stay open until finish");
+        assert_eq!(
+            events.len(),
+            2,
+            "partial usage data (both parsed events) must be reported best-effort"
+        );
     }
 }

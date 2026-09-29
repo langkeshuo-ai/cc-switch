@@ -73,6 +73,26 @@ impl Default for CircuitBreakerConfig {
 }
 
 /// 熔断器实例
+///
+/// # 锁序不变量（防止 AB-BA 死锁）
+///
+/// 内部共用三把 `tokio::sync::RwLock`，任何路径必须按同一顺序获取，禁止逆序：
+///
+/// ```text
+/// config → state → last_opened_at
+/// ```
+///
+/// 具体约定：
+/// - `transition_to_*` 按 state → last_opened_at 顺序短暂持有（语句级，不重叠），
+///   绝不与 config 同持；
+/// - `record_success` / `record_failure` 持 config 读锁时，只允许经由 transition
+///   函数按上述顺序获取 state / last_opened_at；
+/// - `is_available` / `allow_request` 必须先在独立作用域内完成 config +
+///   last_opened_at 的读取（块结束时释放全部读锁），再调用 transition 函数。
+///   历史缺陷：`if let Some(x) = *self.last_opened_at.read().await` 的临时守卫
+///   在 edition 2021 下会存活到整个 if 块结束，导致 last_opened_at 读锁跨越
+///   state 写锁的获取点，与 `transition_to_open`（state → last_opened_at）
+///   构成 AB-BA 死锁。
 pub struct CircuitBreaker {
     /// 当前状态
     state: Arc<RwLock<CircuitState>>,
@@ -132,21 +152,29 @@ impl CircuitBreaker {
     /// 并在请求结束后通过 `record_success()` / `record_failure()` 释放。
     pub async fn is_available(&self) -> bool {
         let state = *self.state.read().await;
-        let config = self.config.read().await;
 
         match state {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
-                if let Some(opened_at) = *self.last_opened_at.read().await {
-                    if opened_at.elapsed().as_secs() >= config.timeout_seconds {
-                        drop(config); // 释放读锁再转换状态
-                        log::info!(
-                            "[{}] 熔断器 Open → HalfOpen (超时恢复)",
-                            log_cb::OPEN_TO_HALF_OPEN
-                        );
-                        self.transition_to_half_open().await;
-                        return true;
-                    }
+                // 在独立作用域内读取 config + last_opened_at，块结束时释放全部读锁，
+                // 保证后续 transition_to_half_open()（获取 state 写锁）时不持有其他锁。
+                // 不得改回 `if let Some(x) = *self.last_opened_at.read().await` 的写法：
+                // 临时守卫会存活到 if 块结束，违反结构体文档中的锁序不变量。
+                let timeout_elapsed = {
+                    let config = self.config.read().await;
+                    let opened_at = *self.last_opened_at.read().await;
+                    opened_at
+                        .map(|opened_at| opened_at.elapsed().as_secs() >= config.timeout_seconds)
+                        .unwrap_or(false)
+                };
+
+                if timeout_elapsed {
+                    log::info!(
+                        "[{}] 熔断器 Open → HalfOpen (超时恢复)",
+                        log_cb::OPEN_TO_HALF_OPEN
+                    );
+                    self.transition_to_half_open().await;
+                    return true;
                 }
                 false
             }
@@ -163,36 +191,41 @@ impl CircuitBreaker {
                 used_half_open_permit: false,
             },
             CircuitState::Open => {
-                let config = self.config.read().await;
-                // 检查是否应该尝试半开
-                if let Some(opened_at) = *self.last_opened_at.read().await {
-                    if opened_at.elapsed().as_secs() >= config.timeout_seconds {
-                        drop(config); // 释放读锁再转换状态
-                        log::info!(
-                            "[{}] 熔断器 Open → HalfOpen (超时恢复)",
-                            log_cb::OPEN_TO_HALF_OPEN
-                        );
-                        self.transition_to_half_open().await;
+                // 与 is_available 相同：先在作用域内完成全部读锁判定（块结束释放），
+                // 再做状态转换，避免 last_opened_at 读锁跨越 state 写锁的获取点。
+                let timeout_elapsed = {
+                    let config = self.config.read().await;
+                    let opened_at = *self.last_opened_at.read().await;
+                    opened_at
+                        .map(|opened_at| opened_at.elapsed().as_secs() >= config.timeout_seconds)
+                        .unwrap_or(false)
+                };
 
-                        // 转换后按当前状态决定是否需要获取 HalfOpen 探测名额
-                        let current_state = *self.state.read().await;
-                        return match current_state {
-                            CircuitState::Closed => AllowResult {
-                                allowed: true,
-                                used_half_open_permit: false,
-                            },
-                            CircuitState::HalfOpen => self.allow_half_open_probe(),
-                            CircuitState::Open => AllowResult {
-                                allowed: false,
-                                used_half_open_permit: false,
-                            },
-                        };
-                    }
+                if !timeout_elapsed {
+                    return AllowResult {
+                        allowed: false,
+                        used_half_open_permit: false,
+                    };
                 }
 
-                AllowResult {
-                    allowed: false,
-                    used_half_open_permit: false,
+                log::info!(
+                    "[{}] 熔断器 Open → HalfOpen (超时恢复)",
+                    log_cb::OPEN_TO_HALF_OPEN
+                );
+                self.transition_to_half_open().await;
+
+                // 转换后按当前状态决定是否需要获取 HalfOpen 探测名额
+                let current_state = *self.state.read().await;
+                match current_state {
+                    CircuitState::Closed => AllowResult {
+                        allowed: true,
+                        used_half_open_permit: false,
+                    },
+                    CircuitState::HalfOpen => self.allow_half_open_probe(),
+                    CircuitState::Open => AllowResult {
+                        allowed: false,
+                        used_half_open_permit: false,
+                    },
                 }
             }
             CircuitState::HalfOpen => self.allow_half_open_probe(),
@@ -356,6 +389,9 @@ impl CircuitBreaker {
     }
 
     /// 转换到打开状态
+    ///
+    /// 锁序：state → last_opened_at（两把写锁语句级顺序获取，不重叠持有）。
+    /// 这要求所有调用方不得在持有 last_opened_at 锁时调用本函数。
     async fn transition_to_open(&self) {
         *self.state.write().await = CircuitState::Open;
         *self.last_opened_at.write().await = Some(Instant::now());
@@ -491,5 +527,48 @@ mod tests {
         breaker.reset().await;
         assert_eq!(breaker.get_state().await, CircuitState::Closed);
         assert!(breaker.allow_request().await.allowed);
+    }
+
+    /// H5 回归：并发下探测路径（allow_request/is_available 的 Open→HalfOpen，
+    /// 读取 last_opened_at 后要 state 写锁）与转换路径（record_failure 触发的
+    /// transition_to_open，持 state 写锁后要 last_opened_at 写锁）锁序相反。
+    /// 修复前在多线程 runtime 下会 AB-BA 死锁；修复后两条路径都遵循
+    /// config → state → last_opened_at 单一锁序，本测试必然在超时内完成
+    /// （若死锁回归，超时会触发 panic 使测试失败）。通过侧是确定性的：
+    /// 修复后不存在任何逆序持锁路径。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_no_abba_deadlock_between_probe_and_transition_paths() {
+        let config = CircuitBreakerConfig {
+            timeout_seconds: 0, // Open 后立即可转 HalfOpen，最大化两条路径的碰撞频率
+            ..Default::default()
+        };
+        let breaker = Arc::new(CircuitBreaker::new(config));
+
+        // 先进入 Open，使两个任务分别进入对立的锁获取路径
+        breaker.record_failure(false).await;
+
+        let probe = breaker.clone();
+        let task_probe = tokio::spawn(async move {
+            for _ in 0..1000 {
+                let _ = probe.allow_request().await;
+                let _ = probe.is_available().await;
+            }
+        });
+
+        let trip = breaker.clone();
+        let task_trip = tokio::spawn(async move {
+            for _ in 0..1000 {
+                trip.record_failure(false).await;
+            }
+        });
+
+        let (r1, r2) = tokio::time::timeout(std::time::Duration::from_secs(10), async move {
+            tokio::join!(task_probe, task_trip)
+        })
+        .await
+        .expect("检测到熔断器锁序死锁：探测路径与转换路径互相等待超过 10s");
+
+        r1.expect("probe task panicked");
+        r2.expect("trip task panicked");
     }
 }

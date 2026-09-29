@@ -17,6 +17,27 @@ use uuid::Uuid;
 // Session ID 提取器
 // ============================================================================
 
+/// Session ID 长度上限
+const SESSION_ID_MAX_LEN: usize = 128;
+
+/// 规范化/校验客户端提供的 Session ID
+///
+/// 唯一入口：session id 提取与会话粘性 key 派生都必须经过此函数。
+/// 仅允许 `[A-Za-z0-9._-]` 且长度不超过 `SESSION_ID_MAX_LEN`；
+/// 不合法（为空、超长、含其他字符）返回 `None`，视为未提供，不参与粘性。
+pub(super) fn normalize_session_id(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > SESSION_ID_MAX_LEN
+        || !trimmed
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(trimmed)
+}
+
 /// Session ID 来源
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionIdSource {
@@ -109,7 +130,7 @@ fn extract_claude_session(
     for header_name in &["x-claude-code-session-id", "claude-code-session-id"] {
         if let Some(value) = headers.get(*header_name) {
             if let Ok(session_id) = value.to_str() {
-                if !session_id.is_empty() {
+                if let Some(session_id) = normalize_session_id(session_id) {
                     return Some(SessionIdResult {
                         session_id: session_id.to_string(),
                         source: SessionIdSource::Header,
@@ -140,14 +161,17 @@ fn extract_responses_session(
     for header_name in header_names {
         if let Some(value) = headers.get(*header_name) {
             if let Ok(session_id) = value.to_str() {
-                let session_id = session_id.trim();
                 // Responses 客户端的 Session ID 通常较长（UUID 格式）
-                if session_id.len() > 20 {
-                    return Some(SessionIdResult {
-                        session_id: format!("{prefix}_{session_id}"),
-                        source: SessionIdSource::Header,
-                        client_provided: true,
-                    });
+                if let Some(session_id) =
+                    normalize_session_id(session_id).filter(|s| s.len() > 20)
+                {
+                    if let Some(full) = normalize_session_id(&format!("{prefix}_{session_id}")) {
+                        return Some(SessionIdResult {
+                            session_id: full.to_string(),
+                            source: SessionIdSource::Header,
+                            client_provided: true,
+                        });
+                    }
                 }
             }
         }
@@ -159,13 +183,14 @@ fn extract_responses_session(
         .and_then(|m| m.get("session_id"))
         .and_then(|v| v.as_str())
     {
-        let session_id = session_id.trim();
-        if session_id.len() > 10 {
-            return Some(SessionIdResult {
-                session_id: format!("{prefix}_{session_id}"),
-                source: SessionIdSource::MetadataSessionId,
-                client_provided: true,
-            });
+        if let Some(session_id) = normalize_session_id(session_id).filter(|s| s.len() > 10) {
+            if let Some(full) = normalize_session_id(&format!("{prefix}_{session_id}")) {
+                return Some(SessionIdResult {
+                    session_id: full.to_string(),
+                    source: SessionIdSource::MetadataSessionId,
+                    client_provided: true,
+                });
+            }
         }
     }
 
@@ -182,9 +207,12 @@ fn extract_from_metadata(body: &serde_json::Value) -> Option<SessionIdResult> {
 
     // 1. 从 metadata.user_id 提取（格式: user_xxx_session_yyy）
     if let Some(user_id) = metadata.get("user_id").and_then(|v| v.as_str()) {
-        if let Some(session_id) = parse_session_from_user_id(user_id) {
+        if let Some(session_id) = parse_session_from_user_id(user_id)
+            .as_deref()
+            .and_then(normalize_session_id)
+        {
             return Some(SessionIdResult {
-                session_id,
+                session_id: session_id.to_string(),
                 source: SessionIdSource::MetadataUserId,
                 client_provided: true,
             });
@@ -192,14 +220,16 @@ fn extract_from_metadata(body: &serde_json::Value) -> Option<SessionIdResult> {
     }
 
     // 2. 直接从 metadata.session_id 提取
-    if let Some(session_id) = metadata.get("session_id").and_then(|v| v.as_str()) {
-        if !session_id.is_empty() {
-            return Some(SessionIdResult {
-                session_id: session_id.to_string(),
-                source: SessionIdSource::MetadataSessionId,
-                client_provided: true,
-            });
-        }
+    if let Some(session_id) = metadata
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .and_then(normalize_session_id)
+    {
+        return Some(SessionIdResult {
+            session_id: session_id.to_string(),
+            source: SessionIdSource::MetadataSessionId,
+            client_provided: true,
+        });
     }
 
     None
@@ -455,5 +485,81 @@ mod tests {
         // 没有 "_session_" 分隔符的情况
         assert_eq!(parse_session_from_user_id("user_john_abc123"), None);
         assert_eq!(parse_session_from_user_id("_session_"), None);
+    }
+
+    // ========== Session ID 规范化测试 ==========
+
+    #[test]
+    fn test_normalize_session_id_normal_uuid_passes_unchanged() {
+        let uuid = "d937243f-2702-4f20-97b6-c9682235ab81";
+        assert_eq!(normalize_session_id(uuid), Some(uuid));
+        assert_eq!(normalize_session_id("my-session-123"), Some("my-session-123"));
+        assert_eq!(normalize_session_id("codex_abc_123"), Some("codex_abc_123"));
+        // 前后空白被裁剪
+        assert_eq!(normalize_session_id("  sess-1  "), Some("sess-1"));
+    }
+
+    #[test]
+    fn test_normalize_session_id_rejects_overlong() {
+        // 超过 128 字符上限 → 拒绝（视为未提供，不做截断）
+        let long_id = "a".repeat(129);
+        assert_eq!(normalize_session_id(&long_id), None);
+        // 恰好 128 字符 → 通过
+        let max_id = "a".repeat(128);
+        assert_eq!(normalize_session_id(&max_id), Some(max_id.as_str()));
+    }
+
+    #[test]
+    fn test_normalize_session_id_rejects_invalid_charset() {
+        // 含空格（非裁剪边界）
+        assert_eq!(normalize_session_id("sess with space"), None);
+        // 含路径分隔符
+        assert_eq!(normalize_session_id("sess/../etc"), None);
+        assert_eq!(normalize_session_id("sess\\windows"), None);
+        // 含其他特殊字符
+        assert_eq!(normalize_session_id("sess:1"), None);
+        assert_eq!(normalize_session_id("sess#1"), None);
+        // 非 ASCII
+        assert_eq!(normalize_session_id("会话-1"), None);
+        // 纯空白 → None
+        assert_eq!(normalize_session_id("     "), None);
+        // 空字符串 → None
+        assert_eq!(normalize_session_id(""), None);
+    }
+
+    #[test]
+    fn test_extract_rejects_invalid_session_ids_and_falls_back() {
+        // header 中的非法 session id 应被拒绝，回退到生成新 ID
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-claude-code-session-id",
+            "bad session/../id".parse().unwrap(),
+        );
+        let body = json!({
+            "model": "claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "Hello"}]
+        });
+
+        let result = extract_session_id(&headers, &body, "claude");
+
+        assert_eq!(result.source, SessionIdSource::Generated);
+        assert!(!result.client_provided);
+    }
+
+    #[test]
+    fn test_extract_rejects_overlong_metadata_session_id() {
+        // 超长 metadata.session_id 应被拒绝，回退到生成新 ID
+        let headers = HeaderMap::new();
+        let long_id = "x".repeat(200);
+        let body = json!({
+            "model": "claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "metadata": { "session_id": long_id }
+        });
+
+        let result = extract_session_id(&headers, &body, "claude");
+
+        assert_eq!(result.source, SessionIdSource::Generated);
+        assert!(!result.client_provided);
     }
 }

@@ -512,6 +512,13 @@ impl RequestForwarder {
 
             // PRE-SEND 优化器：每个 provider 独立决定是否优化
             // clone body 以避免 Bedrock 优化字段泄漏到非 Bedrock provider（failover 场景）
+            //
+            // M7：两处 clone 均为必要（load-bearing），勿删：
+            // - 原始 `body` 是整个 failover 循环的「干净模板」，每次 attempt
+            //   独立克隆一份；下方整流器重试路径会就地修改 provider_body
+            //   （rectify_anthropic_request / rectify_thinking_budget 取
+            //   &mut），若直接借用 body 会把整流/优化改动泄漏到下一家
+            //   provider。Bedrock 分支的 clone 还承载优化字段隔离。
             let mut provider_body =
                 if self.optimizer_config.enabled && is_bedrock_provider(provider) {
                     let mut b = body.clone();
@@ -1258,6 +1265,11 @@ impl RequestForwarder {
         }
 
         // 应用模型映射（独立于格式转换）
+        // M7：此处 clone 为必要（load-bearing）——`body` 是调用方的
+        // &provider_body 借用（整流器重试会对同一 provider 再次调用
+        // forward，见 forward_with_retry_inner），本函数不能夺取所有权；
+        // 而 mapped_body 下游会被就地改写/move（normalize_thinking_type、
+        // sanitize_orphan_tool_results、格式转换），必须持有独立副本。
         let mapped_body = super::model_mapper::apply_model_mapping(body.clone(), provider).0;
 
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）

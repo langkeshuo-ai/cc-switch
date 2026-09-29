@@ -231,11 +231,6 @@ export function ProviderPresetSelector({
         return t("providerForm.customApiKeyHint", {
           defaultValue: "💡 自定义配置需手动填写所有必要字段",
         });
-      case "omo":
-        return t("providerForm.omoHint", {
-          defaultValue:
-            "💡 OMO 配置管理 Agent 模型分配，兼容 oh-my-openagent.jsonc / oh-my-opencode.jsonc",
-        });
       default:
         return t("providerPreset.hint", {
           defaultValue: "选择预设后可继续调整下方字段。",

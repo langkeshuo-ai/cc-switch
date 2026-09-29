@@ -59,10 +59,42 @@ impl ProviderRouter {
         let mut total_providers = 0usize;
         let mut circuit_open_count = 0usize;
         // Pi 的实际生效供应商是 settings.json 的 defaultProvider（Pi CLI 唯一
-        // 跟随的源），代理转发必须以它为准；缺失时退回数据库 current provider。
+        // 跟随的源）。语义约定：
+        // - defaultProvider 存在且在 CC Switch 有供应商档案 → 以它为准；
+        // - 缺失 / settings.json 不可读 / 悬空（指向不存在的档案）→ 记 warn
+        //   并退回数据库 current provider，与路由器其余缺失配置的兜底行为
+        //   保持一致（consistency over cleverness）；
+        // - 两者皆无 → 落入下方统一的 NoProvidersConfigured 错误路径。
         let pi_proxy_override = (app_type == crate::app_config::AppType::Pi.as_str())
-            .then(crate::pi_config::pi_proxy_current_provider_key)
+            .then(|| -> Option<String> {
+                let Some(key) = crate::pi_config::pi_proxy_current_provider_key() else {
+                    log::warn!(
+                        "[{app_type}] Pi settings.json 缺失 defaultProvider 或不可读，退回数据库 current provider"
+                    );
+                    return None;
+                };
+                match self.db.get_provider_by_id(&key, app_type) {
+                    Ok(Some(_)) => Some(key),
+                    Ok(None) => {
+                        log::warn!(
+                            "[{app_type}] Pi settings.json defaultProvider '{key}' 在 CC Switch 中没有供应商档案（悬空引用），退回数据库 current provider"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[{app_type}] 读取 Pi 供应商档案 '{key}' 失败，退回数据库 current provider: {e}"
+                        );
+                        None
+                    }
+                }
+            })
             .flatten();
+        // M7 决策：下方 get_current_provider / get_provider_by_id /
+        // get_all_providers 保持内联同步（不转 db_blocking）。三者都是
+        // 单行/小表查询（Mutex<Connection> 内 sub-ms），且 DAO 侧没有
+        // 现成的 _on_conn 核心可复用；转 blocking 变体每调用引入一次
+        // spawn_blocking 线程停靠，对小查询反而更慢（H4 结论）。
         let current_id = pi_proxy_override.or_else(|| {
             AppType::from_str(app_type)
                 .ok()
@@ -198,8 +230,9 @@ impl ProviderRouter {
         success: bool,
         error_msg: Option<String>,
     ) -> Result<(), AppError> {
-        // 1. 按应用独立获取熔断器配置
-        let failure_threshold = match self.db.get_proxy_config_for_app(app_type).await {
+        // 1. 按应用独立获取熔断器配置（每请求热路径，H4 blocking 变体，
+        //    把同步 DB 读移到 blocking 线程池，避免阻塞 tokio worker）
+        let failure_threshold = match self.db.get_proxy_config_for_app_blocking(app_type).await {
             Ok(app_config) => app_config.circuit_failure_threshold,
             Err(_) => 5, // 默认值
         };
@@ -271,21 +304,34 @@ impl ProviderRouter {
     }
 
     /// 更新所有熔断器的配置（热更新）
+    ///
+    /// L4：读锁临界区只做 Arc 快照收集（纯内存），update_config().await
+    /// 在锁外执行，避免读锁跨 .await 阻塞写者。新创建的熔断器直接从 DB
+    /// 读取最新配置（DB 先于本热更新写入），因此快照窗口无语义差异。
     pub async fn update_all_configs(&self, config: CircuitBreakerConfig) {
-        let breakers = self.circuit_breakers.read().await;
-        for breaker in breakers.values() {
+        let breakers: Vec<Arc<CircuitBreaker>> = {
+            let map = self.circuit_breakers.read().await;
+            map.values().cloned().collect()
+        };
+        for breaker in breakers {
             breaker.update_config(config.clone()).await;
         }
     }
 
     /// 更新指定应用已创建熔断器的配置（热更新）
+    ///
+    /// L4：同 update_all_configs，锁内只收集快照，await 在锁外。
     pub async fn update_app_configs(&self, app_type: &str, config: CircuitBreakerConfig) {
         let prefix = format!("{app_type}:");
-        let breakers = self.circuit_breakers.read().await;
-        for (key, breaker) in breakers.iter() {
-            if key.starts_with(&prefix) {
-                breaker.update_config(config.clone()).await;
-            }
+        let breakers: Vec<Arc<CircuitBreaker>> = {
+            let map = self.circuit_breakers.read().await;
+            map.iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(_, breaker)| breaker.clone())
+                .collect()
+        };
+        for breaker in breakers {
+            breaker.update_config(config.clone()).await;
         }
     }
 
@@ -307,6 +353,9 @@ impl ProviderRouter {
     }
 
     /// 获取或创建熔断器
+    ///
+    /// DB 配置读取在拿写锁之前完成（L4）：写锁临界区只做纯内存插入，
+    /// 不跨越 .await，避免持锁线程被调度阻塞时饿死其他等待者。
     async fn get_or_create_circuit_breaker(&self, key: &str) -> Arc<CircuitBreaker> {
         // 先尝试读锁获取
         {
@@ -316,19 +365,11 @@ impl ProviderRouter {
             }
         }
 
-        // 如果不存在，获取写锁创建
-        let mut breakers = self.circuit_breakers.write().await;
-
-        // 双重检查，防止竞争条件
-        if let Some(breaker) = breakers.get(key) {
-            return breaker.clone();
-        }
-
         // 从 key 中提取 app_type (格式: "app_type:provider_id")
         let app_type = key.split(':').next().unwrap_or("claude");
 
-        // 按应用独立读取熔断器配置
-        let config = match self.db.get_proxy_config_for_app(app_type).await {
+        // 按应用独立读取熔断器配置（热路径，使用 blocking 变体，见 M7）
+        let config = match self.db.get_proxy_config_for_app_blocking(app_type).await {
             Ok(app_config) => crate::proxy::circuit_breaker::CircuitBreakerConfig {
                 failure_threshold: app_config.circuit_failure_threshold,
                 success_threshold: app_config.circuit_success_threshold,
@@ -338,6 +379,14 @@ impl ProviderRouter {
             },
             Err(_) => crate::proxy::circuit_breaker::CircuitBreakerConfig::default(),
         };
+
+        // 如果不存在，获取写锁创建
+        let mut breakers = self.circuit_breakers.write().await;
+
+        // 双重检查，防止竞争条件（并发路径可能已用相同的 DB 配置创建）
+        if let Some(breaker) = breakers.get(key) {
+            return breaker.clone();
+        }
 
         let breaker = Arc::new(CircuitBreaker::new(config));
         breakers.insert(key.to_string(), breaker.clone());
@@ -805,5 +854,71 @@ mod tests {
             .unwrap();
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "a");
+    }
+
+    /// 写入 Pi settings.json（TestAgentDir 隔离真实用户目录）
+    fn write_pi_settings(content: &str) {
+        let settings_path = crate::pi_config::get_pi_settings_path().unwrap();
+        std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        std::fs::write(&settings_path, content).unwrap();
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_valid_default_provider_overrides_db_current() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        let provider_b =
+            Provider::with_id("b".to_string(), "Provider B".to_string(), json!({}), None);
+        db.save_provider("pi", &provider_a).unwrap();
+        db.save_provider("pi", &provider_b).unwrap();
+        // DB current 指向 a，但 Pi 实际生效的是 b（settings.json 为权威源）
+        db.set_current_provider("pi", "a").unwrap();
+        write_pi_settings(r#"{"defaultProvider":"b"}"#);
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router.select_providers("pi", None).await.unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "b");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_dangling_default_provider_falls_back_to_db_current() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+
+        let provider_a =
+            Provider::with_id("a".to_string(), "Provider A".to_string(), json!({}), None);
+        db.save_provider("pi", &provider_a).unwrap();
+        db.set_current_provider("pi", "a").unwrap();
+        // defaultProvider 悬空：指向 CC Switch 中不存在的档案
+        write_pi_settings(r#"{"defaultProvider":"ghost"}"#);
+
+        let router = ProviderRouter::new(db.clone());
+        let providers = router.select_providers("pi", None).await.unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "a");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn pi_missing_default_provider_and_no_db_fallback_is_a_clear_error() {
+        let _home = TempHome::new();
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let db = Arc::new(Database::memory().unwrap());
+        write_pi_settings("{}");
+
+        let router = ProviderRouter::new(db.clone());
+        let error = router
+            .select_providers("pi", None)
+            .await
+            .expect_err("no provider configured anywhere");
+        assert!(matches!(error, crate::error::AppError::NoProvidersConfigured));
     }
 }

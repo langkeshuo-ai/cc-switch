@@ -722,15 +722,15 @@ fn test_parse_prompt_deeplink() {
 }
 
 #[test]
-fn test_parse_grokbuild_prompt_deeplink() {
+fn test_parse_trimmed_app_prompt_deeplink_rejected() {
+    // 已裁剪应用在单值 app 参数上必须明确报错（而非静默忽略）
     let content_b64 = BASE64_STANDARD.encode("Grok instructions");
     let url = format!(
         "ccswitch://v1/import?resource=prompt&app=grokbuild&name=test&content={content_b64}"
     );
 
-    let request = parse_deeplink_url(&url).expect("parse Grok Build prompt deeplink");
-
-    assert_eq!(request.app.as_deref(), Some("grokbuild"));
+    let err = parse_deeplink_url(&url).expect_err("trimmed app must be rejected");
+    assert!(err.to_string().contains("grokbuild"), "error: {err}");
 }
 
 #[test]

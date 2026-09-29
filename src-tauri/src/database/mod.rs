@@ -45,7 +45,7 @@ use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
@@ -75,8 +75,9 @@ pub(crate) use lock_conn;
 ///
 /// 使用 Mutex 包装 Connection 以支持在多线程环境（如 Tauri State）中共享。
 /// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
+/// 外层 Arc 允许 DAO 方法把连接克隆进 `spawn_blocking` 闭包（见 [`Database::db_blocking`]）。
 pub struct Database {
-    pub(crate) conn: Mutex<Connection>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
 }
 
 fn register_db_change_hook(conn: &Connection) {
@@ -118,7 +119,7 @@ impl Database {
         register_db_change_hook(&conn);
 
         let db = Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         };
         db.create_tables()?;
 
@@ -192,12 +193,42 @@ impl Database {
         register_db_change_hook(&conn);
 
         let db = Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         };
         db.create_tables()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)
+    }
+
+    /// H4：在 tokio blocking 线程池上执行同步 DB 操作。
+    ///
+    /// rusqlite 是同步驱动，直接在 async 上下文中执行会阻塞 tokio worker 线程。
+    /// 本 helper 把闭包移交给 `spawn_blocking` 执行；`Mutex<Connection>` 仍然
+    /// 串行化所有访问，并发语义与内联执行完全一致，仅改变执行线程。
+    ///
+    /// # 约束
+    /// - 只能在 tokio runtime 上下文中调用（`spawn_blocking` 的要求；
+    ///   会被 `futures::executor::block_on` 在 runtime 外轮询的方法禁止使用）；
+    /// - 闭包内不得再调用本 helper 或其他内部使用 `spawn_blocking` 的 DAO 方法；
+    /// - 闭包拿到的 `&Connection` 已持有互斥锁，闭包内不要长时间空转。
+    pub(crate) async fn db_blocking<T, F>(&self, f: F) -> Result<T, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> Result<T, AppError> + Send + 'static,
+    {
+        let conn = Arc::clone(&self.conn);
+        match tokio::task::spawn_blocking(move || {
+            let conn = lock_conn!(conn);
+            f(&conn)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(join_err) => Err(AppError::Database(format!(
+                "数据库后台任务执行失败: {join_err}"
+            ))),
+        }
     }
 
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {
