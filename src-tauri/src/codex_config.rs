@@ -1113,12 +1113,14 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
 // 自定义段落（profiles、mcp_servers 等）一并抹掉。这里的合并以新文本的键为
 // 权威覆盖/插入，其余既有内容原样保留（magpie 式 surgical editing）。
 //
-// 仅两类例外会被移除——都要求值携带 cc-switch 的 ownership 哨兵，用户手写的
-// 同名键绝不受影响：
+// 仅两类例外会被移除：
 // - `model_catalog_json` 指向 cc-switch 生成的目录文件（陈旧指针会让读取端
-//   误报上一个供应商的目录）；
-// - `web_search = "disabled"` 与顶层 `experimental_bearer_token = "PROXY_MANAGED"`
-//   （cc-switch 自己写入的占位/哨兵值，切换后残留即垃圾）。
+//   误报上一个供应商的目录）——要求值携带 ownership 哨兵，用户手写的同名键
+//   绝不受影响；
+// - `web_search = "disabled"`（cc-switch 自己写入的哨兵值，切换后残留即垃圾，
+//   同样要求哨兵值）；顶层 `experimental_bearer_token` 无论值一律随切换剥离
+//   （新配置缺席时）：它是供应商级凭证，残留会让下一个供应商的端点收到上一个
+//   供应商的 token——安全属性优先于配置保留，用户注释/自定义段落不受影响。
 
 /// 判断该键当前值是否为 cc-switch 拥有的哨兵值（merge 时允许在新配置缺席时移除）。
 fn codex_config_value_is_cc_switch_owned(key: &str, item: &toml_edit::Item) -> bool {
@@ -1132,7 +1134,8 @@ fn codex_config_value_is_cc_switch_owned(key: &str, item: &toml_edit::Item) -> b
                 == Some(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
         }
         "web_search" => value == CODEX_WEB_SEARCH_DISABLED,
-        "experimental_bearer_token" => value == CODEX_PROXY_AUTH_PLACEHOLDER,
+        // 供应商级凭证：任何值都不得跨切换残留（泄漏 = A 的 token 发到 B 的端点）
+        "experimental_bearer_token" => true,
         _ => false,
     }
 }
