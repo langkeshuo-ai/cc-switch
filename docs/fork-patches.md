@@ -64,3 +64,20 @@
   [mcp_servers] 存活），测试已改为断言 fork 行为。
 - 教训：pick 上游 PR 时，其测试断言默认编码上游引擎语义——必须逐条对照
   fork 对应引擎（surgical merge / 保留特性）判定接受或改写，并把本表补记。
+
+## 上游 pick 评审记录（2026-09-29，截至 upstream 846de29c，落后 22）
+
+**已抄（3 笔）：**
+- `b9c27393` → b6a1109c：incremental_vacuum 整 freelist 回收（原每次仅回收 1 页）
+- `846de29c` → 46cc61dc：skills 图标（Wrench→SkillsIcon；cherry-pick 在裁撤段冲突，手工套用）
+- `6064fc1c` → 897f0fcd：删 connectivity check 配置面/批量检查/日志（-444 行；批量与日志在 fork 前端零调用，单次检查改用默认配置）
+
+**拒绝（含理由）：**
+- `15c0b3ce` 及其依赖 `b0875f4c`/`08a80b90`/`a79d9ff1`：direct/proxy mode 架构（mode/*、*_direct.rs 在 fork 不存在）——ADR-001 底线：保 backup-restore 中间人能力
+- `2185498e`：上游泄漏修复针对其 key-field writer；fork 已由 a5b3dd3a 在 surgical 引擎侧覆盖同一安全属性
+- `81df5a08`/`0e6430ab`/`63ed5002`/`fb564537`/`143bc461` + 3 docs：key-field switching 引擎与 fork surgical 引擎对立
+- `69ff69dd`：40 文件重构绑上游 editor 架构，fork 侧 useDraftEditorProjection 等锚点不存在
+
+**候选待评审（月度）：**
+- `46fa2e0e` 删成本倍率（-866）：功能移除非修复；与 H4 DAO/schema 列/计价链路交织，7 文件冲突，需连带决定 proxy_config.default_cost_multiplier 列去留——单独会话做
+- `46fa2e0e`/`6064fc1c` 同类上游删除面继续积累时重估
