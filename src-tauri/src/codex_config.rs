@@ -4300,8 +4300,7 @@ pub fn update_codex_toml_field(toml_str: &str, field: &str, value: &str) -> Resu
                 {
                     // 键存在但不是表（`model_providers = 42`）时，下面这行会把用户
                     // 手写的值替换掉。旧代码在这种形状下会掉进顶层 fallback 而不动
-                    // 它，所以归一化必须留痕——与 mcp/codex.rs、mcp/grokbuild.rs、
-                    // opencode_config.rs 的同款处理保持一致。
+                    // 它，所以归一化必须留痕——与 mcp/codex.rs 的同款处理保持一致。
                     if doc
                         .get("model_providers")
                         .is_some_and(|item| !item.is_none())

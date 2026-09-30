@@ -81,7 +81,7 @@ export function useSpeedTestEndpoints({
           settingsConfig?: { env?: { GOOGLE_GEMINI_BASE_URL?: string } };
           endpointCandidates?: string[];
         };
-        // 添加预设自己的 baseUrl（兼容 Claude/Gemini）
+        // 添加预设自己的 baseUrl（兼容 Claude/Codex）
         const presetEnv = preset.settingsConfig as {
           env?: {
             ANTHROPIC_BASE_URL?: string;

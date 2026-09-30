@@ -179,9 +179,9 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
     }
 
     if apps.is_empty() {
-        return Err(AppError::InvalidInput(
-            "At least one app must be specified in 'apps'".to_string(),
-        ));
+        return Err(AppError::InvalidInput(format!(
+            "No supported app in 'apps': '{apps_str}' (supported: claude, codex)"
+        )));
     }
 
     Ok(apps)

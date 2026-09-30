@@ -86,7 +86,6 @@ import { McpIcon, SkillsIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
 import { invalidatePiProviderCaches, usePiCurrentState } from "@/lib/query/pi";
-import WorkspaceFilesPanel from "@/components/workspace/WorkspaceFilesPanel";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
@@ -102,8 +101,7 @@ type View =
   | "mcp"
   | "agents"
   | "universal"
-  | "sessions"
-  | "workspace";
+  | "sessions";
 
 interface SyncStatusUpdatedPayload {
   source?: string;
@@ -134,7 +132,6 @@ const VALID_VIEWS: View[] = [
   "agents",
   "universal",
   "sessions",
-  "workspace",
 ];
 
 const getInitialView = (): View => {
@@ -643,7 +640,7 @@ function App() {
     const { provider, action } = confirmAction;
 
     if (action === "remove") {
-      // Remove from live config only (for additive mode apps like OpenCode/OpenClaw)
+      // Remove from live config only (for additive mode apps like Pi)
       // Does NOT delete from database - provider remains in the list
       try {
         await providersApi.removeFromLiveConfig(provider.id, activeApp);
@@ -966,8 +963,6 @@ function App() {
               appId={sharedFeatureApp}
             />
           );
-        case "workspace":
-          return <WorkspaceFilesPanel />;
         default:
           return (
             <div className="px-6 flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -1179,7 +1174,6 @@ function App() {
                       defaultValue: "统一供应商",
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
-                  {currentView === "workspace" && t("workspace.title")}
                 </h1>
               </div>
             ) : (

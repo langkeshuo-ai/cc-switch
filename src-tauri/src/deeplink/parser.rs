@@ -255,24 +255,11 @@ fn parse_mcp_deeplink(
         .clone();
 
     // Validate apps format
-    for app in apps.split(',') {
-        let trimmed = app.trim();
-        if !matches!(
-            trimmed,
-            "claude"
-                | "codex"
-                | "gemini"
-                | "grokbuild"
-                | "grok"
-                | "opencode"
-                | "openclaw"
-                | "hermes"
-        ) {
-            return Err(AppError::InvalidInput(format!(
-                "Invalid app in 'apps': must be 'claude', 'codex', 'gemini', 'grokbuild', 'opencode', 'openclaw', or 'hermes', got '{trimmed}'"
-            )));
-        }
-    }
+    //
+    // 语义校验的单一事实源是 `mcp::parse_mcp_apps`：它放行 claude/codex，对旧
+    // deeplink 中已裁剪的应用名做静默忽略（向前兼容），只有未知值才报错。这里直接
+    // 复用，避免两处白名单漂移——此前本处把已裁剪应用列为「合法值」，错误串同样错。
+    super::mcp::parse_mcp_apps(&apps)?;
 
     let config = params
         .get("config")

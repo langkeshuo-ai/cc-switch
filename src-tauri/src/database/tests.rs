@@ -230,7 +230,6 @@ fn schema_migration_adds_missing_columns_for_providers() {
         ("providers", "meta"),
         ("providers", "is_current"),
         ("provider_endpoints", "added_at"),
-        ("mcp_servers", "enabled_gemini"),
         ("prompts", "updated_at"),
         ("skills", "installed_at"),
         ("skill_repos", "enabled"),
@@ -238,6 +237,24 @@ fn schema_migration_adds_missing_columns_for_providers() {
         assert!(
             Database::has_column(&conn, table, column).expect("check column"),
             "{table}.{column} should exist after migration"
+        );
+    }
+
+    // v21 -> v22 之后，已裁剪应用的启用标志必须不复存在
+    for column in [
+        "enabled_gemini",
+        "enabled_grokbuild",
+        "enabled_opencode",
+        "enabled_mcode",
+        "enabled_hermes",
+    ] {
+        assert!(
+            !Database::has_column(&conn, "mcp_servers", column).expect("check column"),
+            "mcp_servers.{column} should be dropped by v21 -> v22"
+        );
+        assert!(
+            !Database::has_column(&conn, "skills", column).expect("check column"),
+            "skills.{column} should be dropped by v21 -> v22"
         );
     }
 
@@ -686,11 +703,12 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     );
 
     // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
-    // v21 起 migrate_v20_to_v21 再补一行 Pi，因此这里是 5 行
+    // v21 起 migrate_v20_to_v21 曾补一行 Pi 至 5 行；v22 起裁剪应用被清退，
+    // 只保留 claude/codex/pi 三行
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 5);
+    assert_eq!(proxy_rows, 3);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn

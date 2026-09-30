@@ -176,38 +176,20 @@ export interface UsageRangeSelection {
 /**
  * App types surfaced as dashboard filter buttons.
  *
- * `claude-desktop` is intentionally NOT listed: the Desktop gateway's proxy
- * traffic is still recorded under its own `app_type` (preserving route-takeover
- * billing audit — the request detail panel shows the real value), but the
- * dashboard folds it into `claude` for display. It is the embedded Claude Code
- * runtime running inside the Desktop shell, and Desktop *chat* usage never
- * passes through this app at all, so a separate "Claude Desktop" bucket would
- * only ever show a partial number and mislead users into reading it as the
- * Desktop's full usage. The backend collapses `claude-desktop → claude` in
- * every dashboard query (see `folded_app_type_sql`).
- * `opencode` and `pi` have no proxy handler; their usage reaches this
- * dashboard through session importers. `openclaw` / `hermes` appear only as
- * managed apps elsewhere.
+ * 本 fork 只管理 claude / codex / pi（ADR-001）。历史数据库中已裁剪应用的用量行
+ * 仍会参与 `all` 聚合（后端按 app_type 折算展示口径），但不再拥有独立的筛选按钮
+ * —— 这也是本清单只作用于按钮、不作用于聚合结果的原因（见 UsageHero 中 allApps
+ * 的注释）。`claude-desktop` 同样不单列：它的代理流量在计费审计里保留真实
+ * app_type，展示时折算进 `claude`。
  */
-export type AppType =
-  | "claude"
-  | "codex"
-  | "gemini"
-  | "grokbuild"
-  | "opencode"
-  | "pi"
-  | "mcode";
+export type AppType = "claude" | "codex" | "pi";
 
 export type AppTypeFilter = "all" | AppType;
 
 export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
   "claude",
   "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
   "pi",
-  "mcode",
 ];
 
 /**
@@ -221,6 +203,9 @@ export const KNOWN_APP_TYPES: ReadonlyArray<AppType> = [
  *    the UI should label it as N/A rather than 0.
  *
  * Mirror of the Rust `CACHE_INCLUSIVE_APP_TYPES` whitelist.
+ *
+ * 注意：这里是**数据语义**清单而非功能清单——历史库中已裁剪应用的行仍需按
+ * cache-inclusive 口径折算，故不随应用裁剪一起收窄（须与 Rust 侧保持镜像）。
  */
 export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
   "codex",
@@ -230,7 +215,7 @@ export const CACHE_INCLUSIVE_APP_TYPES: ReadonlySet<string> = new Set([
 
 // Pi sessions can mix Anthropic and OpenAI APIs, but the dashboard aggregates
 // only by app type. Treat cache-write coverage as partial without changing
-// Pi's fresh-input token semantics.
+// Pi's fresh-input token semantics. 同上：数据语义清单，保留历史应用名。
 const PARTIAL_CACHE_WRITE_APP_TYPES: ReadonlySet<string> = new Set([
   "pi",
   "mcode",

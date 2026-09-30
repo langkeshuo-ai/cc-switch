@@ -12,7 +12,6 @@ import {
 } from "@/utils/providerConfigUtils";
 
 export const CODEX_OFFICIAL_PROVIDER_ID = "codex-official";
-export const GROKBUILD_OFFICIAL_PROVIDER_ID = "grokbuild-official";
 
 export type CodexOfficialIdentity =
   | "native_login"

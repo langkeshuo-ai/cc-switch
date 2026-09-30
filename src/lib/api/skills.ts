@@ -2,30 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type { AppId } from "@/lib/api/types";
 
-export type AppType =
-  | "claude"
-  | "claude-desktop"
-  | "codex"
-  | "gemini"
-  | "grokbuild"
-  | "opencode"
-  | "openclaw"
-  | "hermes"
-  | "pi"
-  | "mcode";
+export type AppType = "claude" | "codex" | "pi";
 
-/** Skill 应用启用状态 */
+/** Skill 应用启用状态（与后端 app_config.rs 的 SkillApps 对应） */
 export interface SkillApps {
   claude: boolean;
-  "claude-desktop"?: boolean;
   codex: boolean;
-  gemini: boolean;
-  grokbuild?: boolean;
-  opencode: boolean;
-  openclaw: boolean;
-  hermes: boolean;
   pi: boolean;
-  mcode?: boolean;
 }
 
 /** 已安装的 Skill（v3.10.0+ 统一结构） */

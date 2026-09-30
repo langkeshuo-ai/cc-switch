@@ -285,7 +285,7 @@ mod tests {
                 source_path: "/tmp/s2".to_string(),
             },
             DeleteSessionRequest {
-                provider_id: "gemini".to_string(),
+                provider_id: "pi".to_string(),
                 session_id: "s3".to_string(),
                 source_path: "/tmp/s3".to_string(),
             },

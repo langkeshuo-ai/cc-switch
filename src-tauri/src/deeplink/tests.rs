@@ -750,16 +750,30 @@ fn test_parse_mcp_deeplink() {
 }
 
 #[test]
-fn test_parse_grokbuild_mcp_deeplink() {
+fn test_parse_trimmed_app_mcp_deeplink_rejected() {
+    // 只携带已裁剪应用的 MCP deeplink 必须明确报错（三应用之外无可启用目标），
+    // 而不是像以前那样把已裁剪应用当合法值放行。
     let config = r#"{"mcpServers":{"test":{"command":"echo"}}}"#;
     let config_b64 = BASE64_STANDARD.encode(config);
     let url = format!(
         "ccswitch://v1/import?resource=mcp&apps=grokbuild&config={config_b64}&enabled=true"
     );
 
-    let request = parse_deeplink_url(&url).expect("parse Grok Build MCP deeplink");
+    let err = parse_deeplink_url(&url).expect_err("trimmed-only apps must be rejected");
+    assert!(err.to_string().contains("No supported app"), "error: {err}");
+}
 
-    assert_eq!(request.apps.as_deref(), Some("grokbuild"));
+#[test]
+fn test_parse_mcp_deeplink_ignores_trimmed_apps_but_keeps_supported_ones() {
+    // 混合 apps：已裁剪应用静默忽略（旧链接不炸），claude 仍然生效
+    let config = r#"{"mcpServers":{"test":{"command":"echo"}}}"#;
+    let config_b64 = BASE64_STANDARD.encode(config);
+    let url = format!(
+        "ccswitch://v1/import?resource=mcp&apps=claude,gemini&config={config_b64}&enabled=true"
+    );
+
+    let request = parse_deeplink_url(&url).expect("mixed apps deeplink still parses");
+    assert_eq!(request.apps.as_deref(), Some("claude,gemini"));
 }
 
 #[test]

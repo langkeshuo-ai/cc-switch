@@ -30,10 +30,6 @@ function makeSkill(overrides: Partial<InstalledSkill> = {}): InstalledSkill {
     apps: {
       claude: true,
       codex: false,
-      gemini: false,
-      opencode: false,
-      openclaw: false,
-      hermes: false,
       pi: false,
     },
     installedAt: 0,

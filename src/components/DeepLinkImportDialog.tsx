@@ -451,7 +451,7 @@ export function DeepLinkImportDialog() {
                     </>
                   ) : (
                     <>
-                      {/* Codex 和 Gemini 使用通用 model 字段 */}
+                      {/* Codex 使用通用 model 字段 */}
                       {request.model && (
                         <div className="grid grid-cols-3 items-center gap-4">
                           <div className="font-medium text-sm text-muted-foreground">

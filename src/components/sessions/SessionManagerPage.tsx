@@ -82,17 +82,7 @@ const SESSION_LIST_VIEW_MODE_STORAGE_KEY =
 const SESSION_GROUP_EXPANSION_STORAGE_KEY =
   "cc-switch.sessionManager.groupExpansionState";
 
-type ProviderFilter =
-  | "all"
-  | "codex"
-  | "grokbuild"
-  | "claude"
-  | "opencode"
-  | "openclaw"
-  | "gemini"
-  | "hermes"
-  | "pi"
-  | "mcode";
+type ProviderFilter = "all" | "codex" | "claude" | "pi";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -559,11 +549,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   };
 
   const deletableFilteredSessions = useMemo(
-    () =>
-      filteredSessions.filter(
-        (session) =>
-          Boolean(session.sourcePath) && session.providerId !== "mcode",
-      ),
+    () => filteredSessions.filter((session) => Boolean(session.sourcePath)),
     [filteredSessions],
   );
 
@@ -576,11 +562,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   );
 
   const selectedDeletableSessions = useMemo(
-    () =>
-      selectedSessions.filter(
-        (session) =>
-          Boolean(session.sourcePath) && session.providerId !== "mcode",
-      ),
+    () => selectedSessions.filter((session) => Boolean(session.sourcePath)),
     [selectedSessions],
   );
 
@@ -616,9 +598,8 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const getGroupSelectionState = (
     groupSessions: SessionMeta[],
   ): GroupSelectionState => {
-    const selectableSessions = groupSessions.filter(
-      (session) =>
-        Boolean(session.sourcePath) && session.providerId !== "mcode",
+    const selectableSessions = groupSessions.filter((session) =>
+      Boolean(session.sourcePath),
     );
     const selectedCount = selectableSessions.filter((session) =>
       selectedSessionKeys.has(getSessionKey(session)),
@@ -637,7 +618,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   };
 
   const toggleSessionChecked = (session: SessionMeta, checked: boolean) => {
-    if (!session.sourcePath || session.providerId === "mcode") return;
+    if (!session.sourcePath) return;
     const key = getSessionKey(session);
     setSelectedSessionKeys((current) => {
       const next = new Set(current);
@@ -654,9 +635,8 @@ export function SessionManagerPage({ appId }: { appId: string }) {
     groupSessions: SessionMeta[],
     checked: boolean,
   ) => {
-    const selectableSessions = groupSessions.filter(
-      (session) =>
-        Boolean(session.sourcePath) && session.providerId !== "mcode",
+    const selectableSessions = groupSessions.filter((session) =>
+      Boolean(session.sourcePath),
     );
     if (selectableSessions.length === 0) return;
 
@@ -715,7 +695,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
         selectionMode={selectionMode}
         searchQuery={search}
         isChecked={selectedSessionKeys.has(sessionKey)}
-        isCheckDisabled={!session.sourcePath || session.providerId === "mcode"}
+        isCheckDisabled={!session.sourcePath}
         onSelect={setSelectedKey}
         onToggleChecked={(checked) => toggleSessionChecked(session, checked)}
       />
@@ -1133,16 +1113,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 <span>Codex</span>
                               </div>
                             </SelectItem>
-                            <SelectItem value="grokbuild">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="grok"
-                                  name="grokbuild"
-                                  size={14}
-                                />
-                                <span>Grok Build</span>
-                              </div>
-                            </SelectItem>
                             <SelectItem value="claude">
                               <div className="flex items-center gap-2">
                                 <ProviderIcon
@@ -1153,37 +1123,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 <span>Claude Code</span>
                               </div>
                             </SelectItem>
-                            <SelectItem value="opencode">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="opencode"
-                                  name="opencode"
-                                  size={14}
-                                />
-                                <span>OpenCode</span>
-                              </div>
-                            </SelectItem>
-                            <SelectItem value="openclaw">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="openclaw"
-                                  name="openclaw"
-                                  size={14}
-                                />
-                                <span>OpenClaw</span>
-                              </div>
-                            </SelectItem>
-                            <SelectItem value="gemini">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="gemini"
-                                  name="gemini"
-                                  size={14}
-                                />
-                                <span>Gemini CLI</span>
-                              </div>
-                            </SelectItem>
-                            <SelectItem value="mcode">MiniMax Code</SelectItem>
                             <SelectItem value="pi">
                               <div className="flex items-center gap-2">
                                 <ProviderIcon icon="pi" name="pi" size={14} />
@@ -1618,9 +1557,7 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 setDeleteTargets([selectedSession])
                               }
                               disabled={
-                                !selectedSession.sourcePath ||
-                                selectedSession.providerId === "mcode" ||
-                                isDeleting
+                                !selectedSession.sourcePath || isDeleting
                               }
                             >
                               <Trash2 className="size-3.5" />

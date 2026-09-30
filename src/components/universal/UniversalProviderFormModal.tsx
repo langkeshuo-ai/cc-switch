@@ -52,7 +52,6 @@ export function UniversalProviderFormModal({
   // 应用启用状态
   const [claudeEnabled, setClaudeEnabled] = useState(true);
   const [codexEnabled, setCodexEnabled] = useState(true);
-  const [geminiEnabled, setGeminiEnabled] = useState(true);
 
   // 模型配置
   const [models, setModels] = useState<UniversalProviderModels>({});
@@ -73,7 +72,6 @@ export function UniversalProviderFormModal({
       setNotes(editingProvider.notes || "");
       setClaudeEnabled(editingProvider.apps.claude);
       setCodexEnabled(editingProvider.apps.codex);
-      setGeminiEnabled(editingProvider.apps.gemini);
       setModels(editingProvider.models || {});
 
       // 尝试匹配预设
@@ -92,7 +90,6 @@ export function UniversalProviderFormModal({
       setNotes("");
       setClaudeEnabled(defaultPreset.defaultApps.claude);
       setCodexEnabled(defaultPreset.defaultApps.codex);
-      setGeminiEnabled(defaultPreset.defaultApps.gemini);
       setModels(deepClone(defaultPreset.defaultModels));
     }
   }, [editingProvider, initialPreset, isOpen]);
@@ -105,7 +102,6 @@ export function UniversalProviderFormModal({
         setName(preset.name);
         setClaudeEnabled(preset.defaultApps.claude);
         setCodexEnabled(preset.defaultApps.codex);
-        setGeminiEnabled(preset.defaultApps.gemini);
         setModels(deepClone(preset.defaultModels));
       }
     },
@@ -114,7 +110,7 @@ export function UniversalProviderFormModal({
 
   // 更新模型配置
   const updateModel = useCallback(
-    (app: "claude" | "codex" | "gemini", field: string, value: string) => {
+    (app: "claude" | "codex", field: string, value: string) => {
       setModels((prev) => ({
         ...prev,
         [app]: {
@@ -172,19 +168,6 @@ requires_openai_auth = true`;
     };
   }, [codexEnabled, baseUrl, apiKey, models.codex]);
 
-  // 计算 Gemini 配置 JSON 预览
-  const geminiConfigJson = useMemo(() => {
-    if (!geminiEnabled) return null;
-    const model = models.gemini?.model || "gemini-2.5-pro";
-    return {
-      env: {
-        GOOGLE_GEMINI_BASE_URL: baseUrl,
-        GEMINI_API_KEY: apiKey,
-        GEMINI_MODEL: model,
-      },
-    };
-  }, [geminiEnabled, baseUrl, apiKey, models.gemini]);
-
   // 提交表单
   const handleSubmit = useCallback(() => {
     if (!name.trim() || !baseUrl.trim() || !apiKey.trim()) {
@@ -202,7 +185,6 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
-            gemini: geminiEnabled,
           },
           models,
         }
@@ -219,7 +201,6 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
-        gemini: geminiEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -237,7 +218,6 @@ requires_openai_auth = true`;
     notes,
     claudeEnabled,
     codexEnabled,
-    geminiEnabled,
     models,
     selectedPreset,
     onSave,
@@ -261,7 +241,6 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
-            gemini: geminiEnabled,
           },
           models,
         }
@@ -278,7 +257,6 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
-        gemini: geminiEnabled,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -295,7 +273,6 @@ requires_openai_auth = true`;
     notes,
     claudeEnabled,
     codexEnabled,
-    geminiEnabled,
     models,
     selectedPreset,
   ]);
@@ -504,16 +481,6 @@ requires_openai_auth = true`;
                 onCheckedChange={setCodexEnabled}
               />
             </div>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="flex items-center gap-2">
-                <ProviderIcon icon="gemini" name="Gemini" size={20} />
-                <span className="font-medium">Gemini CLI</span>
-              </div>
-              <Switch
-                checked={geminiEnabled}
-                onCheckedChange={setGeminiEnabled}
-              />
-            </div>
           </div>
         </div>
 
@@ -610,32 +577,10 @@ requires_openai_auth = true`;
               </div>
             </div>
           )}
-
-          {/* Gemini 模型 */}
-          {geminiEnabled && (
-            <div className="space-y-3 rounded-lg border p-4">
-              <div className="flex items-center gap-2 font-medium">
-                <ProviderIcon icon="gemini" name="Gemini" size={16} />
-                Gemini
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">
-                  {t("universalProvider.model", { defaultValue: "模型" })}
-                </Label>
-                <Input
-                  value={models.gemini?.model || ""}
-                  onChange={(e) =>
-                    updateModel("gemini", "model", e.target.value)
-                  }
-                  placeholder="gemini-2.5-pro"
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 配置 JSON 预览 */}
-        {isEditMode && (claudeEnabled || codexEnabled || geminiEnabled) && (
+        {isEditMode && (claudeEnabled || codexEnabled) && (
           <div className="space-y-4">
             <Label>
               {t("universalProvider.configJsonPreview", {
@@ -680,22 +625,6 @@ requires_openai_auth = true`;
                 />
               </div>
             )}
-
-            {/* Gemini JSON */}
-            {geminiConfigJson && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <ProviderIcon icon="gemini" name="Gemini" size={16} />
-                  Gemini
-                </div>
-                <JsonEditor
-                  value={JSON.stringify(geminiConfigJson, null, 2)}
-                  onChange={() => {}}
-                  height={140}
-                  darkMode={isDarkMode}
-                />
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -707,7 +636,7 @@ requires_openai_auth = true`;
           defaultValue: "同步统一供应商",
         })}
         message={t("universalProvider.syncConfirmDescription", {
-          defaultValue: `同步 "${name}" 将会覆盖 Claude、Codex 和 Gemini 中关联的供应商配置。确定要继续吗？`,
+          defaultValue: `同步 "${name}" 将会覆盖 Claude 和 Codex 中关联的供应商配置。确定要继续吗？`,
           name: name,
         })}
         confirmText={t("universalProvider.saveAndSync", {

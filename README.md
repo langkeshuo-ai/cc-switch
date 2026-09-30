@@ -16,7 +16,7 @@
 
 # CC Switch
 
-### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes Agent, Pi & MiniMax Code
+### The All-in-One Manager for Claude Code, Codex & Pi
 
 **Switch API providers in one click and manage MCP, Skills, and Prompts in one place — no more hand-editing JSON / TOML / YAML config files.**
 
@@ -230,11 +230,11 @@ TeamoRouter also offers enterprise features including centralized billing, team 
 
 ## Why CC Switch?
 
-AI coding tools like Claude Code, Codex, and Gemini CLI each have their own configuration format. Switching API providers means hand-editing JSON, TOML, YAML, or `.env` files, and MCP, Skills, and prompts have to be maintained separately in every tool.
+AI coding tools like Claude Code, Codex, and Pi each have their own configuration format. Switching API providers means hand-editing JSON, TOML, YAML, or `.env` files, and MCP, Skills, and prompts have to be maintained separately in every tool.
 
 **CC Switch** brings all of this into a single desktop app: pick a preset, enter your key, and switch in one click, without losing your existing configuration.
 
-- **One App, Ten Tools** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes, Pi, and MiniMax Code
+- **One App, Three Tools** — Claude Code, Codex, and Pi
 - **No More Manual Editing** — 90+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays
 - **Use GPT in Claude Code, Claude in Codex** — Built-in local routing automatically converts between Anthropic, OpenAI, and Gemini API formats, with automatic failover
 - **Centralized MCP, Skills & Prompts** — Add MCP servers and Skills once, then choose which tools to sync them to; prompts are maintained separately for each tool
@@ -303,9 +303,9 @@ Download the latest Linux build from the [Releases](../../releases) page:
 
 1. **Add Provider**: Click "Add New Provider" (the + button) in the toolbar → Choose a preset or create a custom configuration
 2. **Switch Provider**:
-   - Main UI: Select provider → Click "Enable" (for OpenCode, OpenClaw, Hermes, and MiniMax Code the button is "Add"; these four tools and Pi are coexist-mode tools, so you can add several providers at once)
-   - System Tray: Click provider name directly (Claude Code, Codex, Gemini CLI, and Grok Build only)
-3. **Takes Effect**: Claude Code needs no restart; for Codex, Gemini CLI, and Grok Build, restart your terminal or the CLI tool; for Claude Desktop, restart the app itself (see FAQ)
+   - Main UI: Select provider → Click "Enable" (Pi is a coexist-mode tool: you can keep several providers written to its own config at once)
+   - System Tray: Click provider name directly (Claude Code and Codex only)
+3. **Takes Effect**: Claude Code needs no restart; for Codex, restart your terminal or the CLI tool (see FAQ)
 4. **Back to Official Login**: Switch to the built-in official provider in the list (e.g. "Claude Official"), restart the tool, then follow its login/OAuth flow
 5. **Local Routing (optional)**: To use OpenAI- or Gemini-format providers in Claude Code, or to use Claude in Codex, you need to turn on local routing. In "Settings → Routing → Local Routing", turn on "Routing Master Switch", then turn on the tool you need under "Routing Enabled". To toggle it right from the top of the main page, turn on "Show Routing Toggle on Main Page"
 
@@ -314,10 +314,10 @@ Download the latest Linux build from the [Releases](../../releases) page:
 - **MCP**: Click "MCP Management" → Add servers via templates or custom config (or "Import Existing") → Toggle sync for each tool
 - **Prompts**: Click "Prompts" → Create prompts with the Markdown editor → Enable one to write it to that tool's prompt file
 - **Skills**: Click "Skills" → "Discover Skills" → Search skills.sh or browse GitHub repos → One-click install to supported tools
-- **Projects**: On the Claude Code, Claude Desktop, or Codex page, open the project switcher at the top of the main page → "New project" to save the current configuration; later, pick it from the switcher to switch the whole setup at once
+- **Projects**: On the Claude Code or Codex page, open the project switcher at the top of the main page → "New project" to save the current configuration; later, pick it from the switcher to switch the whole setup at once
 - **Sessions**: Click "Session Manager" → Browse, search, and restore each tool's conversation history
 
-> **Note**: On first launch, CC Switch automatically imports your existing Claude Code, Codex, Gemini CLI, and Grok Build configuration as a provider named `default` and adds an official provider for each of these tools and Claude Desktop, so nothing you had configured is lost.
+> **Note**: On first launch, CC Switch automatically imports your existing Claude Code and Codex configuration as a provider named `default` and adds an official provider for each of these tools, so nothing you had configured is lost.
 
 For detailed guides on every feature, check out the **[User Manual](docs/user-manual/en/README.md)**, covering provider management, MCP/Prompts/Skills, local routing & failover, and more.
 
@@ -330,35 +330,26 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 | Tool | Providers | Local Routing | Tray Switching | MCP | Skills | Prompts | Sessions | Usage Stats |
 | --- | --- | :---: | :---: | :---: | :---: | --- | :---: | :---: |
 | Claude Code | Switch | ✓ | ✓ | ✓ | ✓ | CLAUDE.md | ✓ | ✓ |
-| Claude Desktop | Switch | Model Mapping only | – | – | – | – | – | Model Mapping only |
 | Codex | Switch | ✓ | ✓ | ✓ | ✓ | AGENTS.md | ✓ | ✓ |
-| Gemini CLI | Switch | ✓ | ✓ | ✓ | ✓ | GEMINI.md | ✓ | ✓ |
-| Grok Build | Switch | ✓ | ✓ | ✓ | ✓ | AGENTS.md | ✓ | ✓ |
-| OpenCode | Coexist | – | – | ✓ | ✓ | AGENTS.md | ✓ | ✓ |
-| OpenClaw | Coexist | – | – | – | – | Workspace editor | ✓ | – |
-| Hermes | Coexist | – | – | ✓ | ✓ | Memory | ✓ | – |
 | Pi | Coexist | – | – | – | ✓ | AGENTS.md, SYSTEM.md, prompt templates | ✓ | ✓ |
-| MiniMax Code | Coexist | – | – | ✓ | ✓ | AGENTS.md | ✓ | ✓ |
 
 - **Switch**: only one provider is active at a time; **Coexist**: multiple providers are written into the tool's own config at the same time, and you pick one inside the tool.
-- **Local Routing**: CC Switch forwards requests on your machine and converts API formats; see [Local Routing & Failover](#local-routing--failover) below. Claude Desktop providers can use "Direct" or "Model Mapping"; with "Model Mapping", requests go through local routing.
-- **Sessions**: Browse and search conversation history, and copy a resume command to continue a conversation (resuming OpenClaw and Hermes sessions isn't supported yet). To view Hermes sessions, select "All" in the Session Manager.
+- **Local Routing**: CC Switch forwards requests on your machine and converts API formats; see [Local Routing & Failover](#local-routing--failover) below.
+- **Sessions**: Browse and search conversation history, and copy a resume command to continue a conversation.
 - **Usage Stats**: Without local routing, usage is collected from each tool's local session logs; requests that go through local routing are counted as well.
-- The MCP, Skills, Prompts, and Sessions panels opened from the Claude Desktop page apply to Claude Code.
 
 ### Provider Management
 
 - **90+ provider presets** — Pick a preset and enter your key to add a provider, or create a custom configuration
-- **Projects** — Save Claude Code's or Codex's current provider, MCP, Skills, and prompt files as a project (for Claude Desktop, only the provider is saved), then switch the whole setup in one click from the project switcher at the top of the main page or from the tray; when you switch to another project, the current state is automatically saved back to the previous project
-- **OAuth Authentication Center (Beta)** — Sign in to multiple GitHub Copilot, ChatGPT, and xAI (Grok) accounts in "Settings → Auth" and use those subscriptions as providers in Claude Code, Claude Desktop, and Codex (everything except Codex's OpenAI Official requires local routing). Using a subscription outside the official client may violate the vendor's terms of service; assess the risk yourself
-- **Third-party providers for Claude Desktop** — Connect directly to Anthropic-compatible endpoints; for non-Claude models, choose "Model Mapping" to map tiers like Sonnet, Opus, and Haiku to the provider's actual models through local routing
-- **Universal providers** — One config syncs to Claude Code, Codex, and Gemini CLI
-- One-click switching, system tray quick switching (Claude Code, Codex, Gemini CLI, Grok Build), drag-and-drop sorting, import/export
+- **Projects** — Save Claude Code's or Codex's current provider, MCP, Skills, and prompt files as a project, then switch the whole setup in one click from the project switcher at the top of the main page or from the tray; when you switch to another project, the current state is automatically saved back to the previous project
+- **OAuth Authentication Center (Beta)** — Sign in to multiple GitHub Copilot, ChatGPT, and xAI (Grok) accounts in "Settings → Auth" and use those subscriptions as providers in Claude Code and Codex (everything except Codex's OpenAI Official requires local routing). Using a subscription outside the official client may violate the vendor's terms of service; assess the risk yourself
+- **Universal providers** — One config syncs to Claude Code and Codex
+- One-click switching, system tray quick switching (Claude Code and Codex), drag-and-drop sorting, import/export
 
 ### Local Routing & Failover
 
-- **API format conversion** — Local routing converts requests between Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, and Gemini Native: Claude Code and Claude Desktop can use OpenAI- or Gemini-format providers, and Codex and Grok Build can use Chat Completions or Anthropic Messages providers
-- **Per-tool toggle** — Local routing can be turned on separately for Claude Code, Codex, Gemini CLI, and Grok Build; once it's on, switching providers takes effect immediately for subsequent requests (Codex and Grok Build may still need a restart if the switch changes the model)
+- **API format conversion** — Local routing converts requests between Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, and Gemini Native: Claude Code can use OpenAI- or Gemini-format providers, and Codex can use Chat Completions or Anthropic Messages providers
+- **Per-tool toggle** — Local routing can be turned on separately for Claude Code and Codex; once it's on, switching providers takes effect immediately for subsequent requests (Codex may still need a restart if the switch changes the model)
 - **Auto-failover** — Configure a failover queue for each tool; when a request fails, CC Switch automatically moves on to the next provider in the queue, backed by a circuit breaker and provider health monitoring
 - **Rectifier** — Automatically fixes certain requests that some upstreams can't handle (e.g. Thinking signatures, or falling back when images aren't supported)
 - Official providers (e.g. Claude Official) can't go through local routing (except Codex's OpenAI Official)
@@ -367,7 +358,7 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 ### MCP, Prompts & Skills
 
 - **Unified MCP panel** — Manage all MCP servers in one place, choose which tools to sync each one to, import existing configs from each tool, and import via Deep Link
-- **Prompts** — A per-tool prompt library with a Markdown editor; enabling a prompt writes it to that tool's prompt file (CLAUDE.md / AGENTS.md / GEMINI.md), and the file's existing content is saved back to the library first, so nothing is lost. Pi can also edit SYSTEM.md, APPEND_SYSTEM.md, and prompt templates
+- **Prompts** — A per-tool prompt library with a Markdown editor; enabling a prompt writes it to that tool's prompt file (CLAUDE.md / AGENTS.md), and the file's existing content is saved back to the library first, so nothing is lost. Pi can also edit SYSTEM.md, APPEND_SYSTEM.md, and prompt templates
 - **Skills** — Search skills.sh, or install in one click from GitHub repos or ZIP files; check for updates and update all in one click; sync to each tool via symlinks or file copies; you can optionally store them in `~/.agents/skills`
 - All three panels support search, and MCP and Skills can also be enabled or disabled all at once per tool
 
@@ -377,11 +368,9 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 - **Quotas & balances** — Provider cards and the tray show official subscription quotas (Claude, ChatGPT, Gemini, SuperGrok), Coding Plan 5-hour / weekly / monthly quotas (Kimi, Zhipu GLM, MiniMax, Volcengine Ark, etc.), and account balances (DeepSeek, OpenRouter, SiliconFlow, etc.); some need to be turned on first via "Configure usage query" on the provider card, and for other providers you can write a custom usage script
 - **Custom pricing** — Set per-model prices, or import them from models.dev
 
-### Session Manager & Workspace
+### Session Manager
 
 - **Session Manager** — Browse and search each tool's conversation history, and copy a resume command to continue a conversation; on macOS you can resume in a terminal with one click
-- **Workspace editor** (OpenClaw) — Edit agent files (AGENTS.md, SOUL.md, etc.) and daily memory
-- **Memory** (Hermes) — Edit Hermes's MEMORY.md and USER.md
 
 ### System & Platform
 
@@ -396,7 +385,7 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 <details>
 <summary><strong>Which AI tools does CC Switch support?</strong></summary>
 
-CC Switch supports ten tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, **Hermes**, **Pi**, **MiniMax Code**. Each tool has dedicated provider presets and configuration management; see [Supported Features by Tool](#supported-features-by-tool) for what each one supports.
+CC Switch supports three tools: **Claude Code**, **Codex**, and **Pi**. Each tool has dedicated provider presets and configuration management; see [Supported Features by Tool](#supported-features-by-tool) for what each one supports.
 
 </details>
 
@@ -406,16 +395,15 @@ CC Switch supports ten tools: **Claude Code**, **Claude Desktop**, **Codex**, **
 It depends on the tool:
 
 - **Claude Code**: supports hot-switching of provider data — no restart needed.
-- **Codex, Gemini CLI, Grok Build**: restart your terminal or the CLI tool for changes to take effect (CC Switch reminds you after switching Codex or Grok Build). With local routing on, requests go to the new provider immediately, but Codex and Grok Build may still need a restart if the switch changes the model.
-- **Claude Desktop**: fully quit and reopen Claude Desktop; when using "Model Mapping", also keep CC Switch running.
-- **OpenCode, OpenClaw, Hermes, Pi, MiniMax Code**: these are coexist-mode tools — clicking "Add" ("Enable" for Pi) writes the provider into the tool's own config alongside the others; you then pick the model you want inside the tool.
+- **Codex**: restart your terminal or the CLI tool for changes to take effect (CC Switch reminds you after switching Codex). With local routing on, requests go to the new provider immediately, but Codex may still need a restart if the switch changes the model.
+- **Pi**: this is a coexist-mode tool — clicking "Enable" writes the provider into the tool's own config alongside the others; you then pick the model you want inside the tool.
 
 </details>
 
 <details>
 <summary><strong>My plugin configuration disappeared after switching providers — what happened?</strong></summary>
 
-CC Switch uses a "Common Config Snippet" (available for Claude Code, Codex, and Gemini CLI) to share settings other than the API key, endpoint, and model — such as plugins, hooks, and environment variables — across providers. Edit a provider → click "Edit Common Config" → "Extract from Editor" to save these shared parts into the snippet; when creating a new provider, keep "Apply Common Config" checked (enabled by default) and the snippet is merged into the new provider's config. For Claude Code and Codex providers with "Apply Common Config" checked, CC Switch automatically re-extracts the shared parts from the current config when you switch away, so plugins you install inside the tool carry over to the next provider. Your original configuration is preserved in the default provider imported the first time you ran the app.
+CC Switch uses a "Common Config Snippet" (available for Claude Code and Codex) to share settings other than the API key, endpoint, and model — such as plugins, hooks, and environment variables — across providers. Edit a provider → click "Edit Common Config" → "Extract from Editor" to save these shared parts into the snippet; when creating a new provider, keep "Apply Common Config" checked (enabled by default) and the snippet is merged into the new provider's config. For Claude Code and Codex providers with "Apply Common Config" checked, CC Switch automatically re-extracts the shared parts from the current config when you switch away, so plugins you install inside the tool carry over to the next provider. Your original configuration is preserved in the default provider imported the first time you ran the app.
 
 </details>
 
@@ -424,14 +412,14 @@ CC Switch uses a "Common Config Snippet" (available for Claude Code, Codex, and 
 
 CC Switch follows a "minimal intrusion" design principle — even if you uninstall the app, your tools will continue to work normally.
 
-So for tools that use one active provider at a time (Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build), the system always keeps one active configuration, because deleting all configurations would make the corresponding tool unusable. Coexist-mode tools (OpenCode, OpenClaw, Hermes, Pi, and MiniMax Code) aren't subject to this restriction — you can delete any provider directly. If you rarely use a tool, you can hide it in Settings. To switch back to official login, see the next question.
+So for tools that use one active provider at a time (Claude Code, Codex), the system always keeps one active configuration, because deleting all configurations would make the corresponding tool unusable. Coexist-mode tools (Pi) aren't subject to this restriction — you can delete any provider directly. If you rarely use a tool, you can hide it in Settings. To switch back to official login, see the next question.
 
 </details>
 
 <details>
 <summary><strong>How do I switch back to official login?</strong></summary>
 
-In CC Switch, the provider lists for Claude Code, Claude Desktop, Codex, Gemini CLI, and Grok Build each include a built-in official provider (**Claude Official**, **Claude Desktop Official**, **OpenAI Official**, **Google Official**, **Grok Official**); if you deleted it, add it back from the presets. After switching to the official provider, follow the tool's own login flow (e.g. `/login` in Claude Code, `codex login` for Codex), and then you can freely switch between the official provider and third-party providers.
+In CC Switch, the provider lists for Claude Code and Codex each include a built-in official provider (**Claude Official**, **OpenAI Official**); if you deleted it, add it back from the presets. After switching to the official provider, follow the tool's own login flow (e.g. `/login` in Claude Code, `codex login` for Codex), and then you can freely switch between the official provider and third-party providers.
 
 For Codex, you can also sign in to multiple ChatGPT accounts inside CC Switch via "Sign in with ChatGPT" and choose an "Account to use" for each **OpenAI Official** card, so switching between multiple Plus, Pro, or Team accounts takes one click; cards set to "Follow Codex login" keep using the Codex CLI's own login.
 
@@ -453,7 +441,7 @@ In "Settings → Usage Statistics → Request Logs" you can see "requested model
 
 Yes, but you need to turn on local routing. When editing the provider, set "Upstream Format" under "Advanced Options" to match the provider's API: choose "OpenAI Chat Completions" for services that only offer a Chat Completions endpoint (as many local model servers do), "OpenAI Responses API" for services that offer a Responses endpoint, and "Gemini Native generateContent" for Gemini. Then turn on local routing for Claude Code as described in step 5 of [Quick Start](#quick-start). Choosing the wrong format or not turning on local routing usually results in a 404 or 405 error.
 
-Conversely, choosing "Anthropic Messages" as the "Upstream Format" in Codex or Grok Build lets you use Claude-format providers; this also requires local routing. See [Using GPT in Claude Code](docs/guides/claude-codex-routing-guide-en.md) and [Using Claude in Codex](docs/guides/codex-claude-routing-guide-en.md) for details.
+Conversely, choosing "Anthropic Messages" as the "Upstream Format" in Codex lets you use Claude-format providers; this also requires local routing. See [Using GPT in Claude Code](docs/guides/claude-codex-routing-guide-en.md) and [Using Claude in Codex](docs/guides/codex-claude-routing-guide-en.md) for details.
 
 </details>
 
@@ -484,7 +472,7 @@ After you change "CC Switch Configuration Directory" in "Settings → Advanced �
 <details>
 <summary><strong>How do I manage tools inside WSL on Windows?</strong></summary>
 
-CC Switch doesn't detect WSL automatically. In "Settings → Advanced → Configuration Directory → Configuration Directory Override (Advanced)", change the directory for the corresponding tool to a path inside WSL, e.g. `\\wsl.localhost\Ubuntu\home\<user>\.claude`; after you save, CC Switch reads and writes the config inside WSL (supported for Claude Code, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes, and Pi). Once this is set, the "About" page also detects and upgrades that tool in the corresponding WSL distribution.
+CC Switch doesn't detect WSL automatically. In "Settings → Advanced → Configuration Directory → Configuration Directory Override (Advanced)", change the directory for the corresponding tool to a path inside WSL, e.g. `\\wsl.localhost\Ubuntu\home\<user>\.claude`; after you save, CC Switch reads and writes the config inside WSL (supported for Claude Code, Codex, and Pi). Once this is set, the "About" page also detects and upgrades that tool in the corresponding WSL distribution.
 
 Note: local routing writes `127.0.0.1` as the address into the config. In WSL2's default NAT networking mode, `127.0.0.1` inside WSL can't reach local routing on Windows; switch WSL to mirrored networking mode instead.
 

@@ -214,15 +214,8 @@ const UnifiedSkillsPanel = React.forwardRef<
   const enabledCounts = useMemo(() => {
     const counts = {
       claude: 0,
-      "claude-desktop": 0,
       codex: 0,
-      gemini: 0,
-      grokbuild: 0,
-      opencode: 0,
-      openclaw: 0,
-      hermes: 0,
       pi: 0,
-      mcode: 0,
     };
     if (!skills) return counts;
     skills.forEach((skill) => {
@@ -1044,13 +1037,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
         {
           claude: skill.foundIn.includes("claude"),
           codex: skill.foundIn.includes("codex"),
-          gemini: skill.foundIn.includes("gemini"),
-          grokbuild: skill.foundIn.includes("grokbuild"),
-          opencode: skill.foundIn.includes("opencode"),
-          openclaw: false,
-          hermes: skill.foundIn.includes("hermes"),
           pi: false,
-          mcode: skill.foundIn.includes("mcode"),
         },
       ]),
     ),
@@ -1073,13 +1060,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
         apps: selectedApps[directory] ?? {
           claude: false,
           codex: false,
-          gemini: false,
-          grokbuild: false,
-          opencode: false,
-          openclaw: false,
-          hermes: false,
           pi: false,
-          mcode: false,
         },
       })),
     );
@@ -1120,11 +1101,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
                         selectedApps[skill.directory] ?? {
                           claude: false,
                           codex: false,
-                          gemini: false,
-                          grokbuild: false,
-                          opencode: false,
-                          openclaw: false,
-                          hermes: false,
+                          pi: false,
                         }
                       }
                       onToggle={(app, enabled) => {
@@ -1134,11 +1111,7 @@ const ImportSkillsDialog: React.FC<ImportSkillsDialogProps> = ({
                             ...(prev[skill.directory] ?? {
                               claude: false,
                               codex: false,
-                              gemini: false,
-                              grokbuild: false,
-                              opencode: false,
-                              openclaw: false,
-                              hermes: false,
+                              pi: false,
                             }),
                             [app]: enabled,
                           },

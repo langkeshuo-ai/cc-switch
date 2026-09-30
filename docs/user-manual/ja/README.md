@@ -1,6 +1,6 @@
 # CC Switch ユーザーマニュアル
 
-> Claude Code / Claude Desktop / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code オールインワンアシスタント
+> Claude Code / Codex / Pi オールインワンアシスタント
 
 ## 目次構成
 
@@ -19,15 +19,13 @@
 │   ├── 2.2 プロバイダーの切り替え
 │   ├── 2.3 プロバイダーの編集
 │   ├── 2.4 並べ替えと複製
-│   ├── 2.5 使用量クエリ
-│   └── 2.6 Claude Desktop
+│   └── 2.5 使用量クエリ
 │
 ├── 3. 拡張機能
 │   ├── 3.1 MCP サーバー管理
 │   ├── 3.2 Prompts プロンプト管理
 │   ├── 3.3 Skills スキル管理
-│   ├── 3.4 セッションマネージャー
-│   └── 3.5 ワークスペースとメモリー
+│   └── 3.4 セッションマネージャー
 │
 ├── 4. ローカルルーティングと高可用性
 │   ├── 4.1 ローカルルーティングサービス
@@ -73,7 +71,6 @@
 | [3.2-prompts.md](./3-extensions/3.2-prompts.md) | プリセットの作成、有効化の切り替え、スマートバックフィル |
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | スキルの発見、インストール・アンインストール、リポジトリ管理 |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | セッションマネージャー：閲覧、検索、再開、削除 |
-| [3.5-workspace.md](./3-extensions/3.5-workspace.md) | ワークスペースファイルとデイリーメモリー（OpenClaw） |
 
 ### 4. ローカルルーティングと高可用性
 
@@ -110,7 +107,7 @@
 
 ### 最近の主な変更
 
-- **管理対象アプリの追加**：Grok Build（v3.18.0）、Pi（v3.20.0）、MiniMax Code（v3.20.4）が加わり、管理対象アプリは計 10 個になりました — 詳細は [1.1 ソフトウェア紹介](./1-getting-started/1.1-introduction.md)
+- **管理対象アプリに Pi を追加**（v3.20.0）：CC Switch は Claude Code、Codex、Pi の 3 つのアプリを管理します — 詳細は [1.1 ソフトウェア紹介](./1-getting-started/1.1-introduction.md)
 - **Codex 公式プリセットがネイティブ Responses 直結に**：DeepSeek、Zhipu GLM（v3.20.2）、Kimi（v3.20.3）などは、プロトコル変換のためにローカルルーティングを有効にする必要がなくなりました — 詳細は [2.1 プロバイダーの追加](./2-providers/2.1-add.md)
 - **Codex の切り替えは config.toml のみに書き込み**：サードパーティの API Key は `auth.json` に書き込まれなくなりました（v3.20.1）— 詳細は [1.5 個人設定 → Codex アプリ拡張](./1-getting-started/1.5-settings.md#codex-アプリ拡張)
 - **「上流フォーマット」が「ローカルルーティングが必要」トグルに代わりました**（v3.16.5）— 詳細は [2.1 プロバイダーの追加](./2-providers/2.1-add.md#codex--grok-build-の上流フォーマットとモデルマッピング)

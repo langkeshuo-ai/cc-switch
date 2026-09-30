@@ -92,10 +92,6 @@ const createSettingsFormMock = (overrides: Record<string, unknown> = {}) => ({
     skipClaudeOnboarding: true,
     claudeConfigDir: "/claude",
     codexConfigDir: "/codex",
-    geminiConfigDir: "/gemini",
-    opencodeConfigDir: "/opencode",
-    openclawConfigDir: "/openclaw",
-    hermesConfigDir: "/hermes",
     piConfigDir: "/pi",
     language: "zh",
   },
@@ -166,10 +162,6 @@ describe("useSettings hook", () => {
       skipClaudeOnboarding: true,
       claudeConfigDir: "/server/claude",
       codexConfigDir: "/server/codex",
-      geminiConfigDir: "/server/gemini",
-      opencodeConfigDir: "/server/opencode",
-      openclawConfigDir: "/server/openclaw",
-      hermesConfigDir: "/server/hermes",
       piConfigDir: "/server/pi",
       language: "zh",
     };
@@ -262,9 +254,7 @@ describe("useSettings hook", () => {
       enableClaudePluginIntegration: false,
       claudeConfigDir: "/server/claude",
       codexConfigDir: undefined,
-      geminiConfigDir: "/server/gemini",
-      opencodeConfigDir: "/server/opencode",
-      openclawConfigDir: "/server/openclaw",
+      piConfigDir: "/server/pi",
       language: "en",
     };
     useSettingsQueryMock.mockReturnValue({
@@ -277,7 +267,7 @@ describe("useSettings hook", () => {
         ...serverSettings,
         claudeConfigDir: "  /custom/claude  ",
         codexConfigDir: "   ",
-        openclawConfigDir: "  /custom/openclaw  ",
+        piConfigDir: "  /custom/pi  ",
         language: "en",
         enableClaudePluginIntegration: true, // 状态从 false 变为 true
       },
@@ -301,7 +291,7 @@ describe("useSettings hook", () => {
     const payload = mutateAsyncMock.mock.calls[0][0] as Settings;
     expect(payload.claudeConfigDir).toBe("/custom/claude");
     expect(payload.codexConfigDir).toBeUndefined();
-    expect(payload.openclawConfigDir).toBe("/custom/openclaw");
+    expect(payload.piConfigDir).toBe("/custom/pi");
     expect(payload.language).toBe("en");
     expect(setAppConfigDirOverrideMock).toHaveBeenCalledWith("/override/app");
     // 状态改变，应该调用 API

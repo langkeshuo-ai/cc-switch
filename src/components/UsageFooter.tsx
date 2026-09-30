@@ -14,7 +14,7 @@ interface UsageFooterProps {
   appId: AppId;
   usageEnabled: boolean; // 是否启用了用量查询
   isCurrent: boolean; // 是否为当前激活的供应商
-  isInConfig?: boolean; // OpenCode: 是否已添加到配置
+  isInConfig?: boolean; // Pi: 是否已添加到配置
   inline?: boolean; // 是否内联显示（在按钮左侧）
 }
 

@@ -84,7 +84,7 @@ export const providersApi = {
   },
 
   /**
-   * Remove provider from live config only (for additive mode apps like OpenCode)
+   * Remove provider from live config only (for additive mode apps like Pi)
    * Does NOT delete from database - provider remains in the list
    */
   async removeFromLiveConfig(id: string, appId: AppId): Promise<boolean> {

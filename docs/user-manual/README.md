@@ -1,6 +1,6 @@
 # CC Switch User Manual / 用户手册 / ユーザーマニュアル
 
-> Claude Code / Claude Desktop / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes
+> Claude Code / Codex / Pi
 
 ## Language / 语言 / 言語
 

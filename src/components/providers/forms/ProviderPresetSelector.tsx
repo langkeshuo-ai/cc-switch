@@ -448,7 +448,7 @@ export function ProviderPresetSelector({
               onClick={() => onUniversalPresetSelect(preset)}
               className="inline-flex items-center justify-start gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors bg-accent text-muted-foreground hover:bg-accent/80 relative w-full"
               title={t("universalProvider.hint", {
-                defaultValue: "跨应用统一配置，自动同步到 Claude/Codex/Gemini",
+                defaultValue: "跨应用统一配置，自动同步到 Claude/Codex",
               })}
             >
               <ProviderIcon

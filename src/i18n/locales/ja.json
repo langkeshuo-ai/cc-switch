@@ -753,10 +753,6 @@
     "claudeConfigDirDescription": "Claude の設定ディレクトリ（settings.json）を上書きします。カスタムディレクトリでは .claude.json（MCP）をその中に保存し、既定の ~/.claude では Claude Code の既定どおり ~/.claude.json を使います。",
     "codexConfigDir": "Codex 設定ディレクトリ",
     "codexConfigDirDescription": "Codex の設定ディレクトリを上書きします。",
-    "geminiConfigDir": "Gemini 設定ディレクトリ",
-    "geminiConfigDirDescription": "Gemini の設定ディレクトリ（.env）を上書きします。",
-    "grokConfigDir": "Grok Build 設定ディレクトリ",
-    "grokConfigDirDescription": "Grok Build の設定ディレクトリ（config.toml）を上書きします。",
     "piConfigDir": "Pi 設定ディレクトリ",
     "piConfigDirDescription": "Pi の設定ディレクトリ（models.json、指示ファイル、プロンプト、Skills、セッション）を上書きします。",
     "browsePlaceholderClaude": "例: /home/<your-username>/.claude",
@@ -776,7 +772,7 @@
     "github": "GitHub",
     "starPrompt": "CC Switch がお役に立てたなら、GitHub でスターをお願いします。私たちにとって大きな励みになります",
     "manualInstallCommands": "手動インストールコマンド",
-    "oneClickInstallHint": "Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code をインストールまたは更新",
+    "oneClickInstallHint": "Claude Code / Codex / Pi をインストールまたは更新",
     "localEnvCheck": "ローカル環境チェック",
     "updateAllTools": "すべて更新（{{count}}）",
     "currentVersion": "現在のバージョン",
@@ -1014,7 +1010,7 @@
   },
   "sessionManager": {
     "title": "セッション管理",
-    "subtitle": "Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi のセッションを管理",
+    "subtitle": "Claude Code / Codex / Pi のセッションを管理",
     "searchPlaceholder": "内容・ディレクトリ・ID で検索",
     "searchSessions": "セッションを検索",
     "providerFilterAll": "すべて",
@@ -1610,10 +1606,7 @@
       "all": "すべて",
       "claude": "Claude Code",
       "codex": "Codex",
-      "gemini": "Gemini",
-      "opencode": "OpenCode",
-      "pi": "Pi",
-      "mcode": "MiniMax Code"
+      "pi": "Pi"
     },
     "rawInputLabel": "原始",
     "sessionSync": {
@@ -2086,7 +2079,6 @@
     "switcherAriaLabel": "プロジェクト：{{name}}",
     "switcherTooltip": {
       "claude": "プロジェクト：Claude Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
-      "claude-desktop": "プロジェクト：Claude Desktop のプロバイダーをワンクリックで切り替え",
       "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
     },
     "none": "プロジェクトを使用しない",
@@ -2095,7 +2087,6 @@
     "createFromCurrent": "新規プロジェクト",
     "createDescription": {
       "claude": "Claude Code の現在のプロバイダー、MCP、Skills、メモリファイルをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
-      "claude-desktop": "Claude Desktop の現在のプロバイダーをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
     },
     "manage": "プロジェクトを管理…",
@@ -2117,47 +2108,6 @@
     "applyFailed": "プロジェクトの適用に失敗しました: {{detail}}",
     "applyWarnings": "プロジェクトを適用しました（警告 {{warningCount}} 件）：\n{{details}}",
     "clearSuccess": "プロジェクトを使用しない状態に切り替えました"
-  },
-  "workspace": {
-    "title": "ワークスペースファイル",
-    "manage": "ワークスペース",
-    "files": {
-      "agents": "エージェントの操作指示とルール",
-      "soul": "エージェントの人格とコミュニケーションスタイル",
-      "user": "ユーザープロファイルと設定",
-      "identity": "エージェントの名前とアバター",
-      "tools": "ローカルツールドキュメント",
-      "memory": "長期記憶と意思決定記録",
-      "heartbeat": "ハートビート実行チェックリスト",
-      "bootstrap": "初回実行ブートストラップ",
-      "boot": "ゲートウェイ再起動チェックリスト"
-    },
-    "editing": "{{filename}} を編集",
-    "saveSuccess": "保存しました",
-    "saveFailed": "保存に失敗しました",
-    "loadFailed": "読み込みに失敗しました",
-    "openDirectory": "ファイルマネージャーで開く",
-    "dailyMemory": {
-      "title": "デイリーメモリー",
-      "sectionTitle": "デイリーメモリー",
-      "cardTitle": "デイリーメモリーファイル",
-      "cardDescription": "デイリーメモリーの閲覧・管理",
-      "createToday": "メモリーを追加",
-      "empty": "デイリーメモリーファイルはまだありません",
-      "loadFailed": "デイリーメモリーファイルの読み込みに失敗しました",
-      "createFailed": "デイリーメモリーファイルの作成に失敗しました",
-      "deleteSuccess": "デイリーメモリーファイルを削除しました",
-      "deleteFailed": "デイリーメモリーファイルの削除に失敗しました",
-      "confirmDeleteTitle": "デイリーメモリーを削除",
-      "confirmDeleteMessage": "{{date}} のデイリーメモリーを削除しますか？この操作は取り消せません。",
-      "searchPlaceholder": "全文検索...",
-      "searchScopeHint": "すべてのデイリーメモリーを全文検索 ⌘F",
-      "searchCloseHint": "Escで閉じる",
-      "noSearchResults": "検索に一致するデイリーメモリーはありません。",
-      "searching": "検索中...",
-      "searchFailed": "検索に失敗しました",
-      "matchCount": "{{count}}件一致"
-    }
   },
   "env": {
     "warning": {
@@ -2764,9 +2714,6 @@
     "sevenDayFable": "Fable",
     "sevenDaySonnet": "7日間(Sonnet)",
     "thirtyDay": "30日間",
-    "geminiPro": "Pro",
-    "geminiFlash": "Flash",
-    "geminiFlashLite": "Flash Lite",
     "weeklyLimit": "週間",
     "monthly": "月間",
     "credits": "クレジット",

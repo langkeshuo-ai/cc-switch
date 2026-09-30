@@ -48,7 +48,6 @@ const createSettings = (
   enableClaudePluginIntegration: false,
   claudeConfigDir: "/claude/custom",
   codexConfigDir: "/codex/custom",
-  grokConfigDir: "/grok/custom",
   language: "zh",
   ...overrides,
 });

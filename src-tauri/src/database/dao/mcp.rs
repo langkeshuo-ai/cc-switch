@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension, Row};
 
 const MCP_SERVER_SELECT: &str =
-    "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex, enabled_gemini, enabled_grokbuild, enabled_opencode, enabled_hermes, enabled_mcode FROM mcp_servers";
+    "SELECT id, name, server_config, description, homepage, docs, tags, enabled_claude, enabled_codex FROM mcp_servers";
 
 fn row_to_mcp_server(row: &Row<'_>) -> rusqlite::Result<(String, McpServer)> {
     let id: String = row.get(0)?;
@@ -21,11 +21,6 @@ fn row_to_mcp_server(row: &Row<'_>) -> rusqlite::Result<(String, McpServer)> {
     let tags_str: String = row.get(6)?;
     let enabled_claude: bool = row.get(7)?;
     let enabled_codex: bool = row.get(8)?;
-    // 旧 schema 的 enabled_* 列保留读取但不使用（向后兼容）
-    let _enabled_gemini: bool = row.get(9)?;
-    let _enabled_grokbuild: bool = row.get(10)?;
-    let _enabled_opencode: bool = row.get(11)?;
-    let _enabled_hermes: bool = row.get(12)?;
 
     let server = serde_json::from_str(&server_config_str).unwrap_or_default();
     let tags = serde_json::from_str(&tags_str).unwrap_or_default();

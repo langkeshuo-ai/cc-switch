@@ -393,16 +393,6 @@ export interface Settings {
   claudeConfigDir?: string;
   // 覆盖 Codex 配置目录（可选）
   codexConfigDir?: string;
-  // 覆盖 Gemini 配置目录（可选）
-  geminiConfigDir?: string;
-  // 覆盖 Grok Build 配置目录（可选）
-  grokConfigDir?: string;
-  // 覆盖 OpenCode 配置目录（可选）
-  opencodeConfigDir?: string;
-  // 覆盖 OpenClaw 配置目录（可选）
-  openclawConfigDir?: string;
-  // 覆盖 Hermes 配置目录（可选）
-  hermesConfigDir?: string;
   // 覆盖 Pi agent 配置目录（可选）
   piConfigDir?: string;
 
@@ -411,8 +401,6 @@ export interface Settings {
   currentProviderClaude?: string;
   // 当前 Codex 供应商 ID（优先于数据库 is_current）
   currentProviderCodex?: string;
-  // 当前 Gemini 供应商 ID（优先于数据库 is_current）
-  currentProviderGemini?: string;
 
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -521,11 +509,10 @@ export interface McpStatus {
 // 统一供应商（Universal Provider）- 跨应用共享配置
 // ============================================================================
 
-// 统一供应商的应用启用状态
+// 统一供应商的应用启用状态（与后端 provider.rs 的 UniversalProviderApps 对应）
 export interface UniversalProviderApps {
   claude: boolean;
   codex: boolean;
-  gemini: boolean;
 }
 
 // Claude 模型配置
@@ -542,16 +529,10 @@ export interface CodexModelConfig {
   reasoningEffort?: string;
 }
 
-// Gemini 模型配置
-export interface GeminiModelConfig {
-  model?: string;
-}
-
-// 各应用的模型配置
+// 各应用的模型配置（与后端 provider.rs 的 UniversalProviderModels 对应）
 export interface UniversalProviderModels {
   claude?: ClaudeModelConfig;
   codex?: CodexModelConfig;
-  gemini?: GeminiModelConfig;
 }
 
 // 统一供应商（跨应用共享配置）

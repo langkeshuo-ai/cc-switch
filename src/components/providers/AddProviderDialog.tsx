@@ -335,7 +335,7 @@ export function AddProviderDialog({
           </TabsContent>
         </Tabs>
       ) : (
-        // OpenCode/OpenClaw: directly show form without tabs
+        // Pi: directly show form without tabs
         <ProviderForm
           appId={appId}
           submitLabel={t("common.add")}

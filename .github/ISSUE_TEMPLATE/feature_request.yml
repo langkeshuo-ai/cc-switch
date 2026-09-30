@@ -28,9 +28,7 @@ body:
       options:
         - Claude Code
         - Codex
-        - Gemini CLI
-        - OpenCode
-        - OpenClaw
+        - Pi
         - General / 通用
     validations:
       required: true

@@ -5046,7 +5046,7 @@ impl ProviderService {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
                         AppError::localized(
-                            "provider.openclaw.api_key.missing",
+                            "provider.pi.api_key.missing",
                             "缺少 API Key",
                             "API key is missing",
                         )

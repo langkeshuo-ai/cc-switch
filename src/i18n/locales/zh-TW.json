@@ -753,10 +753,6 @@
     "claudeConfigDirDescription": "覆寫 Claude 設定目錄 (settings.json)。真正自訂目錄會在目錄內存放 Claude MCP 的 .claude.json；預設 ~/.claude 目錄仍使用 Claude 預設的 ~/.claude.json。",
     "codexConfigDir": "Codex 設定目錄",
     "codexConfigDirDescription": "覆寫 Codex 設定目錄。",
-    "geminiConfigDir": "Gemini 設定目錄",
-    "geminiConfigDirDescription": "覆寫 Gemini 設定目錄 (.env)。",
-    "grokConfigDir": "Grok Build 設定目錄",
-    "grokConfigDirDescription": "覆寫 Grok Build 設定目錄 (config.toml)。",
     "piConfigDir": "Pi 設定目錄",
     "piConfigDirDescription": "覆寫 Pi 設定目錄（models.json、指示檔案、提示、Skills 與工作階段）。",
     "browsePlaceholderClaude": "例如：/home/<您的帳號>/.claude",
@@ -777,7 +773,7 @@
     "starPrompt": "如果 CC Switch 幫到了你，請在 GitHub 點個 Star，這對我們意義重大",
     "manualInstallCommands": "手動安裝指令",
     "oneClickInstall": "一鍵安裝",
-    "oneClickInstallHint": "安裝或更新 Claude Code / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code",
+    "oneClickInstallHint": "安裝或更新 Claude Code / Codex / Pi",
     "localEnvCheck": "本地環境檢查",
     "updateAllTools": "全部更新（{{count}}）",
     "currentVersion": "目前版本",
@@ -1015,7 +1011,7 @@
   },
   "sessionManager": {
     "title": "工作階段管理",
-    "subtitle": "管理 Claude Code、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes 與 Pi 工作階段紀錄",
+    "subtitle": "管理 Claude Code、Codex 與 Pi 工作階段紀錄",
     "searchPlaceholder": "搜尋對話內容、目錄或 ID",
     "searchSessions": "搜尋工作階段",
     "providerFilterAll": "全部",
@@ -1611,10 +1607,7 @@
       "all": "全部",
       "claude": "Claude Code",
       "codex": "Codex",
-      "gemini": "Gemini",
-      "opencode": "OpenCode",
-      "pi": "Pi",
-      "mcode": "MiniMax Code"
+      "pi": "Pi"
     },
     "rawInputLabel": "原始",
     "sessionSync": {
@@ -2087,7 +2080,6 @@
     "switcherAriaLabel": "專案：{{name}}",
     "switcherTooltip": {
       "claude": "專案：一鍵切換 Claude Code 的供應商 / MCP / Skills / 記憶檔案",
-      "claude-desktop": "專案：一鍵切換 Claude Desktop 的供應商",
       "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案"
     },
     "none": "不使用專案",
@@ -2096,7 +2088,6 @@
     "createFromCurrent": "新建專案",
     "createDescription": {
       "claude": "把 Claude Code 目前的供應商、MCP、Skills、記憶檔案儲存為一個專案，之後可一鍵切換。",
-      "claude-desktop": "把 Claude Desktop 目前的供應商儲存為一個專案，之後可一鍵切換。",
       "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。"
     },
     "manage": "管理專案…",
@@ -2118,47 +2109,6 @@
     "applyFailed": "套用專案失敗: {{detail}}",
     "applyWarnings": "專案已套用，{{warningCount}} 條警告：\n{{details}}",
     "clearSuccess": "已切換為不使用專案"
-  },
-  "workspace": {
-    "title": "Workspace 檔案管理",
-    "manage": "Workspace",
-    "files": {
-      "agents": "Agent 操作指令和規則",
-      "soul": "Agent 人格和溝通風格",
-      "user": "使用者檔案和偏好",
-      "identity": "Agent 名稱和頭像",
-      "tools": "本地工具文件",
-      "memory": "長期記憶和決策紀錄",
-      "heartbeat": "心跳執行清單",
-      "bootstrap": "首次執行儀式",
-      "boot": "閘道器重新啟動清單"
-    },
-    "editing": "編輯 {{filename}}",
-    "saveSuccess": "儲存成功",
-    "saveFailed": "儲存失敗",
-    "loadFailed": "讀取失敗",
-    "openDirectory": "在檔案管理員中開啟",
-    "dailyMemory": {
-      "title": "每日記憶",
-      "sectionTitle": "每日記憶",
-      "cardTitle": "每日記憶檔案",
-      "cardDescription": "瀏覽管理每日記憶",
-      "createToday": "新增記憶",
-      "empty": "暫無每日記憶檔案",
-      "loadFailed": "載入每日記憶檔案失敗",
-      "createFailed": "建立每日記憶檔案失敗",
-      "deleteSuccess": "每日記憶檔案已刪除",
-      "deleteFailed": "刪除每日記憶檔案失敗",
-      "confirmDeleteTitle": "刪除每日記憶",
-      "confirmDeleteMessage": "確定刪除 {{date}} 的每日記憶嗎？此操作不可復原。",
-      "searchPlaceholder": "搜尋全文內容...",
-      "searchScopeHint": "全文搜尋所有每日記憶 ⌘F",
-      "searchCloseHint": "Esc 關閉",
-      "noSearchResults": "沒有找到符合的每日記憶。",
-      "searching": "搜尋中...",
-      "searchFailed": "搜尋失敗",
-      "matchCount": "{{count}} 處相符"
-    }
   },
   "env": {
     "warning": {
@@ -2765,9 +2715,6 @@
     "sevenDayFable": "Fable",
     "sevenDaySonnet": "7 天 (Sonnet)",
     "thirtyDay": "30 天",
-    "geminiPro": "Pro",
-    "geminiFlash": "Flash",
-    "geminiFlashLite": "Flash Lite",
     "weeklyLimit": "每週",
     "monthly": "每月",
     "credits": "額度",

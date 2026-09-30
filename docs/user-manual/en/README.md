@@ -1,6 +1,6 @@
 # CC Switch User Manual
 
-> All-in-One Assistant for Claude Code / Claude Desktop / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code
+> All-in-One Assistant for Claude Code / Codex / Pi
 
 ## Table of Contents
 
@@ -19,15 +19,13 @@
 │   ├── 2.2 Switch Provider
 │   ├── 2.3 Edit Provider
 │   ├── 2.4 Sort & Duplicate
-│   ├── 2.5 Usage Query
-│   └── 2.6 Claude Desktop
+│   └── 2.5 Usage Query
 │
 ├── 3. Extensions
 │   ├── 3.1 MCP Server Management
 │   ├── 3.2 Prompts Management
 │   ├── 3.3 Skills Management
-│   ├── 3.4 Session Manager
-│   └── 3.5 Workspace & Memory
+│   └── 3.4 Session Manager
 │
 ├── 4. Local Routing & High Availability
 │   ├── 4.1 Local Routing Service
@@ -73,7 +71,6 @@
 | [3.2-prompts.md](./3-extensions/3.2-prompts.md) | Create presets, activate/switch, smart backfill |
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | Discover skills, install/uninstall, repository management |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | Session Manager: browse, search, resume, delete sessions |
-| [3.5-workspace.md](./3-extensions/3.5-workspace.md) | Workspace files and daily memory (OpenClaw) |
 
 ### 4. Local Routing & High Availability
 
@@ -110,7 +107,7 @@
 
 ### Recent Major Changes
 
-- **New managed apps**: Grok Build (v3.18.0), Pi (v3.20.0), and MiniMax Code (v3.20.4), bringing the total to 10 managed apps — see [1.1 Introduction](./1-getting-started/1.1-introduction.md)
+- **Pi support added** (v3.20.0): CC Switch manages three apps — Claude Code, Codex, and Pi — see [1.1 Introduction](./1-getting-started/1.1-introduction.md)
 - **Official Codex presets now connect directly via native Responses**: DeepSeek, Zhipu GLM (v3.20.2), Kimi (v3.20.3), and others no longer need local routing for protocol conversion — see [2.1 Add Provider](./2-providers/2.1-add.md)
 - **Codex switching writes only config.toml**: third-party API keys are no longer written to `auth.json` (v3.20.1) — see [1.5 Personalization → Codex App Enhancements](./1-getting-started/1.5-settings.md#codex-app-enhancements)
 - **"Upstream Format" replaces the "Needs Local Routing" toggle** (v3.16.5) — see [2.1 Add Provider](./2-providers/2.1-add.md#upstream-format-and-model-mapping-for-codex--grok-build)

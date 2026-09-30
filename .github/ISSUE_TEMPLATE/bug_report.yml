@@ -49,9 +49,7 @@ body:
       options:
         - Claude Code
         - Codex
-        - Gemini CLI
-        - OpenCode
-        - OpenClaw
+        - Pi
         - Other / 其他
     validations:
       required: true

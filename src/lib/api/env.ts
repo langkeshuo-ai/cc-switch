@@ -7,7 +7,7 @@ import type { EnvConflict, BackupInfo } from "@/types/env";
 
 /**
  * 检查指定应用的环境变量冲突
- * @param appType 应用类型 ("claude" | "codex" | "gemini" | "grokbuild")
+ * @param appType 应用类型 ("claude" | "codex" | "pi")
  * @returns 环境变量冲突列表
  */
 export async function checkEnvConflicts(

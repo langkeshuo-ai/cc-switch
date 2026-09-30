@@ -1,6 +1,6 @@
 # CC Switch 用户手册
 
-> Claude Code / Claude Desktop / Codex / Gemini CLI / Grok Build / OpenCode / OpenClaw / Hermes / Pi / MiniMax Code 全方位辅助工具
+> Claude Code / Codex / Pi 全方位辅助工具
 
 ## 目录结构
 
@@ -19,15 +19,13 @@
 │   ├── 2.2 切换供应商
 │   ├── 2.3 编辑供应商
 │   ├── 2.4 排序与复制
-│   ├── 2.5 用量查询
-│   └── 2.6 Claude Desktop
+│   └── 2.5 用量查询
 │
 ├── 3. 扩展功能
 │   ├── 3.1 MCP 服务器管理
 │   ├── 3.2 Prompts 提示词管理
 │   ├── 3.3 Skills 技能管理
-│   ├── 3.4 会话管理器
-│   └── 3.5 工作区文件与每日记忆
+│   └── 3.4 会话管理器
 │
 ├── 4. 本地路由与高可用
 │   ├── 4.1 本地路由服务
@@ -73,7 +71,6 @@
 | [3.2-prompts.md](./3-extensions/3.2-prompts.md) | 创建预设、激活切换、智能回填 |
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | 发现技能、安装卸载、仓库管理 |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | 会话浏览、搜索过滤、恢复与删除 |
-| [3.5-workspace.md](./3-extensions/3.5-workspace.md) | OpenClaw 工作区文件、每日记忆 |
 
 ### 4. 本地路由与高可用
 
@@ -110,10 +107,10 @@
 
 ### 近期主要变化
 
-- **新增受管应用**：Grok Build（v3.18.0）、Pi（v3.20.0）、MiniMax Code（v3.20.4），受管应用共 10 个 — 详见 [1.1 软件介绍](./1-getting-started/1.1-introduction.md)
+- **新增受管应用 Pi**（v3.20.0）：CC Switch 管理三个应用 — Claude Code、Codex、Pi — 详见 [1.1 软件介绍](./1-getting-started/1.1-introduction.md)
 - **Codex 官方预设改为原生 Responses 直连**：DeepSeek、智谱 GLM（v3.20.2）和 Kimi（v3.20.3）等不再需要为协议转换开启本地路由— 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
 - **Codex 切换只写 config.toml**：第三方 API Key 不再写入 `auth.json`（v3.20.1）— 详见 [1.5 个性化配置 → Codex 应用增强](./1-getting-started/1.5-settings.md#codex-应用增强)
-- **「上游格式」取代「需要本地路由映射」开关**（v3.16.5）— 详见 [2.1 添加供应商](./2-providers/2.1-add.md#codex--grok-build-的上游格式与模型映射)
+- **「上游格式」取代「需要本地路由映射」开关**（v3.16.5）— 详见 [2.1 添加供应商](./2-providers/2.1-add.md#codex-的上游格式与模型映射)
 - **连通检测取代模型检查**：只探测地址是否可达，不再发送真实模型请求（v3.16.3）— 详见 [4.5 连通检测](./4-proxy/4.5-model-test.md)
 - **不开本地路由也能统计用量**：从各工具的本地会话记录导入 — 详见 [4.4 用量统计](./4-proxy/4.4-usage.md)
 - **云同步支持 S3 兼容存储** — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)

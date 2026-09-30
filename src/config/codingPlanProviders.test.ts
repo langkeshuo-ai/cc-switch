@@ -52,14 +52,11 @@ describe("detectCodingPlanProvider (MiniMax)", () => {
 });
 
 describe("extractBaseUrlForUsageDetection", () => {
-  it("reads env.ANTHROPIC_BASE_URL for claude and claude-desktop", () => {
+  it("reads env.ANTHROPIC_BASE_URL for claude", () => {
     const config = {
       env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
     };
     expect(extractBaseUrlForUsageDetection("claude", config)).toBe(
-      "https://opencode.ai/zen/go",
-    );
-    expect(extractBaseUrlForUsageDetection("claude-desktop", config)).toBe(
       "https://opencode.ai/zen/go",
     );
   });
@@ -73,12 +70,7 @@ describe("extractBaseUrlForUsageDetection", () => {
     ).toBe("https://opencode.ai/zen/go/v1");
   });
 
-  it("reads options.baseURL for opencode and baseUrl for pi", () => {
-    expect(
-      extractBaseUrlForUsageDetection("opencode", {
-        options: { baseURL: "https://opencode.ai/zen/go/v1" },
-      }),
-    ).toBe("https://opencode.ai/zen/go/v1");
+  it("reads baseUrl for pi", () => {
     expect(
       extractBaseUrlForUsageDetection("pi", {
         baseUrl: "https://opencode.ai/zen/go/v1",
@@ -88,7 +80,7 @@ describe("extractBaseUrlForUsageDetection", () => {
 
   it("returns null for unsupported apps", () => {
     expect(
-      extractBaseUrlForUsageDetection("gemini", {
+      extractBaseUrlForUsageDetection("unknown-app", {
         env: { GOOGLE_GEMINI_BASE_URL: "https://opencode.ai/zen/go" },
       }),
     ).toBeNull();
@@ -120,22 +112,8 @@ describe("injectCodingPlanUsageScript", () => {
       }),
     );
     expectInjected(
-      inject("claude-desktop", {
-        settingsConfig: {
-          env: { ANTHROPIC_BASE_URL: "https://opencode.ai/zen/go" },
-        },
-      }),
-    );
-    expectInjected(
       inject("codex", {
         settingsConfig: { config: OPENCODE_GO_CODEX_TOML },
-      }),
-    );
-    expectInjected(
-      inject("opencode", {
-        settingsConfig: {
-          options: { baseURL: "https://opencode.ai/zen/go/v1" },
-        },
       }),
     );
     expectInjected(
@@ -158,10 +136,10 @@ describe("injectCodingPlanUsageScript", () => {
     // 智谱/Kimi 等在其他 app 的自动注入未逐一验证，仅 OpenCode Go 放行
     const provider: TestProvider = {
       settingsConfig: {
-        options: { baseURL: "https://open.bigmodel.cn/api/anthropic" },
+        baseUrl: "https://open.bigmodel.cn/api/anthropic",
       },
     };
-    expect(inject("opencode", provider).meta?.usage_script).toBeUndefined();
+    expect(inject("pi", provider).meta?.usage_script).toBeUndefined();
   });
 
   it("never overwrites an existing usage_script", () => {
