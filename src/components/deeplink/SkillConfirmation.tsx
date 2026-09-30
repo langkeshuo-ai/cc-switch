@@ -69,7 +69,9 @@ export function SkillConfirmation({
         >
           {willEnable
             ? t("deeplink.skill.enabledBadge", { defaultValue: "已启用" })
-            : t("deeplink.skill.disabledBadge", { defaultValue: "未启用（需手动开启）" })}
+            : t("deeplink.skill.disabledBadge", {
+                defaultValue: "未启用（需手动开启）",
+              })}
         </span>
       </div>
 
