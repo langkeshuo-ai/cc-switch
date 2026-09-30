@@ -13,7 +13,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 未配置签名密钥时跳过整条签名发布链（release/publish-release/
+  # assemble-latest-json 会被 needs 传递跳过，run 显示绿色而非红叉）。
+  # 无签名产物通道：Build (unsigned) 工作流（tag push 自动触发）+ 手动建 Release。
+  signing-key-check:
+    name: Check Tauri signing key
+    runs-on: ubuntu-22.04
+    outputs:
+      has-key: ${{ steps.check.outputs.has-key }}
+    steps:
+      - name: Check
+        id: check
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "has-key=true" >> "$GITHUB_OUTPUT"
+            echo "✅ TAURI_SIGNING_PRIVATE_KEY 已配置，执行签名构建与自动发布"
+          else
+            echo "has-key=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️ TAURI_SIGNING_PRIVATE_KEY 未配置：跳过签名 Release 流水线。"
+            echo "   无签名产物请用 Build (unsigned) 工作流（tag push 自动触发），"
+            echo "   构建完成后手动创建 GitHub Release 上传产物。"
+          fi
+
   release:
+    needs: signing-key-check
+    if: needs.signing-key-check.outputs.has-key == 'true'
     runs-on: ${{ matrix.os }}
     environment: release
     strategy:
