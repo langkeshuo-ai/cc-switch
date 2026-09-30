@@ -1357,6 +1357,8 @@ fn push_unique_path(paths: &mut Vec<std::path::PathBuf>, path: std::path::PathBu
     }
 }
 
+// 仅 Windows 侧的 CLI 管理器搜索路径会用到（见 extend_windows_cli_manager_search_paths）。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn push_env_single_dir(paths: &mut Vec<std::path::PathBuf>, value: Option<std::ffi::OsString>) {
     if let Some(raw) = value {
         push_unique_path(paths, std::path::PathBuf::from(raw));

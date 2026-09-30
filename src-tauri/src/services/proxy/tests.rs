@@ -68,7 +68,9 @@ async fn use_ephemeral_proxy_port(db: &Arc<Database>) {
 
 async fn seed_distinct_app_proxy_configs(db: &Database) -> Vec<Value> {
     let mut configs = Vec::new();
-    for (app, retries) in [("claude", 6), ("codex", 0), ("gemini", 2), ("grokbuild", 3)] {
+    // 应用域已收敛到 claude/codex/pi（v22 起其余 app 的 proxy_config 行被清退，
+    // get_proxy_config_for_app 对已删应用会硬报错），用 pi 顶替原 gemini/grokbuild。
+    for (app, retries) in [("claude", 6), ("codex", 0), ("pi", 3)] {
         let mut config = db.get_proxy_config_for_app(app).await.unwrap();
         config.enabled = retries % 2 == 0;
         config.auto_failover_enabled = retries % 2 != 0;
