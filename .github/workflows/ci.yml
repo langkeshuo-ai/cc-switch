@@ -143,13 +143,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
             || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
 
-      - name: Cache Cargo registry and build
+      # registry/git 是与 toolchain 无关的源码缓存，key 不带 rustc 版本，避免
+      # toolchain 升级时连带作废（重下全部 crate）；target/ 由旧工具链编译的
+      # 产物不可复用，单独用带 rustc 版本的 key（升级即冷启动，属预期）。
+      - name: Cache Cargo registry
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v5
+        with:
+          path: src-tauri/target
           key: ${{ runner.os }}-cargo-rustc${{ steps.rustc-version.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-rustc${{ steps.rustc-version.outputs.version }}-
 
@@ -194,13 +203,22 @@ jobs:
           distribution: Ubuntu-24.04
           wsl-version: 2
 
-      - name: Cache Cargo registry and build
+      # registry/git 是与 toolchain 无关的源码缓存，key 不带 rustc 版本，避免
+      # toolchain 升级时连带作废（重下全部 crate）；target/ 由旧工具链编译的
+      # 产物不可复用，单独用带 rustc 版本的 key（升级即冷启动，属预期）。
+      - name: Cache Cargo registry
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v5
+        with:
+          path: src-tauri/target
           key: ${{ runner.os }}-cargo-rustc${{ steps.rustc-version.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-rustc${{ steps.rustc-version.outputs.version }}-
 
