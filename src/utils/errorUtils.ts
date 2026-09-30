@@ -1,4 +1,46 @@
 /**
+ * 后端 `format_structured_error` 产出的结构化错误荷载
+ * （`{"code","message"?,"context","suggestion"?}`）
+ */
+interface StructuredErrorPayload {
+  code: string;
+  message?: string;
+  context?: Record<string, string>;
+  suggestion?: string;
+}
+
+/**
+ * 尝试把结构化错误荷载解析成人读文案；拿不到人读文案时返回 null。
+ *
+ * 渐进式错误码：后端仍是 `Result<T, String>`，只是荷载换成
+ * `{"code","message"?,"context","suggestion"?}` 的 JSON。
+ *
+ * 只有携带 `message` 的荷载才会被展开——这些正是本轮新增的 provider 切换 /
+ * 代理接管域。skill 域的历史荷载不含 `message`（见 `error.rs::format_skill_error`），
+ * 对它们返回 null，`extractErrorMessage` 因而原样回退原文：既保持既有行为不变，
+ * 也不会把 `code`/`suggestion` 这类机器码当文案丢给用户、更不会在日志里丢掉
+ * `context`。需要按错误码做 i18n 的调用方请直接用 `parseSkillError`
+ * （skills 域）或读取原始串自行映射。
+ */
+export const parseStructuredErrorMessage = (raw: string): string | null => {
+  const trimmed = raw.trim();
+  // 快速路径：绝大多数错误不是 JSON，避免无谓的 JSON.parse
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") return null;
+    const payload = parsed as Partial<StructuredErrorPayload>;
+    if (typeof payload.code !== "string" || !payload.code) return null;
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * 从各种错误对象中提取错误信息
  * @param error 错误对象
  * @returns 提取的错误信息字符串
@@ -6,10 +48,10 @@
 export const extractErrorMessage = (error: unknown): string => {
   if (!error) return "";
   if (typeof error === "string") {
-    return error;
+    return parseStructuredErrorMessage(error) ?? error;
   }
   if (error instanceof Error && error.message.trim()) {
-    return error.message;
+    return parseStructuredErrorMessage(error.message) ?? error.message;
   }
 
   if (typeof error === "object") {

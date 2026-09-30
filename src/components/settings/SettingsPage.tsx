@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { FrontendErrorBoundary } from "@/components/FrontendErrorBoundary";
 import { settingsApi } from "@/lib/api";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
@@ -504,18 +505,26 @@ export function SettingsPage({
               </TabsContent>
 
               <TabsContent value="usage" className="mt-0">
-                <UsageDashboard
-                  refreshIntervalMs={settings?.usageDashboardRefreshIntervalMs}
-                  onRefreshIntervalChange={(usageDashboardRefreshIntervalMs) =>
-                    handleAutoSave({ usageDashboardRefreshIntervalMs })
-                  }
-                  sessionAutoSyncEnabled={
-                    settings?.sessionAutoSyncEnabled ?? true
-                  }
-                  onSessionAutoSyncEnabledChange={(sessionAutoSyncEnabled) =>
-                    handleAutoSave({ sessionAutoSyncEnabled })
-                  }
-                />
+                {/* 用量面板自成兜底：崩溃只降级本 Tab，不影响设置页其余部分 */}
+                <FrontendErrorBoundary
+                  variant="panel"
+                  panelName="UsageDashboard"
+                >
+                  <UsageDashboard
+                    refreshIntervalMs={
+                      settings?.usageDashboardRefreshIntervalMs
+                    }
+                    onRefreshIntervalChange={(
+                      usageDashboardRefreshIntervalMs,
+                    ) => handleAutoSave({ usageDashboardRefreshIntervalMs })}
+                    sessionAutoSyncEnabled={
+                      settings?.sessionAutoSyncEnabled ?? true
+                    }
+                    onSessionAutoSyncEnabledChange={(sessionAutoSyncEnabled) =>
+                      handleAutoSave({ sessionAutoSyncEnabled })
+                    }
+                  />
+                </FrontendErrorBoundary>
               </TabsContent>
             </div>
 

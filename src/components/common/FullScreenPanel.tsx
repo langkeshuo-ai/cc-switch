@@ -4,6 +4,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { FrontendErrorBoundary } from "@/components/FrontendErrorBoundary";
 import {
   isWindows,
   isLinux,
@@ -181,7 +182,15 @@ export const FullScreenPanel: React.FC<FullScreenPanelProps> = ({
           {/* Content */}
           <div className="flex-1 overflow-y-auto scroll-overlay">
             <div className={cn("px-6 py-6 space-y-6 w-full", contentClassName)}>
-              {children}
+              {/* 面板级兜底：内容崩溃只降级本面板，不白屏整个应用。
+                  key=title 让切换面板标题（嵌套导航）时自动重置兜底状态。 */}
+              <FrontendErrorBoundary
+                key={title}
+                variant="panel"
+                panelName={title}
+              >
+                {children}
+              </FrontendErrorBoundary>
             </div>
           </div>
 

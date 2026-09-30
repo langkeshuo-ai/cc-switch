@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::app_config::AppType;
 use crate::database::{validate_cost_multiplier, validate_pricing_source};
-use crate::error::AppError;
+use crate::error::{format_structured_error, AppError};
 use crate::provider::{Provider, UsageResult};
 use crate::proxy::providers::codex_oauth_auth::CodexLiveAuthSwitchGuard;
 use crate::services::mcp::McpService;
@@ -3944,9 +3944,14 @@ impl ProviderService {
 
         // Check if provider exists
         let providers = state.db.get_all_providers(app_type.as_str())?;
-        let _provider = providers
-            .get(id)
-            .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
+        let _provider = providers.get(id).ok_or_else(|| {
+            AppError::Message(format_structured_error(
+                "PROVIDER_NOT_FOUND",
+                Some(&format!("供应商 {id} 不存在")),
+                &[("app", app_type.as_str()), ("providerId", id)],
+                Some("refreshProviders"),
+            ))
+        })?;
 
         // Provider switches and takeover toggles both mutate live config and the
         // restore backup. Serialize them per app, then decide from the locked
@@ -4009,7 +4014,14 @@ impl ProviderService {
                     .proxy_service
                     .hot_switch_provider_inner(app_type.as_str(), id),
             )
-            .map_err(|e| AppError::Message(format!("热切换失败: {e}")))?;
+            .map_err(|e| {
+                AppError::Message(format_structured_error(
+                    "PROXY_TAKEOVER_HOT_SWITCH_FAILED",
+                    Some(&format!("热切换失败: {e}")),
+                    &[("app", app_type.as_str()), ("providerId", id)],
+                    Some("disableTakeoverAndRetry"),
+                ))
+            })?;
 
             // The proxy server will route requests to the new provider via is_current.
             // MCP sync is intentionally skipped while Live config is owned by takeover.
@@ -4027,9 +4039,14 @@ impl ProviderService {
         id: &str,
         providers: &indexmap::IndexMap<String, Provider>,
     ) -> Result<SwitchResult, AppError> {
-        let provider = providers
-            .get(id)
-            .ok_or_else(|| AppError::Message(format!("供应商 {id} 不存在")))?;
+        let provider = providers.get(id).ok_or_else(|| {
+            AppError::Message(format_structured_error(
+                "PROVIDER_NOT_FOUND",
+                Some(&format!("供应商 {id} 不存在")),
+                &[("app", app_type.as_str()), ("providerId", id)],
+                Some("refreshProviders"),
+            ))
+        })?;
 
         let mut result = SwitchResult::default();
 

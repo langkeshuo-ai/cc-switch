@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
+import { FrontendErrorBoundary } from "@/components/FrontendErrorBoundary";
 import {
   Plus,
   Settings,
@@ -914,22 +915,30 @@ function App() {
           );
         case "skills":
           return (
-            <UnifiedSkillsPanel
-              ref={unifiedSkillsPanelRef}
-              onOpenDiscovery={handleOpenSkillsDiscovery}
-              onInteractionBlockedChange={setSkillsManagementBusy}
-              onNavigationBlockedChange={setSkillsNavigationBusy}
-              onCheckUpdatesStateChange={setSkillsCheckUpdatesState}
-              currentApp={sharedFeatureApp}
-            />
+            // Skills 面板自成兜底：崩溃只降级本视图，不白屏整个应用
+            <FrontendErrorBoundary
+              variant="panel"
+              panelName="UnifiedSkillsPanel"
+            >
+              <UnifiedSkillsPanel
+                ref={unifiedSkillsPanelRef}
+                onOpenDiscovery={handleOpenSkillsDiscovery}
+                onInteractionBlockedChange={setSkillsManagementBusy}
+                onNavigationBlockedChange={setSkillsNavigationBusy}
+                onCheckUpdatesStateChange={setSkillsCheckUpdatesState}
+                currentApp={sharedFeatureApp}
+              />
+            </FrontendErrorBoundary>
           );
         case "skillsDiscovery":
           return (
-            <SkillsPage
-              ref={skillsPageRef}
-              initialApp={sharedFeatureApp}
-              onSourceChange={setSkillsDiscoverySource}
-            />
+            <FrontendErrorBoundary variant="panel" panelName="SkillsPage">
+              <SkillsPage
+                ref={skillsPageRef}
+                initialApp={sharedFeatureApp}
+                onSourceChange={setSkillsDiscoverySource}
+              />
+            </FrontendErrorBoundary>
           );
         case "mcp":
           return (

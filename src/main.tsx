@@ -23,8 +23,15 @@ import {
   syncModelsDevPricingOnStartup,
 } from "./lib/modelsDevAutoSync";
 import { initializeWindowActivity } from "@/lib/windowActivity";
+import { setInvokeErrorHook } from "@/lib/api/invoke";
 
 installGlobalErrorHandlers();
+
+// 统一 invoke 错误出口：把 api 层归一后的错误汇进诊断日志。
+// 钩子只旁路观测，不改写任何调用方看到的错误，也不吞异常。
+setInvokeErrorHook(({ command, message, error }) => {
+  reportFrontendError(`invoke:${command}`, error, message || undefined);
+});
 
 // 根据平台添加 body class，便于平台特定样式
 try {

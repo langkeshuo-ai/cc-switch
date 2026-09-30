@@ -655,74 +655,74 @@ jobs:
           VERSION="${TAG#v}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           base_url="https://github.com/$REPO/releases/download/$TAG"
-          # 初始化空平台映射
-          mac_url=""; mac_sig=""
-          win_x64_url=""; win_x64_sig=""
-          win_arm64_url=""; win_arm64_sig=""
-          linux_x64_url=""; linux_x64_sig=""
-          linux_arm64_url=""; linux_arm64_sig=""
+
+          # 先按产物名归类（不在此处拼 JSON）
+          mac_name=""; mac_sig=""
+          win_x64_name=""; win_x64_sig=""
+          win_arm64_name=""; win_arm64_sig=""
+          linux_x64_name=""; linux_x64_sig=""
+          linux_arm64_name=""; linux_arm64_sig=""
           shopt -s nullglob
           for sig in dl/*.sig; do
             base=${sig%.sig}
             fname=$(basename "$base")
-            url="$base_url/$fname"
             sig_content=$(cat "$sig")
             case "$fname" in
               *.tar.gz)
                 # 视为 macOS updater artifact
-                mac_url="$url"; mac_sig="$sig_content";;
+                mac_name="$fname"; mac_sig="$sig_content";;
               *-Windows-arm64.msi)
-                win_arm64_url="$url"; win_arm64_sig="$sig_content";;
+                win_arm64_name="$fname"; win_arm64_sig="$sig_content";;
               *-Windows.msi)
-                win_x64_url="$url"; win_x64_sig="$sig_content";;
+                win_x64_name="$fname"; win_x64_sig="$sig_content";;
               *-Linux-arm64.AppImage|*-Linux-arm64.appimage)
-                linux_arm64_url="$url"; linux_arm64_sig="$sig_content";;
+                linux_arm64_name="$fname"; linux_arm64_sig="$sig_content";;
               *-Linux-x86_64.AppImage|*-Linux-x86_64.appimage)
-                linux_x64_url="$url"; linux_x64_sig="$sig_content";;
+                linux_x64_name="$fname"; linux_x64_sig="$sig_content";;
             esac
           done
-          # 构造 JSON（仅包含存在的目标）
-          tmp_json=$(mktemp)
-          {
-            echo '{'
-            echo "  \"version\": \"$VERSION\",";
-            echo "  \"notes\": \"Release $TAG\",";
-            echo "  \"pub_date\": \"$PUB_DATE\",";
-            echo '  "platforms": {'
-            first=1
-            if [ -n "$mac_url" ] && [ -n "$mac_sig" ]; then
-              # 为兼容 arm64 / x64，重复写入两个键，指向同一 universal 包
-              for key in darwin-aarch64 darwin-x86_64; do
-                [ $first -eq 0 ] && echo ','
-                echo "    \"$key\": {\"signature\": \"$mac_sig\", \"url\": \"$mac_url\"}"
-                first=0
-              done
-            fi
-            if [ -n "$win_x64_url" ] && [ -n "$win_x64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"windows-x86_64\": {\"signature\": \"$win_x64_sig\", \"url\": \"$win_x64_url\"}"
-              first=0
-            fi
-            if [ -n "$win_arm64_url" ] && [ -n "$win_arm64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"windows-aarch64\": {\"signature\": \"$win_arm64_sig\", \"url\": \"$win_arm64_url\"}"
-              first=0
-            fi
-            if [ -n "$linux_x64_url" ] && [ -n "$linux_x64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"linux-x86_64\": {\"signature\": \"$linux_x64_sig\", \"url\": \"$linux_x64_url\"}"
-              first=0
-            fi
-            if [ -n "$linux_arm64_url" ] && [ -n "$linux_arm64_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              echo "    \"linux-aarch64\": {\"signature\": \"$linux_arm64_sig\", \"url\": \"$linux_arm64_url\"}"
-              first=0
-            fi
-            echo '  }'
-            echo '}'
-          } > "$tmp_json"
-          echo "Generated latest.json:" && cat "$tmp_json"
-          mv "$tmp_json" latest.json
+
+          # 平台条目逐个累加进 object；JSON 转义交给 jq，
+          # 不再手工拼接片段（签名含引号/反斜杠时手工拼接会产出非法 JSON）。
+          platforms='{}'
+          add_platform() {
+            platforms=$(jq -n \
+              --argjson platforms "$platforms" \
+              --arg key "$1" \
+              --arg signature "$2" \
+              --arg url "$3" \
+              '$platforms + {($key): {signature: $signature, url: $url}}')
+          }
+
+          # 固定顺序写入：保证 latest.json 的键序与历史输出一致，
+          # 不受 dl/ 目录 glob 顺序影响。仅包含存在的目标。
+          if [ -n "$mac_name" ] && [ -n "$mac_sig" ]; then
+            # 为兼容 arm64 / x64，两个键指向同一个 universal 包
+            add_platform darwin-aarch64 "$mac_sig" "$base_url/$mac_name"
+            add_platform darwin-x86_64 "$mac_sig" "$base_url/$mac_name"
+          fi
+          if [ -n "$win_x64_name" ] && [ -n "$win_x64_sig" ]; then
+            add_platform windows-x86_64 "$win_x64_sig" "$base_url/$win_x64_name"
+          fi
+          if [ -n "$win_arm64_name" ] && [ -n "$win_arm64_sig" ]; then
+            add_platform windows-aarch64 "$win_arm64_sig" "$base_url/$win_arm64_name"
+          fi
+          if [ -n "$linux_x64_name" ] && [ -n "$linux_x64_sig" ]; then
+            add_platform linux-x86_64 "$linux_x64_sig" "$base_url/$linux_x64_name"
+          fi
+          if [ -n "$linux_arm64_name" ] && [ -n "$linux_arm64_sig" ]; then
+            add_platform linux-aarch64 "$linux_arm64_sig" "$base_url/$linux_arm64_name"
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "Release $TAG" \
+            --arg pub_date "$PUB_DATE" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+          echo "Generated latest.json:"
+          cat latest.json
       - name: Upload latest.json to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

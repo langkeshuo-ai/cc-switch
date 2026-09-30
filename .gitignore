@@ -17,6 +17,8 @@ GEMINI.md
 /.idea
 /.vscode
 vitest-report.json
+# vite/vitest 配置加载器留下的临时文件（跑 pnpm test:unit 会生成）
+vitest.config.ts.timestamp-*.mjs
 nul
 
 # Flatpak build artifacts

@@ -4,6 +4,10 @@
 > 在此登记一行：文件 · 位置 · 意图。上游 cherry-pick 发生冲突时，按本清单
 > 逐处重建；本清单也是"我们的行为以我们为准"的凭据。
 >
+> **位置一律登记符号名**（`fn`/`struct`/`impl`/测试名/表列名），**禁止行号**：
+> 行号随任何一次无关提交就漂移失效，而符号名可用
+> `rg -n "fn <symbol>" src-tauri/src` 在冲突重建时直接定位。
+>
 > 整文件新增（零冲突）不登记：pi_config/、proxy/session_affinity.rs、
 > proxy/circuit_breaker.rs、services/snapshots.rs、deeplink 之外的新命令等。
 
@@ -17,14 +21,16 @@
 
 ## 行内修改（按文件）
 
-- `src-tauri/src/database/dao/proxy.rs` · :328-351 · get_proxy_config_for_app
-  双变体（inline 供 block_on 轮询 / _blocking 供热路径），db_blocking 约束注释
+- `src-tauri/src/database/dao/proxy.rs` · `fn get_proxy_config_for_app` /
+  `fn get_proxy_config_for_app_blocking` · 双变体（inline 供 block_on 轮询 /
+  `_blocking` 供热路径），db_blocking 约束注释
 - `src-tauri/src/database/dao/settings.rs` · get_rectifier_config_on_conn 等
   `_on_conn` 同步核心（H4）
 - `src-tauri/src/database/mod.rs` · conn: Arc<Mutex<Connection>> + db_blocking()
   helper（约束：仅 tokio 上下文，禁嵌套）
-- `src-tauri/src/proxy/circuit_breaker.rs` · 锁序不变量 config→state→last_opened_at
-  + AB-BA 回归测试
+- `src-tauri/src/proxy/circuit_breaker.rs` · `Transition` 锁序不变量（`config` →
+  `state` → `last_opened_at`）+ `fn transition_to_open` +
+  `fn test_no_abba_deadlock_between_probe_and_transition_paths` 回归测试
 - `src-tauri/src/proxy/provider_router.rs` · Pi defaultProvider 三分支语义 +
   get_or_create 锁外读 DB + L1 host 精确匹配（is_local_proxy_url 任意端口语义）
 - `src-tauri/src/proxy/session.rs` · normalize_session_id（128 字符 + 字符白名单）
@@ -45,11 +51,12 @@
 - `src-tauri/src/deeplink/parser.rs` · provider/prompt app 白名单收紧为
   claude/codex(/prompt 含 pi)（E11）
 - `src-tauri/src/commands/snapshots.rs` · emit 已有 log::error（L6，无改动）
-- `src/components/proxy/ProxyPanel.tsx` · 非回环地址保存确认门（H3）
+- `src/components/proxy/ProxyPanel.tsx` · `const handleSaveBasicConfig` 非回环地址
+  保存确认门（H3）
 - `src-tauri/tauri.conf.json` · CSP connect-src 收紧到 https://models.dev（M4）
 - `tests/msw/handlers.ts` · fixture 对齐 [claude,codex,pi]；get_config_dir 返回
   /default/{app}
-- `src/components/settings/SnapshotSection.tsx` · 加载失败 toast（L5）
+- `src/components/settings/SnapshotSection.tsx` · `const refresh` 加载失败 toast（L5）
 
 ## 语义分歧登记（cherry-pick 上游功能时其测试的取舍）
 
@@ -60,7 +67,8 @@
 - `tests/provider_service.rs::switch_codex_syncs_shared_keys_*`（4540d7e4）·
   **拒绝上游全权重写语义**：上游 autosync 测试断言切换后 live 不得含顶层
   `wire_api` 与 `[mcp_servers]`/`[mcp.servers]`；本 fork 外科手术式合并
-  （4f3e38f4）有意逐字保留用户可见配置（codex_config/tests.rs:220 断言
+  （4f3e38f4）有意逐字保留用户可见配置（`src-tauri/src/codex_config/tests.rs`
+  `fn official_proxy_route_uses_native_auth_and_local_responses_provider` 断言
   [mcp_servers] 存活），测试已改为断言 fork 行为。
 - 教训：pick 上游 PR 时，其测试断言默认编码上游引擎语义——必须逐条对照
   fork 对应引擎（surgical merge / 保留特性）判定接受或改写，并把本表补记。
