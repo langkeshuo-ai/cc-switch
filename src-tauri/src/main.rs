@@ -5,6 +5,13 @@ fn main() {
     // 在 Linux 上设置 WebKit 环境变量以解决 DMA-BUF 渲染问题
     // 某些 Linux 系统（如 Debian 13.2、Nvidia GPU）上 WebKitGTK 的 DMA-BUF 渲染器可能导致白屏/黑屏
     // 参考: https://github.com/tauri-apps/tauri/issues/9394
+    //
+    // SAFETY: 以下所有 `std::env::set_var` 调用都必须发生在 `main()` 起点、
+    // 任何其他线程（tokio runtime / Tauri 事件循环 / 日志线程）启动之前。
+    // POSIX `setenv` 非线程安全，Rust 1.66+ 文档明确将多线程上下文中的
+    // `set_var` 标为 UB；Rust 2024 edition 已将其改为 `unsafe fn`。
+    // 若未来重构把这些调用移到 `tauri::Builder::setup` 或任何 lazy init 中，
+    // 必须改为在 `main()` 起点预先计算好值、通过其他机制传递给 WebKit。
     #[cfg(target_os = "linux")]
     {
         if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {

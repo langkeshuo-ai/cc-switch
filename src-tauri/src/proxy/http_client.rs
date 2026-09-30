@@ -138,62 +138,41 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 更新代理配置（热更新）
-///
-/// 可在运行时调用以更改代理设置，无需重启应用。
-/// 注意：此函数同时验证和应用，如果需要先验证后持久化再应用，
-/// 请使用 validate_proxy + apply_proxy 组合。
-///
-/// # Arguments
-/// * `proxy_url` - 新的代理 URL，None 或空字符串表示直连
-#[allow(dead_code)]
-pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
-    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let new_client = build_client(effective_url)?;
-
-    // 更新客户端
-    if let Some(lock) = GLOBAL_CLIENT.get() {
-        let mut client = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
-            "Failed to update proxy: lock poisoned".to_string()
-        })?;
-        *client = new_client;
-    } else {
-        // 如果还没初始化，则初始化
-        return init(proxy_url);
-    }
-
-    // 更新代理 URL 记录
-    if let Some(lock) = CURRENT_PROXY_URL.get() {
-        let mut url = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
-            "Failed to update proxy URL record: lock poisoned".to_string()
-        })?;
-        *url = effective_url.map(|s| s.to_string());
-    }
-
-    log::info!(
-        "[GlobalProxy] Updated: {}",
-        effective_url
-            .map(mask_url)
-            .unwrap_or_else(|| "direct connection".to_string())
-    );
-
-    Ok(())
-}
-
 /// 获取全局 HTTP 客户端
 ///
 /// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
+///
+/// 回退路径（未初始化 / RwLock 中毒）必须仍带完整超时/连接池配置：早期实现
+/// 用 `Client::default()` 兜底，会静默丢掉 600s 请求超时、30s 连接超时、
+/// `no_gzip/no_brotli/...` 等关键设置，导致 `response_processor` 的手动解压
+/// 逻辑与 reqwest 的自动解压冲突。因此这里显式构造"直连但同配置"的客户端，
+/// 并把锁中毒的 warn 提到 error——中毒意味着上游线程 panic 过，不能被静默。
 pub fn get() -> Client {
-    GLOBAL_CLIENT
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .map(|c| c.clone())
-        .unwrap_or_else(|| {
-            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
-            build_client(None).unwrap_or_default()
-        })
+    match GLOBAL_CLIENT.get() {
+        Some(lock) => match lock.read() {
+            Ok(guard) => return guard.clone(),
+            Err(poisoned) => {
+                log::error!(
+                    "[GlobalProxy] [GP-004] Client lock poisoned, rebuilding direct client: {}",
+                    poisoned
+                );
+                return poisoned.into_inner().clone();
+            }
+        },
+        None => {
+            log::error!(
+                "[GlobalProxy] [GP-004] Client not initialized, building direct fallback \
+                 (this indicates a startup ordering bug)"
+            );
+        }
+    }
+
+    build_client(None).unwrap_or_else(|e| {
+        // build_client(None) 只在 reqwest TLS 后端初始化失败时报错；此时
+        // Client::default() 也会以同样原因失败。真到这步说明进程已经无法发
+        // 出任何 HTTP 请求，panic 让 crash.log 抓到比继续跑更安全。
+        panic!("[GlobalProxy] failed to build fallback HTTP client: {e}");
+    })
 }
 
 /// 获取当前代理 URL
@@ -204,12 +183,6 @@ pub fn get_current_proxy_url() -> Option<String> {
         .get()
         .and_then(|lock| lock.read().ok())
         .and_then(|url| url.clone())
-}
-
-/// 检查是否正在使用代理
-#[allow(dead_code)]
-pub fn is_proxy_enabled() -> bool {
-    get_current_proxy_url().is_some()
 }
 
 /// 构建 HTTP 客户端

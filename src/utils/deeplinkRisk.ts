@@ -39,23 +39,44 @@ export function maskSensitiveValue(value: string): string {
  * 能改变子进程加载行为的环境变量。
  *
  * 它们的共同点是：不影响"访问哪个 API"，而是影响"进程启动时加载什么代码 / 信任
- * 哪张证书"。没有任何合法的供应商预设需要通过分享链接设置它们。
+ * 哪张证书 / 命令解析到哪里"。没有任何合法的供应商预设需要通过分享链接设置它们。
+ *
+ * 本清单是**前端 warn-only 提示**；服务端硬拦截在
+ * `src-tauri/src/deeplink/provider.rs::BLOCKED_DEEPLINK_ENV_KEYS`。两处需保持
+ * 同步——漂移时以服务端为准（最后一道防线）。
  */
 const ENV_HIJACK_PATTERNS: RegExp[] = [
+  // 动态链接器劫持（Linux / macOS）
   /^LD_/i, // LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT
   /^DYLD_/i, // macOS 对应物
+  // Node / Python / Ruby / Perl / Java 运行时注入
   /^NODE_OPTIONS$/i, // --require 任意脚本
   /^NODE_EXTRA_CA_CERTS$/i, // 注入 CA → TLS 中间人
-  /^PYTHONPATH$/i,
-  /^PYTHONSTARTUP$/i,
+  /^PYTHON(PATH|STARTUP|HOME|EXECUTABLE)$/i,
   /^RUBYOPT$/i,
   /^PERL5OPT$/i,
   /^JAVA_TOOL_OPTIONS$/i,
+  // Shell 初始化劫持
   /^BASH_ENV$/i,
   /^ENV$/i,
   /^IFS$/i,
   /^PATH$/i, // 整体劫持命令解析
-  /^HTTPS?_PROXY$/i, // 全量流量转发
+  // 代理劫持（全量流量转发）——ALL_PROXY / NO_PROXY 同样危险，
+  // 早期清单只覆盖 HTTP(S)_PROXY，curl/reqwest 实际也遵守 ALL_PROXY。
+  /^(HTTP|HTTPS|ALL)_PROXY$/i,
+  /^NO_PROXY$/i, // 可绕过代理白名单，把流量直连到攻击者
+  // CA 注入 → TLS MITM（与 NODE_EXTRA_CA_CERTS 同类）
+  /^(SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO)$/i,
+  // Git 触发的任意命令执行
+  /^GIT_(SSH_COMMAND|ASKPASS|CONFIG|CONFIG_GLOBAL)$/i,
+  /^SSH_ASKPASS$/i,
+  // Node 生态供应链劫持
+  /^NPM_CONFIG_(SCRIPT_SHELL|PREFIX)$/i,
+  /^COREPACK_/i,
+  // 被大量 CLI 作为可执行路径调用
+  /^(EDITOR|VISUAL|PAGER|MANPAGER)$/i,
+  // 临时目录重定向（配合其他漏洞可改写落点）
+  /^(TMPDIR|TEMP|TMP)$/i,
 ];
 
 /** 会被 shell 解释成"执行下面这段字符串"的调用形态。 */
@@ -116,22 +137,37 @@ function isInlineCommandFlag(arg: string): boolean {
  * 匹配会整类漏掉——`[::ffff:169.254.169.254]` 同理会绕过内网判定。
  */
 function extractIpv4Octets(bare: string): [number, number] | null {
+  // 纯 IPv4 点分形式（new URL 对 IPv4 主机保留点分）。
   const dotted = bare.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (dotted) return [Number(dotted[1]), Number(dotted[2])];
 
-  // ::ffff:7f00:1 → 0x7f00 0x0001 → 127.0.0.1
-  const mapped = bare.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  // 以下三种 IPv6 内嵌 IPv4 形态，WHATWG URL 解析器（Node / Chromium / WebKit
+  // 一致）都会把点分尾巴归一成十六进制，因此这里只需匹配十六进制形态，无需
+  // 再写点分变体（实测 `new URL("http://[::127.0.0.1]/").hostname` === `[::7f00:1]`）。
+  // 取前两个八位组即足够：私网/环回/链路本地判定只看 a、b 两段。
+
+  // ① IPv4-mapped ::ffff:a.b.c.d → ::ffff:XXYY:ZZWW
+  const mapped = bare.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (mapped) {
     const high = parseInt(mapped[1], 16);
     return [(high >> 8) & 0xff, high & 0xff];
   }
 
-  // 少数实现保留点分尾巴：::ffff:127.0.0.1
-  const mappedDotted = bare.match(
-    /^::ffff:(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/,
-  );
-  if (mappedDotted) {
-    return [Number(mappedDotted[1]), Number(mappedDotted[2])];
+  // ② IPv4-compatible ::a.b.c.d → ::XXYY:ZZWW（RFC 4291 已废弃，但部分栈仍解析；
+  //    云元数据 169.254.169.254 可被写成 ::169.254.169.254 绕过纯 IPv4 判定）。
+  //    注意与 ① 互斥：① 有 ffff: 前缀（三段），② 只有两段。
+  const compat = bare.match(/^::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (compat) {
+    const high = parseInt(compat[1], 16);
+    return [(high >> 8) & 0xff, high & 0xff];
+  }
+
+  // ③ NAT64 well-known prefix 64:ff9b::/96（RFC 6052）：
+  //    64:ff9b::169.254.169.254 → 64:ff9b::a9fe:a9fe。
+  const nat64 = bare.match(/^64:ff9b::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (nat64) {
+    const high = parseInt(nat64[1], 16);
+    return [(high >> 8) & 0xff, high & 0xff];
   }
 
   return null;

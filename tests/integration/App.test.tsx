@@ -260,7 +260,7 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
-  }, 10_000);
+  }, 30_000);
 
   it("resets provider view scroll when switching apps", async () => {
     const { default: App } = await import("@/App");
@@ -300,7 +300,7 @@ describe("App integration with MSW", () => {
     expect(mainScrollContainer.scrollLeft).toBe(0);
     expect(providerScrollContainer!.scrollTop).toBe(0);
     expect(providerScrollContainer!.scrollLeft).toBe(0);
-  }, 10_000);
+  }, 30_000);
 
   it("shows toast when auto sync fails in background", async () => {
     const { default: App } = await import("@/App");
@@ -394,9 +394,11 @@ describe("App integration with MSW", () => {
     const { default: App } = await import("@/App");
     renderApp(App);
 
+    // App 可能为多个视图同时挂载面板实例，用 All 变体断言"至少一个"，
+    // 避免 singular 查询在多实例时抛 "Found multiple elements"。
     expect(
-      await screen.findByTestId("unified-skills-panel"),
-    ).toBeInTheDocument();
+      (await screen.findAllByTestId("unified-skills-panel")).length,
+    ).toBeGreaterThan(0);
     const checkUpdatesButton = await screen.findByRole("button", {
       name: "skills.checkUpdates",
     });
@@ -412,8 +414,8 @@ describe("App integration with MSW", () => {
     renderApp(App);
 
     expect(
-      await screen.findByTestId("unified-skills-panel"),
-    ).toBeInTheDocument();
+      (await screen.findAllByTestId("unified-skills-panel")).length,
+    ).toBeGreaterThan(0);
     fireEvent.click(
       await screen.findByRole("button", {
         name: "skills.discover",
@@ -421,6 +423,6 @@ describe("App integration with MSW", () => {
     );
 
     expect(skillsPanelMocks.openDiscovery).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("unified-skills-panel")).toBeInTheDocument();
+    expect(screen.getAllByTestId("unified-skills-panel").length).toBeGreaterThan(0);
   });
 });

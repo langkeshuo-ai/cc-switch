@@ -565,6 +565,10 @@ impl AppSettings {
             match serde_json::from_str::<AppSettings>(&content) {
                 Ok(mut settings) => {
                     settings.normalize_paths();
+                    // H2: 落盘凭据在 Windows 上是 DPAPI 加密的，读入内存前解密。
+                    // 解密失败（用户配置迁移/主密钥变更）时清空对应字段，
+                    // 让用户重新输入，而不是把密文当明文用或 panic。
+                    decrypt_credentials_in_place(&mut settings);
                     settings
                 }
                 Err(err) => {
@@ -589,35 +593,208 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
         return Err(AppError::Config("无法获取用户主目录".to_string()));
     };
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
+    // H2: 序列化到磁盘前加密凭据字段（仅 Windows 生效；Unix 依赖 0o600）。
+    // 加密的是 normalized 副本，不影响调用方持有的内存态（始终明文）。
+    encrypt_credentials_in_place(&mut normalized);
 
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
-    #[cfg(unix)]
-    {
-        use std::fs::OpenOptions;
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| AppError::io(&path, e))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| AppError::io(&path, e))?;
+    // 统一走 atomic_write_private：
+    // - 原子写（temp + rename），避免崩溃时半写损坏 settings.json；
+    // - Unix 0o600；Windows 收紧 DACL 到当前用户（见 config.rs M8）；
+    // - 内部已 create_dir_all 父目录，无需此处重复。
+    //
+    // 早期实现用 #[cfg(unix)] / #[cfg(not(unix))] 两份手写写入逻辑，Unix 侧
+    // 非原子（OpenOptions.truncate）、Windows 侧 fs::write 无权限收紧，且
+    // 两处逻辑漂移。合并后单一路径覆盖两个平台。
+    crate::config::atomic_write_private(&path, json.as_bytes())
+}
+
+// =============================================================================
+// H2: 凭据静态加密（Windows DPAPI）
+// =============================================================================
+//
+// 根因：WebDAV password 与 S3 secret_access_key 早期以明文 JSON 落盘。M8 已
+// 通过 DACL/0o600 限制"同机其他用户"读取，但对"文件被拷到另一台机器 / 离线
+// 磁盘窃取"无防护。DPAPI（CryptProtectData）把数据加密到当前 Windows 用户的
+// 主密钥，文件离开本机即无法解密——这是 Chrome/Edge 等存储凭据的标准做法。
+//
+// 设计取舍：
+// - 只加密两个真正敏感的凭据字段，不加密整个文件（避免破坏可读的诊断信息，
+//   也避免每次读取都要解密大块数据）。
+// - 用 `ccswitch-dpapi-v1:` 前缀标记密文，与历史明文共存：旧明文照常读取，
+//   下次保存时自动升级为密文（平滑迁移，无需一次性 migration）。
+// - 非 Windows 平台为 no-op：Unix 0o600 已是该威胁模型下的标准答案；
+//   macOS Keychain / Linux libsecret 需引入 `keyring` 依赖，属独立增强，
+//   不在本轮"做减法"范围内。
+
+/// DPAPI 密文标记前缀。足够独特以避免与用户真实凭据碰撞。
+#[cfg(windows)]
+const DPAPI_MARKER: &str = "ccswitch-dpapi-v1:";
+
+/// 加密 settings 中的凭据字段（原地）。仅 Windows 生效。
+fn encrypt_credentials_in_place(settings: &mut AppSettings) {
+    #[cfg(windows)]
+    {
+        if let Some(sync) = settings.webdav_sync.as_mut() {
+            if !sync.password.is_empty() && !sync.password.starts_with(DPAPI_MARKER) {
+                match dpapi_protect(&sync.password) {
+                    Some(encrypted) => sync.password = encrypted,
+                    None => log::warn!("WebDAV 密码 DPAPI 加密失败，将以明文保存（DACL 仍受限）"),
+                }
+            }
+        }
+        if let Some(s3) = settings.s3_sync.as_mut() {
+            if !s3.secret_access_key.is_empty() && !s3.secret_access_key.starts_with(DPAPI_MARKER) {
+                match dpapi_protect(&s3.secret_access_key) {
+                    Some(encrypted) => s3.secret_access_key = encrypted,
+                    None => log::warn!("S3 secret DPAPI 加密失败，将以明文保存（DACL 仍受限）"),
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = settings;
+}
+
+/// 解密 settings 中的凭据字段（原地）。仅 Windows 生效。
+///
+/// 解密失败时清空字段（而非保留密文或 panic），让用户重新输入。
+fn decrypt_credentials_in_place(settings: &mut AppSettings) {
+    #[cfg(windows)]
+    {
+        if let Some(sync) = settings.webdav_sync.as_mut() {
+            if sync.password.starts_with(DPAPI_MARKER) {
+                match dpapi_unprotect(&sync.password) {
+                    Some(plain) => sync.password = plain,
+                    None => {
+                        log::warn!("WebDAV 密码 DPAPI 解密失败，已清空，需重新输入");
+                        sync.password.clear();
+                    }
+                }
+            }
+        }
+        if let Some(s3) = settings.s3_sync.as_mut() {
+            if s3.secret_access_key.starts_with(DPAPI_MARKER) {
+                match dpapi_unprotect(&s3.secret_access_key) {
+                    Some(plain) => s3.secret_access_key = plain,
+                    None => {
+                        log::warn!("S3 secret DPAPI 解密失败，已清空，需重新输入");
+                        s3.secret_access_key.clear();
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = settings;
+}
+
+/// DPAPI 加密：明文字符串 → `ccswitch-dpapi-v1:<base64>`。失败返回 None。
+#[cfg(windows)]
+fn dpapi_protect(plaintext: &str) -> Option<String> {
+    use base64::prelude::*;
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::Cryptography::{CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB},
+    };
+
+    let mut plain_bytes = plaintext.as_bytes().to_vec();
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: plain_bytes.len() as u32,
+        pbData: plain_bytes.as_mut_ptr(),
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    // SAFETY: in_blob 指向本栈上有效的明文字节（plain_bytes 存活至调用结束）；
+    // out_blob 是出参，CryptProtectData 成功时会通过 LocalAlloc 填充其 pbData，
+    // 由下方 LocalFree 释放。CRYPTPROTECT_UI_FORBIDDEN 禁止弹 UI（后台调用）。
+    let ok = unsafe {
+        CryptProtectData(
+            &in_blob,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+    };
+    if ok == 0 || out_blob.pbData.is_null() {
+        return None;
     }
 
-    #[cfg(not(unix))]
-    {
-        fs::write(&path, json).map_err(|e| AppError::io(&path, e))?;
+    // SAFETY: CryptProtectData 成功后 out_blob.pbData 指向 cbData 字节的有效缓冲。
+    let encrypted =
+        unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
+    // SAFETY: out_blob.pbData 由 CryptProtectData 经 LocalAlloc 分配，LocalFree
+    // 是文档规定的配对释放；此处非空且本函数拥有唯一所有权。
+    unsafe {
+        LocalFree(out_blob.pbData as _);
     }
 
-    Ok(())
+    Some(format!(
+        "{DPAPI_MARKER}{}",
+        BASE64_STANDARD.encode(&encrypted)
+    ))
+}
+
+/// DPAPI 解密：`ccswitch-dpapi-v1:<base64>` → 明文字符串。失败返回 None。
+#[cfg(windows)]
+fn dpapi_unprotect(marked: &str) -> Option<String> {
+    use base64::prelude::*;
+    use windows_sys::Win32::{
+        Foundation::LocalFree,
+        Security::Cryptography::{
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+        },
+    };
+
+    let b64 = marked.strip_prefix(DPAPI_MARKER)?;
+    let mut cipher_bytes = BASE64_STANDARD.decode(b64).ok()?;
+    if cipher_bytes.is_empty() {
+        return None;
+    }
+
+    let in_blob = CRYPT_INTEGER_BLOB {
+        cbData: cipher_bytes.len() as u32,
+        pbData: cipher_bytes.as_mut_ptr(),
+    };
+    let mut out_blob = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+
+    // SAFETY: in_blob 指向本栈上有效的密文字节；out_blob 是出参，成功时由
+    // CryptUnprotectData 经 LocalAlloc 填充，下方 LocalFree 释放。
+    let ok = unsafe {
+        CryptUnprotectData(
+            &in_blob,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut out_blob,
+        )
+    };
+    if ok == 0 || out_blob.pbData.is_null() {
+        return None;
+    }
+
+    // SAFETY: 成功后 out_blob.pbData 指向 cbData 字节的有效缓冲。
+    let plain =
+        unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
+    // SAFETY: out_blob.pbData 由 CryptUnprotectData 经 LocalAlloc 分配，LocalFree 配对释放。
+    unsafe {
+        LocalFree(out_blob.pbData as _);
+    }
+
+    String::from_utf8(plain).ok()
 }
 
 static SETTINGS_STORE: OnceLock<RwLock<AppSettings>> = OnceLock::new();
@@ -1040,5 +1217,126 @@ mod tests {
             resolve_override_path(r"~\pi\agent"),
             home.join("pi").join("agent")
         );
+    }
+
+    // =====================================================================
+    // H2 验证：DPAPI 存→读往返
+    // =====================================================================
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_round_trip_returns_original_plaintext() {
+        // 原语级往返：protect 产出带标记密文，unprotect 还原出逐字节相同的明文。
+        let plain = "w3bdav-pa55w0rd!with;metas";
+        let marked = dpapi_protect(plain).expect("DPAPI protect should succeed in a user session");
+        assert!(
+            marked.starts_with(DPAPI_MARKER),
+            "ciphertext must carry the migration marker"
+        );
+        assert_ne!(marked, plain, "stored form must not be plaintext");
+        assert!(
+            !marked[DPAPI_MARKER.len()..].contains(plain),
+            "no plaintext leak in blob"
+        );
+        assert_eq!(
+            dpapi_unprotect(&marked).as_deref(),
+            Some(plain),
+            "round trip must be lossless"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_unprotect_rejects_unmarked_and_corrupt_input() {
+        // 无标记 → 视为历史明文，不解密（返回 None 由调用方按"非密文"处理路径兜底）。
+        assert_eq!(dpapi_unprotect("plain-password"), None);
+        // 有标记但 base64 损坏 → None（调用方清空字段让用户重输，而非 panic）。
+        assert_eq!(
+            dpapi_unprotect(&format!("{DPAPI_MARKER}!!!not-base64!!!")),
+            None
+        );
+        // 有标记、base64 合法但不是 DPAPI blob → None。
+        assert_eq!(
+            dpapi_unprotect(&format!("{DPAPI_MARKER}aGVsbG8gd29ybGQ=")),
+            None
+        );
+    }
+
+    #[test]
+    fn credential_fields_round_trip_through_save_load_transforms() {
+        // 字段级往返：encrypt → decrypt 必须还原原值（Windows 走 DPAPI；
+        // 其他平台为 no-op，字段原样保留）。不触碰磁盘，纯内存验证。
+        let mut settings = AppSettings {
+            webdav_sync: Some(WebDavSyncSettings {
+                password: "dav-secret".to_string(),
+                ..Default::default()
+            }),
+            s3_sync: Some(S3SyncSettings {
+                secret_access_key: "s3-secret".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let original_dav = settings.webdav_sync.as_ref().unwrap().password.clone();
+        let original_s3 = settings.s3_sync.as_ref().unwrap().secret_access_key.clone();
+
+        // 模拟落盘前的加密变换
+        encrypt_credentials_in_place(&mut settings);
+
+        #[cfg(windows)]
+        {
+            // Windows：落盘形态必须是带标记的密文，而非明文。
+            assert_ne!(
+                settings.webdav_sync.as_ref().unwrap().password,
+                original_dav
+            );
+            assert!(settings
+                .webdav_sync
+                .as_ref()
+                .unwrap()
+                .password
+                .starts_with(DPAPI_MARKER));
+            assert!(settings
+                .s3_sync
+                .as_ref()
+                .unwrap()
+                .secret_access_key
+                .starts_with(DPAPI_MARKER));
+        }
+        #[cfg(not(windows))]
+        {
+            // 非 Windows：no-op，字段保持明文（0o600 是该平台的标准防线）。
+            assert_eq!(
+                settings.webdav_sync.as_ref().unwrap().password,
+                original_dav
+            );
+            assert_eq!(
+                settings.s3_sync.as_ref().unwrap().secret_access_key,
+                original_s3
+            );
+        }
+
+        // 模拟读入后的解密变换：必须无损还原
+        decrypt_credentials_in_place(&mut settings);
+        assert_eq!(
+            settings.webdav_sync.as_ref().unwrap().password,
+            original_dav
+        );
+        assert_eq!(
+            settings.s3_sync.as_ref().unwrap().secret_access_key,
+            original_s3
+        );
+    }
+
+    #[test]
+    fn encrypt_skips_empty_credentials() {
+        // 空凭据不应产生"ccswitch-dpapi-v1:"空密文，保持空串以便 is_empty 判定。
+        let mut settings = AppSettings {
+            webdav_sync: Some(WebDavSyncSettings::default()),
+            ..Default::default()
+        };
+        encrypt_credentials_in_place(&mut settings);
+        assert_eq!(settings.webdav_sync.as_ref().unwrap().password, "");
     }
 }

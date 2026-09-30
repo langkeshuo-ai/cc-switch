@@ -3967,7 +3967,44 @@ fn resolve_catalog_rejects_symlink_escaping_config_dir() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&outside_dir, base_dir.join("link")).expect("symlink");
     #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&outside_dir, base_dir.join("link")).expect("symlink");
+    {
+        // Windows 创建符号链接需要 SeCreateSymbolicLinkPrivilege（管理员或
+        // 开发者模式）。在未提权的 CI/本机上该测试无法构造前置条件，应优雅
+        // 跳过而非红失败（错误码 1314 = ERROR_PRIVILEGE_NOT_HELD，
+        // 1 = ERROR_INVALID_FUNCTION 为未开开发者模式时的常见返回）。
+        match std::os::windows::fs::symlink_dir(&outside_dir, base_dir.join("link")) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(1314) || e.raw_os_error() == Some(1) => {
+                eprintln!(
+                    "skipping symlink-escape test: creating symlinks requires \
+                     SeCreateSymbolicLinkPrivilege (run as admin or enable \
+                     Developer Mode); os error = {:?}",
+                    e.raw_os_error()
+                );
+                return;
+            }
+            Err(e) => panic!("symlink: {e}"),
+        }
+        // 某些环境（安全软件 / FS 过滤驱动）会让 symlink 调用"假成功"——实际
+        // 落盘的是一个普通空目录而非 reparse point。此时逃逸场景构造不出来，
+        // 断言必然误红，同样优雅跳过。
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+            let md = match std::fs::symlink_metadata(base_dir.join("link")) {
+                Ok(md) => md,
+                Err(e) => panic!("symlink_metadata after Ok(()) creation: {e}"),
+            };
+            if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+                eprintln!(
+                    "skipping symlink-escape test: symlink call reported success but \
+                     produced a plain directory without a reparse point (likely a \
+                     filter driver neutering symlink creation on this host)"
+                );
+                return;
+            }
+        }
+    }
 
     let config_text = r#"model_catalog_json = "link/cc-switch-model-catalog.json"
 "#;

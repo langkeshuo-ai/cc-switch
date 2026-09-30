@@ -69,6 +69,24 @@ describe("classifyEndpoint", () => {
     // 映射的公网地址不该误报：8.8.8.8 → ::ffff:808:808
     expect(classifyEndpoint("http://[::ffff:8.8.8.8]/")).toBeNull();
   });
+
+  it("sees through NAT64 and IPv4-compatible IPv6 hosts", () => {
+    // L7: NAT64 well-known prefix 64:ff9b::/96 封装的云元数据地址。
+    // new URL() 会保留点分尾巴或归一成十六进制，两种形态都要识别。
+    expect(classifyEndpoint("http://[64:ff9b::169.254.169.254]/")).toBe(
+      "privateEndpoint",
+    );
+    expect(classifyEndpoint("http://[64:ff9b::a9fe:a9fe]/")).toBe(
+      "privateEndpoint",
+    );
+    // IPv4-compatible ::a.b.c.d（已废弃但部分栈仍解析）
+    expect(classifyEndpoint("http://[::127.0.0.1]/")).toBe("privateEndpoint");
+    expect(classifyEndpoint("http://[::169.254.169.254]/")).toBe(
+      "privateEndpoint",
+    );
+    // NAT64 封装的公网地址不该误报：8.8.8.8 → 64:ff9b::808:808
+    expect(classifyEndpoint("http://[64:ff9b::8.8.8.8]/")).toBeNull();
+  });
 });
 
 describe("classifyEnvKey", () => {
@@ -88,6 +106,35 @@ describe("classifyEnvKey", () => {
     }
   });
 
+  it("flags the hijack vectors added in the H3 follow-up", () => {
+    // H3: 早期清单遗漏的常见劫持向量，扩充后必须命中。
+    for (const key of [
+      "ALL_PROXY", // curl/reqwest 遵守，早期只覆盖 HTTP(S)_PROXY
+      "all_proxy",
+      "NO_PROXY", // 绕过代理白名单
+      "GIT_SSH_COMMAND", // git 触发的任意命令执行
+      "GIT_ASKPASS",
+      "SSH_ASKPASS",
+      "SSL_CERT_FILE", // CA 注入 → TLS MITM
+      "SSL_CERT_DIR",
+      "CURL_CA_BUNDLE",
+      "REQUESTS_CA_BUNDLE",
+      "GIT_SSL_CAINFO",
+      "NPM_CONFIG_SCRIPT_SHELL", // Node 生态供应链劫持
+      "NPM_CONFIG_PREFIX",
+      "COREPACK_INTEGRITY_KEYS",
+      "EDITOR", // 被大量 CLI 作为可执行路径调用
+      "VISUAL",
+      "PAGER",
+      "MANPAGER",
+      "TMPDIR", // 临时目录重定向
+      "PYTHONHOME",
+      "GIT_CONFIG_GLOBAL",
+    ]) {
+      expect(classifyEnvKey(key), key).toBe("envHijack");
+    }
+  });
+
   it("leaves ordinary provider config alone", () => {
     // 这几个是供应商预设的日常字段，误报会让整个提示失去意义
     for (const key of [
@@ -96,6 +143,11 @@ describe("classifyEnvKey", () => {
       "GEMINI_API_KEY",
       "API_TIMEOUT_MS",
       "ANTHROPIC_MODEL",
+      // 扩充清单后仍需保证不误伤正常字段：
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+      "OPENAI_BASE_URL",
+      "HTTP_TIMEOUT",
     ]) {
       expect(classifyEnvKey(key), key).toBeNull();
     }

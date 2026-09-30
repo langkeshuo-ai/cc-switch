@@ -334,12 +334,21 @@ fn decode_windows_command_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// 归一化用户请求的工具列表：白名单过滤 + 去重 + **保留用户输入顺序**。
+///
+/// 早期实现遍历 `VALID_TOOLS` 并按其固定顺序输出，用户无法控制多工具
+/// 安装/升级的先后（例如想先装 codex 再装 claude 会被强制重排）。改为按
+/// 输入顺序保留首次出现项：白名单语义不变（未知值仍被丢弃），但顺序由
+/// 调用方决定。返回 `&'static str` 而非输入引用，确保下游拿到的始终是
+/// VALID_TOOLS 中的规范字面量。
 fn normalize_requested_tools(tools: &[String]) -> Vec<&'static str> {
-    let set: std::collections::HashSet<&str> = tools.iter().map(|s| s.as_str()).collect();
-    VALID_TOOLS
+    let mut seen = std::collections::HashSet::new();
+    tools
         .iter()
-        .copied()
-        .filter(|tool| set.contains(tool))
+        // 白名单归一化：只接受能匹配到 VALID_TOOLS 静态串的项，未知值丢弃。
+        .filter_map(|s| VALID_TOOLS.iter().copied().find(|t| *t == s.as_str()))
+        // 保序去重：仅保留首次出现。
+        .filter(|t| seen.insert(*t))
         .collect()
 }
 
@@ -4316,6 +4325,44 @@ mod tests {
         // The verified distribution exposes `pi --version`, but no updater
         // contract is assumed; upgrades stay on the package-manager path.
         assert_eq!(official_update_args("pi"), None);
+    }
+
+    #[test]
+    fn normalize_requested_tools_preserves_user_order_and_dedupes() {
+        // L6: 顺序由调用方决定，不再被 VALID_TOOLS 固定顺序重排。
+        assert_eq!(
+            normalize_requested_tools(&[
+                "codex".to_string(),
+                "claude".to_string(),
+                "pi".to_string()
+            ]),
+            vec!["codex", "claude", "pi"]
+        );
+        // 反序输入 → 反序输出。
+        assert_eq!(
+            normalize_requested_tools(&["pi".to_string(), "claude".to_string()]),
+            vec!["pi", "claude"]
+        );
+        // 保序去重：重复项只保留首次出现位置。
+        assert_eq!(
+            normalize_requested_tools(&[
+                "claude".to_string(),
+                "pi".to_string(),
+                "claude".to_string()
+            ]),
+            vec!["claude", "pi"]
+        );
+        // 未知值丢弃，不影响其余项顺序。
+        assert_eq!(
+            normalize_requested_tools(&[
+                "bogus".to_string(),
+                "codex".to_string(),
+                "nope".to_string()
+            ]),
+            vec!["codex"]
+        );
+        // 空输入 → 空输出。
+        assert!(normalize_requested_tools(&[]).is_empty());
     }
 
     #[test]

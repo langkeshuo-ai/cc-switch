@@ -22,10 +22,18 @@ pub fn init_app_config_dir(dir: PathBuf) {
 }
 
 /// 获取默认应用配置目录（不会 panic）
+///
+/// 回退顺序：home_dir → temp_dir → CWD。
+/// 早期实现直接回退到 `PathBuf::from(".")`——Windows 从 Explorer/快捷方式启动时
+/// CWD 常为 `C:\Windows\System32`，普通用户无写权限，crash.log 静默丢失。
+/// temp_dir 在 Windows 是 `%LOCALAPPDATA%\Temp`，一定可写；作为 home_dir
+/// 失败时的第二选择能保证崩溃日志至少落到某处。
 fn default_app_config_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cc-switch")
+    if let Some(home) = dirs::home_dir() {
+        return home.join(".cc-switch");
+    }
+    let fallback_root = std::env::temp_dir();
+    fallback_root.join(".cc-switch")
 }
 
 /// 获取应用配置目录（优先使用初始化时写入的值；不会 panic）
@@ -125,11 +133,14 @@ fn get_system_info() -> String {
 /// - 发生位置（文件:行号）
 /// - Backtrace（完整调用栈）
 pub fn setup_panic_hook() {
-    // 启用 backtrace（确保 release 模式也能捕获）
-    if std::env::var("RUST_BACKTRACE").is_err() {
-        std::env::set_var("RUST_BACKTRACE", "1");
-    }
-
+    // 不再设置 `RUST_BACKTRACE` 环境变量。
+    //
+    // 早期实现在此 `set_var("RUST_BACKTRACE", "1")` 以让默认 hook 打印背迹，但
+    // 本函数的崩溃报告已用 `Backtrace::force_capture()`（无条件捕获，不受该
+    // 环境变量影响）并自行 `eprintln!` 完整栈，默认 hook 的 stderr 背迹是冗余的。
+    // 删掉这次 `set_var` 即消除一个"多线程上下文调用即 UB"的隐患点（M7）：
+    // 全仓仅剩 `main.rs` 中 Linux WebKit 环境变量一处 `set_var`，且位于任何
+    // 线程启动之前，无法再进一步消除（WebKit 在 init 时读取这些环境变量）。
     let default_hook = panic::take_hook();
 
     panic::set_hook(Box::new(move |panic_info| {

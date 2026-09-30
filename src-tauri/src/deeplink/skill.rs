@@ -48,11 +48,16 @@ pub fn import_skill_from_deeplink(
     )?;
 
     // Create SkillRepo
+    //
+    // 默认**不启用**：deeplink 是不可信输入，`repo` 可以是任意 GitHub owner/name。
+    // 早期实现 `unwrap_or(true)` 意味着一条链接就能让第三方 skill 立即生效；
+    // 改为 `unwrap_or(false)` 后，用户必须在应用内显式启用，给一次审阅机会。
+    // 与 provider deeplink 的 `usage_enabled.unwrap_or(false)` 语义对齐。
     let repo = SkillRepo {
         owner: owner.clone(),
         name: name.clone(),
         branch,
-        enabled: request.enabled.unwrap_or(true),
+        enabled: request.enabled.unwrap_or(false),
     };
 
     // Save using Database

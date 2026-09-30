@@ -26,6 +26,7 @@ mod proxy;
 mod services;
 mod session_manager;
 mod settings;
+mod startup_dialogs;
 mod store;
 
 mod tray;
@@ -60,7 +61,6 @@ pub use services::{
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -516,10 +516,10 @@ pub fn run() {
                         Err(e) => {
                             log::error!("加载旧配置文件失败: {e}");
                             // 弹出系统对话框让用户选择
-                            if !show_migration_error_dialog(app.handle(), &e.to_string()) {
+                            if !startup_dialogs::show_migration_error_dialog(app.handle(), &e.to_string()) {
                                 // 用户选择退出（此时数据库还没创建，下次启动可以重试）
                                 log::info!("用户选择退出程序");
-                                std::process::exit(1);
+                                exit_with_cleanup(app.handle(), 1);
                             }
                             // 用户选择重试，继续循环
                             log::info!("用户选择重试加载配置文件");
@@ -574,10 +574,10 @@ pub fn run() {
                     Err(e) => {
                         log::error!("Failed to init database: {e}");
 
-                        if !show_database_init_error_dialog(app.handle(), &db_path, &e.to_string())
+                        if !startup_dialogs::show_database_init_error_dialog(app.handle(), &db_path, &e.to_string())
                         {
                             log::info!("用户选择退出程序");
-                            std::process::exit(1);
+                            exit_with_cleanup(app.handle(), 1);
                         }
 
                         log::info!("用户选择重试初始化数据库");
@@ -1743,6 +1743,13 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 ///
 /// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
 /// 则自动启动代理服务并接管对应应用的 Live 配置。
+/// 启动时需要恢复代理接管状态的应用列表。
+///
+/// 只含 claude / codex：这两个应用走"本地代理接管 Live 配置"路径，代理状态
+/// 持久化在 `proxy_config` 表，重启后需要恢复。Pi 走独立的原生配置写入路径
+/// （`services/provider/pi.rs`），不经过本地代理；Gemini 已在 v22 trim 中
+/// 移除（见 commit 5d40d825）。若未来 Pi 也接入代理接管，需要在此处补充并
+/// 同步 `enabled_proxy_apps_on_startup` 的读取逻辑。
 const PROXY_STARTUP_APP_TYPES: [&str; 2] = ["claude", "codex"];
 
 async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
@@ -1874,133 +1881,8 @@ fn initialize_common_config_snippets(state: &store::AppState) {
 }
 
 // ============================================================
-// 迁移错误对话框辅助函数
+// 迁移错误对话框辅助函数已抽取到 `startup_dialogs` 模块（M2）。
 // ============================================================
-
-/// 检测是否为中文环境
-fn is_chinese_locale() -> bool {
-    std::env::var("LANG")
-        .or_else(|_| std::env::var("LC_ALL"))
-        .or_else(|_| std::env::var("LC_MESSAGES"))
-        .map(|lang| lang.starts_with("zh"))
-        .unwrap_or(false)
-}
-
-/// 显示迁移错误对话框
-/// 返回 true 表示用户选择重试，false 表示用户选择退出
-fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
-    let title = if is_chinese_locale() {
-        "配置迁移失败"
-    } else {
-        "Migration Failed"
-    };
-
-    let message = if is_chinese_locale() {
-        format!(
-            "从旧版本迁移配置时发生错误：\n\n{error}\n\n\
-            您的数据尚未丢失，旧配置文件仍然保留。\n\
-            建议回退到旧版本 CC Switch 以保护数据。\n\n\
-            点击「重试」重新尝试迁移\n\
-            点击「退出」关闭程序（可回退版本后重新打开）"
-        )
-    } else {
-        format!(
-            "An error occurred while migrating configuration:\n\n{error}\n\n\
-            Your data is NOT lost - the old config file is still preserved.\n\
-            Consider rolling back to an older CC Switch version.\n\n\
-            Click 'Retry' to attempt migration again\n\
-            Click 'Exit' to close the program"
-        )
-    };
-
-    let retry_text = if is_chinese_locale() {
-        "重试"
-    } else {
-        "Retry"
-    };
-    let exit_text = if is_chinese_locale() {
-        "退出"
-    } else {
-        "Exit"
-    };
-
-    // 使用 blocking_show 同步等待用户响应
-    // OkCancelCustom: 第一个按钮（重试）返回 true，第二个按钮（退出）返回 false
-    app.dialog()
-        .message(&message)
-        .title(title)
-        .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            retry_text.to_string(),
-            exit_text.to_string(),
-        ))
-        .blocking_show()
-}
-
-/// 显示数据库初始化/Schema 迁移失败对话框
-/// 返回 true 表示用户选择重试，false 表示用户选择退出
-fn show_database_init_error_dialog(
-    app: &tauri::AppHandle,
-    db_path: &std::path::Path,
-    error: &str,
-) -> bool {
-    let title = if is_chinese_locale() {
-        "数据库初始化失败"
-    } else {
-        "Database Initialization Failed"
-    };
-
-    let message = if is_chinese_locale() {
-        format!(
-            "初始化数据库或迁移数据库结构时发生错误：\n\n{error}\n\n\
-            数据库文件路径：\n{db}\n\n\
-            您的数据尚未丢失，应用不会自动删除数据库文件。\n\
-            常见原因包括：数据库版本过新、文件损坏、权限不足、磁盘空间不足等。\n\n\
-            建议：\n\
-            1) 先备份整个配置目录（包含 cc-switch.db）\n\
-            2) 如果提示“数据库版本过新”，请升级到更新版本\n\
-            3) 如果刚升级出现异常，可回退旧版本导出/备份后再升级\n\n\
-            点击「重试」重新尝试初始化\n\
-            点击「退出」关闭程序",
-            db = db_path.display()
-        )
-    } else {
-        format!(
-            "An error occurred while initializing or migrating the database:\n\n{error}\n\n\
-            Database file path:\n{db}\n\n\
-            Your data is NOT lost - the app will not delete the database automatically.\n\
-            Common causes include: newer database version, corrupted file, permission issues, or low disk space.\n\n\
-            Suggestions:\n\
-            1) Back up the entire config directory (including cc-switch.db)\n\
-            2) If you see “database version is newer”, please upgrade CC Switch\n\
-            3) If this happened right after upgrading, consider rolling back to export/backup then upgrade again\n\n\
-            Click 'Retry' to attempt initialization again\n\
-            Click 'Exit' to close the program",
-            db = db_path.display()
-        )
-    };
-
-    let retry_text = if is_chinese_locale() {
-        "重试"
-    } else {
-        "Retry"
-    };
-    let exit_text = if is_chinese_locale() {
-        "退出"
-    } else {
-        "Exit"
-    };
-
-    app.dialog()
-        .message(&message)
-        .title(title)
-        .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            retry_text.to_string(),
-            exit_text.to_string(),
-        ))
-        .blocking_show()
-}
 
 // ============================================================
 // 退出请求分类
@@ -2074,6 +1956,22 @@ pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
     remove_tray_icon_before_exit(app_handle);
     destroy_single_instance_lock(app_handle);
     tauri::process::restart(&app_handle.env());
+}
+
+/// 在 setup 阶段的致命错误路径上以 `code` 退出进程，并显式补偿
+/// `std::process::exit` 绕过的清理：托盘图标 + single-instance 锁。
+///
+/// 早期实现直接 `std::process::exit(1)`，导致：
+/// - Windows 通知区残留死托盘图标（直到鼠标悬停触发 Shell 重绘）；
+/// - macOS single-instance 的 `/tmp/{identifier}.sock` 未释放，
+///   下次启动的新进程可能误连旧 listener 后自行退出。
+///
+/// 仅用于 setup 阶段（AppState 尚未 manage、代理未启动），因此不需要
+/// `cleanup_before_exit` 中的代理/Live 恢复逻辑。
+fn exit_with_cleanup(app_handle: &tauri::AppHandle, code: i32) -> ! {
+    remove_tray_icon_before_exit(app_handle);
+    destroy_single_instance_lock(app_handle);
+    std::process::exit(code);
 }
 
 #[cfg(test)]
