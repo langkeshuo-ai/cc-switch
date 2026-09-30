@@ -1,9 +1,14 @@
+use futures::StreamExt;
 use rquickjs::{Context, Function, Runtime};
 use serde_json::Value;
 use std::collections::HashMap;
 use url::{Host, Url};
 
 use crate::error::AppError;
+
+/// 用量脚本 HTTP 响应体上限：防止异常/恶意端点返回超大 body 耗尽宿主内存。
+/// 脚本侧 JS 运行时有 16 MiB 上限，但 `resp.text()` 读取发生在 Rust 侧，不受其约束。
+const USAGE_SCRIPT_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 /// 执行用量查询脚本
 pub async fn execute_usage_script(
@@ -283,13 +288,29 @@ async fn send_http_request(config: &RequestConfig, timeout_secs: u64) -> Result<
     })?;
 
     let status = resp.status();
-    let text = resp.text().await.map_err(|e| {
-        AppError::localized(
-            "usage_script.read_response_failed",
-            format!("读取响应失败: {e}"),
-            format!("Failed to read response: {e}"),
-        )
-    })?;
+
+    // 分块读取并强制字节上限，避免超大响应体导致宿主内存耗尽（DoS）。
+    let mut body = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| {
+            AppError::localized(
+                "usage_script.read_response_failed",
+                format!("读取响应失败: {e}"),
+                format!("Failed to read response: {e}"),
+            )
+        })?;
+        if body.len().saturating_add(chunk.len()) > USAGE_SCRIPT_MAX_RESPONSE_BYTES {
+            let max_mib = USAGE_SCRIPT_MAX_RESPONSE_BYTES / 1024 / 1024;
+            return Err(AppError::localized(
+                "usage_script.response_too_large",
+                format!("响应体超过上限（{max_mib} MiB）"),
+                format!("Response body exceeds limit ({max_mib} MiB)"),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let text = String::from_utf8_lossy(&body).into_owned();
 
     if !status.is_success() {
         let preview = if text.len() > 200 {
@@ -515,6 +536,17 @@ fn validate_request_url(
 
     let is_request_loopback = is_loopback_host(&parsed_request);
 
+    // 自定义模板模式不强制 HTTPS/同源，但仍禁止回环与链路本地目标：
+    // 防止被篡改的远端同步快照注入 custom 模板后，借脚本探测本机服务
+    // 或云元数据端点（169.254.169.254）实现 SSRF。
+    if is_custom_template && is_loopback_or_link_local(&parsed_request) {
+        return Err(AppError::localized(
+            "usage_script.request_local_target_blocked",
+            "自定义模板不允许请求回环或链路本地地址",
+            "Custom templates may not target loopback or link-local addresses",
+        ));
+    }
+
     // 必须使用 HTTPS（允许 localhost 用于开发）
     // 自定义模板模式下，允许用户自行决定是否使用 HTTP（用户需自行承担安全风险）
     if !is_custom_template && parsed_request.scheme() != "https" && !is_request_loopback {
@@ -594,6 +626,16 @@ fn is_loopback_host(url: &Url) -> bool {
     }
 }
 
+/// 判断 URL 是否指向回环或链路本地地址（含 169.254.0.0/16 云元数据网段）。
+fn is_loopback_or_link_local(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(ip)) => ip.is_loopback() || ip.is_link_local(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unicast_link_local(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,6 +648,20 @@ mod tests {
             result.is_err(),
             "Should reject HTTP for non-localhost domains"
         );
+    }
+
+    #[test]
+    fn test_custom_template_rejects_loopback_and_link_local() {
+        // 自定义模板仍不得指向回环/链路本地（SSRF：本机服务与云元数据端点）
+        for url in [
+            "http://127.0.0.1:8080/api",
+            "http://localhost/api",
+            "http://[::1]:8080/api",
+            "http://169.254.169.254/latest/meta-data",
+        ] {
+            let result = validate_request_url(url, "", true);
+            assert!(result.is_err(), "custom template should reject {url}");
+        }
     }
 
     #[test]

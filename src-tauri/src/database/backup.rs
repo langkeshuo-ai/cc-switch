@@ -998,6 +998,18 @@ impl Database {
         Ok(entries)
     }
 
+    /// 校验备份文件名：必须是单个普通文件名且以 `.db` 结尾。
+    ///
+    /// 用 `Path::components` 而非字符串包含检查，可一并拒绝 Windows
+    /// "有前缀无根"的盘符相对路径（如 `C:foo.db`）——`Path::join` 遇到该类
+    /// 路径会忽略基目录、直接返回该路径，导致操作逃出备份目录。
+    fn is_valid_backup_filename(filename: &str) -> bool {
+        let mut components = Path::new(filename).components();
+        let is_single_normal = matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && components.next().is_none();
+        is_single_normal && filename.ends_with(".db")
+    }
+
     /// Restore database from a backup file. Returns the safety backup ID.
     pub fn restore_from_backup(&self, filename: &str) -> Result<String, AppError> {
         self.restore_from_backup_with_hook(filename, |_| Ok(()))
@@ -1012,11 +1024,8 @@ impl Database {
         F: FnOnce(Option<&Path>) -> Result<(), AppError>,
     {
         // Security: validate filename to prevent path traversal
-        if filename.contains("..")
-            || filename.contains('/')
-            || filename.contains('\\')
-            || !filename.ends_with(".db")
-        {
+        // (incl. Windows drive-relative names such as `C:foo.db`)
+        if !Self::is_valid_backup_filename(filename) {
             return Err(AppError::InvalidInput(
                 "Invalid backup filename".to_string(),
             ));
@@ -1090,11 +1099,7 @@ impl Database {
     /// Rename a backup file. Returns the new filename.
     pub fn rename_backup(old_filename: &str, new_name: &str) -> Result<String, AppError> {
         // Validate old filename (path traversal + .db suffix)
-        if old_filename.contains("..")
-            || old_filename.contains('/')
-            || old_filename.contains('\\')
-            || !old_filename.ends_with(".db")
-        {
+        if !Self::is_valid_backup_filename(old_filename) {
             return Err(AppError::InvalidInput(
                 "Invalid backup filename".to_string(),
             ));
@@ -1116,12 +1121,14 @@ impl Database {
             ));
         }
 
-        // Prevent path traversal in new name
-        if name_part.contains("..")
-            || name_part.contains('/')
-            || name_part.contains('\\')
-            || name_part.contains('\0')
-        {
+        // Prevent path traversal in new name (incl. Windows drive-relative
+        // names such as `C:foo`, which `Path::join` would honor over the base)
+        let mut name_components = Path::new(name_part).components();
+        let name_is_single_normal = matches!(
+            name_components.next(),
+            Some(std::path::Component::Normal(_))
+        ) && name_components.next().is_none();
+        if !name_is_single_normal || name_part.contains('\0') {
             return Err(AppError::InvalidInput(
                 "Invalid characters in new name".to_string(),
             ));
@@ -1154,11 +1161,7 @@ impl Database {
     /// Delete a backup file permanently.
     pub fn delete_backup(filename: &str) -> Result<(), AppError> {
         // Validate filename (path traversal + .db suffix)
-        if filename.contains("..")
-            || filename.contains('/')
-            || filename.contains('\\')
-            || !filename.ends_with(".db")
-        {
+        if !Self::is_valid_backup_filename(filename) {
             return Err(AppError::InvalidInput(
                 "Invalid backup filename".to_string(),
             ));

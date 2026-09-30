@@ -16,20 +16,7 @@ impl Database {
         &self,
     ) -> Result<HashMap<String, UniversalProvider>, AppError> {
         let conn = lock_conn!(self.conn);
-
-        let mut stmt = conn
-            .prepare("SELECT value FROM settings WHERE key = ?")
-            .map_err(|e| AppError::Database(e.to_string()))?;
-
-        let result: Option<String> = stmt
-            .query_row([UNIVERSAL_PROVIDERS_KEY], |row| row.get(0))
-            .ok();
-
-        match result {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Database(format!("解析统一供应商数据失败: {e}"))),
-            None => Ok(HashMap::new()),
-        }
+        read_universal_providers(&conn)
     }
 
     /// 获取单个统一供应商
@@ -39,36 +26,58 @@ impl Database {
     }
 
     /// 保存统一供应商（添加或更新）
+    ///
+    /// 读-改-写在同一次持锁内完成，避免与其他写并发交错导致互相覆盖。
     pub fn save_universal_provider(&self, provider: &UniversalProvider) -> Result<(), AppError> {
-        let mut providers = self.get_all_universal_providers()?;
+        let conn = lock_conn!(self.conn);
+        let mut providers = read_universal_providers(&conn)?;
         providers.insert(provider.id.clone(), provider.clone());
-        self.save_all_universal_providers(&providers)
+        write_universal_providers(&conn, &providers)
     }
 
     /// 删除统一供应商
     pub fn delete_universal_provider(&self, id: &str) -> Result<bool, AppError> {
-        let mut providers = self.get_all_universal_providers()?;
+        let conn = lock_conn!(self.conn);
+        let mut providers = read_universal_providers(&conn)?;
         let existed = providers.remove(id).is_some();
         if existed {
-            self.save_all_universal_providers(&providers)?;
+            write_universal_providers(&conn, &providers)?;
         }
         Ok(existed)
     }
+}
 
-    /// 保存所有统一供应商（内部方法）
-    fn save_all_universal_providers(
-        &self,
-        providers: &HashMap<String, UniversalProvider>,
-    ) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        let json = to_json_string(providers)?;
-
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            [UNIVERSAL_PROVIDERS_KEY, &json],
-        )
+/// 读取统一供应商（调用方持有连接锁）。
+///
+/// 仅"键不存在"视为空集合；其余查询错误照常传播——
+/// 把数据库错误误判为空集会在随后保存时清空全部数据。
+fn read_universal_providers(
+    conn: &rusqlite::Connection,
+) -> Result<HashMap<String, UniversalProvider>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM settings WHERE key = ?")
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        Ok(())
+    match stmt.query_row([UNIVERSAL_PROVIDERS_KEY], |row| row.get::<_, String>(0)) {
+        Ok(json) => serde_json::from_str(&json)
+            .map_err(|e| AppError::Database(format!("解析统一供应商数据失败: {e}"))),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(HashMap::new()),
+        Err(e) => Err(AppError::Database(e.to_string())),
     }
+}
+
+/// 写回统一供应商（调用方持有连接锁）。
+fn write_universal_providers(
+    conn: &rusqlite::Connection,
+    providers: &HashMap<String, UniversalProvider>,
+) -> Result<(), AppError> {
+    let json = to_json_string(providers)?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        rusqlite::params![UNIVERSAL_PROVIDERS_KEY, &json],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(())
 }

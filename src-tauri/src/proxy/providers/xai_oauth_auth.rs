@@ -790,7 +790,7 @@ impl XaiOAuthManager {
         if !self.storage_path.exists() {
             return Ok(());
         }
-        let content = fs::read_to_string(&self.storage_path)?;
+        let content = crate::services::secure_store::read_sealed_to_string(&self.storage_path)?;
         let store: XaiOAuthStore = serde_json::from_str(&content)
             .map_err(|error| XaiOAuthError::ParseError(error.to_string()))?;
         if let Ok(mut accounts) = self.accounts.try_write() {
@@ -803,6 +803,8 @@ impl XaiOAuthManager {
     }
 
     fn write_store_atomic(&self, content: &str) -> Result<(), XaiOAuthError> {
+        // 存储含长效 refresh_token：落盘前整体加封（Windows: DPAPI；Unix: 0o600）。
+        let content = crate::services::secure_store::seal_content(content);
         let parent = self
             .storage_path
             .parent()

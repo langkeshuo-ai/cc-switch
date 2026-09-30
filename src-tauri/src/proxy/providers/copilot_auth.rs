@@ -1249,6 +1249,8 @@ impl CopilotAuthManager {
     }
 
     fn write_store_atomic(&self, content: &str) -> Result<(), CopilotAuthError> {
+        // 存储含长效 GitHub/Copilot token：落盘前整体加封（Windows: DPAPI；Unix: 0o600）。
+        let content = crate::services::secure_store::seal_content(content);
         if let Some(parent) = self.storage_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1396,7 +1398,7 @@ impl CopilotAuthManager {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(&self.storage_path)?;
+        let content = crate::services::secure_store::read_sealed_to_string(&self.storage_path)?;
         let store: CopilotAuthStore = serde_json::from_str(&content)
             .map_err(|e| CopilotAuthError::ParseError(e.to_string()))?;
 

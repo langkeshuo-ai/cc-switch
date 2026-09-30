@@ -1925,8 +1925,10 @@ impl CodexOAuthManager {
                 "Codex 账号存储缺失但内存中仍有账号，请重启应用后重试".to_string(),
             ));
         }
-        let raw: serde_json::Value = serde_json::from_str(&fs::read_to_string(&self.storage_path)?)
-            .map_err(|error| CodexOAuthError::ParseError(error.to_string()))?;
+        let raw: serde_json::Value = serde_json::from_str(
+            &crate::services::secure_store::read_sealed_to_string(&self.storage_path)?,
+        )
+        .map_err(|error| CodexOAuthError::ParseError(error.to_string()))?;
         if !raw
             .get("accounts")
             .is_some_and(serde_json::Value::is_object)
@@ -1956,6 +1958,8 @@ impl CodexOAuthManager {
     }
 
     fn write_store_atomic(&self, content: &str) -> Result<(), CodexOAuthError> {
+        // 存储含长效 refresh_token：落盘前整体加封（Windows: DPAPI；Unix: 0o600）。
+        let content = crate::services::secure_store::seal_content(content);
         if let Some(parent) = self.storage_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -2015,7 +2019,7 @@ impl CodexOAuthManager {
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(&self.storage_path)?;
+        let content = crate::services::secure_store::read_sealed_to_string(&self.storage_path)?;
         let store: CodexOAuthStore = serde_json::from_str(&content)
             .map_err(|e| CodexOAuthError::ParseError(e.to_string()))?;
 

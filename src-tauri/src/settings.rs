@@ -630,8 +630,9 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
 //   不在本轮"做减法"范围内。
 
 /// DPAPI 密文标记前缀。足够独特以避免与用户真实凭据碰撞。
+/// `pub(crate)`：OAuth 令牌存储（`services::secure_store`）复用同一标记。
 #[cfg(windows)]
-const DPAPI_MARKER: &str = "ccswitch-dpapi-v1:";
+pub(crate) const DPAPI_MARKER: &str = "ccswitch-dpapi-v1:";
 
 /// 加密 settings 中的凭据字段（原地）。仅 Windows 生效。
 fn encrypt_credentials_in_place(settings: &mut AppSettings) {
@@ -693,7 +694,7 @@ fn decrypt_credentials_in_place(settings: &mut AppSettings) {
 
 /// DPAPI 加密：明文字符串 → `ccswitch-dpapi-v1:<base64>`。失败返回 None。
 #[cfg(windows)]
-fn dpapi_protect(plaintext: &str) -> Option<String> {
+pub(crate) fn dpapi_protect(plaintext: &str) -> Option<String> {
     use base64::prelude::*;
     use windows_sys::Win32::{
         Foundation::LocalFree,
@@ -745,7 +746,7 @@ fn dpapi_protect(plaintext: &str) -> Option<String> {
 
 /// DPAPI 解密：`ccswitch-dpapi-v1:<base64>` → 明文字符串。失败返回 None。
 #[cfg(windows)]
-fn dpapi_unprotect(marked: &str) -> Option<String> {
+pub(crate) fn dpapi_unprotect(marked: &str) -> Option<String> {
     use base64::prelude::*;
     use windows_sys::Win32::{
         Foundation::LocalFree,
