@@ -17,6 +17,10 @@ doctest = false
 
 [features]
 default = []
+# 显式声明 custom-protocol 别名：`cargo build --release --features custom-protocol`
+# 可绕过 tauri CLI 直接产出正确的桌面构建（内嵌前端而非 devUrl）。
+# build.rs 中有防呆护栏拦截漏加该 feature 的 release 构建。
+custom-protocol = ["tauri/custom-protocol"]
 test-hooks = []
 
 [build-dependencies]
