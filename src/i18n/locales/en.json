@@ -2384,7 +2384,12 @@
       "branch": "Branch",
       "skillsPath": "Skills Path",
       "hint": "This will add the Skill repository to the list.",
-      "hintDetail": "After adding, you can install specific Skills from the Skills management page."
+      "hintDetail": "After adding, you can install specific Skills from the Skills management page.",
+      "owner": "Repository Owner",
+      "enabledState": "State After Import",
+      "enabledBadge": "Enabled",
+      "disabledBadge": "Disabled (enable manually)",
+      "thirdPartyWarning": "This Skill comes from a third-party GitHub repository, not officially provided by CC Switch. After import its content will be loaded by Claude Code and may affect AI behavior. Make sure you trust the repository owner."
     },
     "usageScript": "Usage Query",
     "usageScriptEnabled": "Enabled",
@@ -2548,7 +2553,12 @@
       "invalidAddress": "Invalid address. Enter an IPv4 (e.g. 127.0.0.1), IPv6 (e.g. ::1), or localhost",
       "configSaved": "Routing configuration saved",
       "configSaveFailed": "Failed to save configuration",
-      "restartRequired": "Restart routing service for address or port changes to take effect"
+      "restartRequired": "Restart routing service for address or port changes to take effect",
+      "nonLoopbackConfirm": {
+        "title": "Listen on a non-loopback address?",
+        "message": "The listen address {{address}} will be exposed to the local network. Other devices on the same network can connect to this proxy and may use your configured API keys and provider quota.\n\nFor local-only use, keep 127.0.0.1.",
+        "confirm": "Save Anyway"
+      }
     },
     "switchFailed": "Switch failed: {{error}}",
     "takeover": {

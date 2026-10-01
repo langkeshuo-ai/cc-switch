@@ -93,6 +93,9 @@ jobs:
       - name: TypeScript type check
         run: pnpm typecheck
 
+      - name: i18n key integrity check
+        run: pnpm check:i18n
+
       - name: Check formatting
         run: pnpm format:check
 

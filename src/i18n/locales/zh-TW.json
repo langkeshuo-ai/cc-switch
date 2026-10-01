@@ -2384,7 +2384,12 @@
       "branch": "分支",
       "skillsPath": "Skills 路徑",
       "hint": "此操作將新增 Skill 儲存庫至清單。",
-      "hintDetail": "新增後，您可以在 Skills 管理介面中選擇安裝具體的 Skill。"
+      "hintDetail": "新增後，您可以在 Skills 管理介面中選擇安裝具體的 Skill。",
+      "owner": "儲存庫擁有者",
+      "enabledState": "匯入後狀態",
+      "enabledBadge": "已啟用",
+      "disabledBadge": "未啟用（需手動開啟）",
+      "thirdPartyWarning": "此 Skill 來自第三方 GitHub 儲存庫，非 CC Switch 官方提供。匯入後其內容會被 Claude Code 載入，可能影響 AI 行為。請確認你信任該儲存庫擁有者。"
     },
     "usageScript": "用量查詢",
     "usageScriptEnabled": "已啟用",
@@ -2548,7 +2553,12 @@
       "invalidAddress": "位址無效，請輸入 IPv4（如 127.0.0.1）、IPv6（如 ::1）或 localhost",
       "configSaved": "路由設定已儲存",
       "configSaveFailed": "儲存設定失敗",
-      "restartRequired": "修改位址或連接埠後需要重新啟動路由服務才能生效"
+      "restartRequired": "修改位址或連接埠後需要重新啟動路由服務才能生效",
+      "nonLoopbackConfirm": {
+        "title": "確認監聽非回環位址？",
+        "message": "監聽位址 {{address}} 將向區網開放。同一網路內的其他裝置都能連此代理，並可能使用你設定的 API Key 與供應商額度。\n\n若僅本機使用，請保持 127.0.0.1。",
+        "confirm": "仍要儲存"
+      }
     },
     "switchFailed": "切換失敗：{{error}}",
     "takeover": {

@@ -2384,7 +2384,12 @@
       "branch": "ブランチ",
       "skillsPath": "スキルパス",
       "hint": "この操作でスキルリポジトリが一覧に追加されます。",
-      "hintDetail": "追加後、スキル管理ページから個別のスキルをインストールできます。"
+      "hintDetail": "追加後、スキル管理ページから個別のスキルをインストールできます。",
+      "owner": "リポジトリオーナー",
+      "enabledState": "インポート後の状態",
+      "enabledBadge": "有効",
+      "disabledBadge": "無効（手動で有効化）",
+      "thirdPartyWarning": "この Skill はサードパーティの GitHub リポジトリ由来で、CC Switch 公式のものではありません。インポート後はその内容が Claude Code に読み込まれ、AI の挙動に影響する可能性があります。リポジトリのオーナーを信頼できるか確認してください。"
     },
     "usageScript": "使用量クエリ",
     "usageScriptEnabled": "有効",
@@ -2548,7 +2553,12 @@
       "invalidAddress": "無効なアドレスです。IPv4（例: 127.0.0.1）、IPv6（例: ::1）、または localhost を入力してください",
       "configSaved": "ルーティング設定を保存しました",
       "configSaveFailed": "設定の保存に失敗しました",
-      "restartRequired": "アドレスまたはポートの変更を反映するにはルーティングサービスの再起動が必要です"
+      "restartRequired": "アドレスまたはポートの変更を反映するにはルーティングサービスの再起動が必要です",
+      "nonLoopbackConfirm": {
+        "title": "非ループバックアドレスでのリッスンを確認しますか？",
+        "message": "リッスンアドレス {{address}} は LAN に公開されます。同じネットワーク内の他のデバイスがこのプロキシに接続でき、設定済みの API キーやプロバイダーのクォータを使用される可能性があります。\n\nローカル専用で使う場合は 127.0.0.1 のままにしてください。",
+        "confirm": "それでも保存"
+      }
     },
     "switchFailed": "切り替えに失敗しました: {{error}}",
     "takeover": {

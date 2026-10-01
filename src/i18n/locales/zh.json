@@ -2384,7 +2384,12 @@
       "branch": "分支",
       "skillsPath": "Skills 路径",
       "hint": "此操作将添加 Skill 仓库到列表。",
-      "hintDetail": "添加后，您可以在 Skills 管理界面中选择安装具体的 Skill。"
+      "hintDetail": "添加后，您可以在 Skills 管理界面中选择安装具体的 Skill。",
+      "owner": "仓库所有者",
+      "enabledState": "导入后状态",
+      "enabledBadge": "已启用",
+      "disabledBadge": "未启用（需手动开启）",
+      "thirdPartyWarning": "此 Skill 来自第三方 GitHub 仓库，非 CC Switch 官方提供。导入后其内容会被 Claude Code 加载，可能影响 AI 行为。请确认你信任该仓库所有者。"
     },
     "usageScript": "用量查询",
     "usageScriptEnabled": "已启用",
@@ -2548,7 +2553,12 @@
       "invalidAddress": "地址无效，请输入 IPv4（如 127.0.0.1）、IPv6（如 ::1）或 localhost",
       "configSaved": "路由配置已保存",
       "configSaveFailed": "保存配置失败",
-      "restartRequired": "修改地址或端口后需要重启路由服务才能生效"
+      "restartRequired": "修改地址或端口后需要重启路由服务才能生效",
+      "nonLoopbackConfirm": {
+        "title": "确认监听非回环地址？",
+        "message": "监听地址 {{address}} 将向局域网开放。同一网络内的其他设备都能连接此代理，并可能使用你配置的 API Key 和供应商额度。\n\n如果只是本机使用，请保持 127.0.0.1。",
+        "confirm": "仍然保存"
+      }
     },
     "switchFailed": "切换失败: {{error}}",
     "takeover": {
