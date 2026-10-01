@@ -176,8 +176,16 @@ pub async fn s3_sync_save_settings(
 
     sync_settings.normalize();
     sync_settings.validate().map_err(|e| e.to_string())?;
+    let endpoint_for_warning = sync_settings.endpoint.clone();
     settings::set_s3_sync_settings(Some(sync_settings)).map_err(|e| e.to_string())?;
-    Ok(json!({ "success": true }))
+    let warning = super::webdav_sync::plaintext_http_warning(&endpoint_for_warning);
+    if let Some(msg) = warning.as_ref() {
+        log::warn!("[S3] plaintext HTTP endpoint saved: {msg}");
+    }
+    Ok(match warning {
+        Some(msg) => json!({ "success": true, "warning": msg }),
+        None => json!({ "success": true }),
+    })
 }
 
 #[tauri::command]

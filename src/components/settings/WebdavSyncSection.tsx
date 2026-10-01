@@ -504,7 +504,11 @@ export function WebdavSyncSection({
         }
       : null;
     try {
-      await settingsApi.webdavSyncSaveSettings(settings, passwordTouched);
+      const result = await settingsApi.webdavSyncSaveSettings(
+        settings,
+        passwordTouched,
+      );
+      if (result?.warning) toast.warning(result.warning);
       setDirty(false);
       setPasswordTouched(false);
       // Show "saved" indicator for 2 seconds
@@ -723,7 +727,11 @@ export function WebdavSyncSection({
     }
     setS3ActionState("saving");
     try {
-      await settingsApi.s3SyncSaveSettings(s3Settings, s3SecretTouched);
+      const result = await settingsApi.s3SyncSaveSettings(
+        s3Settings,
+        s3SecretTouched,
+      );
+      if (result?.warning) toast.warning(result.warning);
       setS3Dirty(false);
       setS3SecretTouched(false);
       setS3JustSaved(true);

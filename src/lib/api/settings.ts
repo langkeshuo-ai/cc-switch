@@ -147,7 +147,7 @@ export const settingsApi = {
   async webdavSyncSaveSettings(
     settings: WebDavSyncSettings,
     passwordTouched = false,
-  ): Promise<{ success: boolean }> {
+  ): Promise<{ success: boolean; warning?: string }> {
     return await invoke("webdav_sync_save_settings", {
       settings,
       passwordTouched,
@@ -183,7 +183,7 @@ export const settingsApi = {
   async s3SyncSaveSettings(
     settings: S3SyncSettings,
     passwordTouched: boolean,
-  ): Promise<{ success: boolean }> {
+  ): Promise<{ success: boolean; warning?: string }> {
     return await invoke("s3_sync_save_settings", {
       settings,
       passwordTouched,

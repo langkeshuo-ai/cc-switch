@@ -11,6 +11,30 @@ use crate::services::webdav_sync as webdav_sync_service;
 use crate::settings::{self, WebDavSyncSettings};
 use crate::store::AppState;
 
+/// 检测明文 HTTP 同步端点（非回环主机），返回面向用户的中英双语警示。
+/// 共享给 WebDAV 与 S3 的保存设置命令：不强制 https（兼容局域网 NAS），
+/// 但必须让用户知道凭据与同步数据将明文传输。
+pub(crate) fn plaintext_http_warning(raw_url: &str) -> Option<String> {
+    let url = url::Url::parse(raw_url).ok()?;
+    if url.scheme() != "http" {
+        return None;
+    }
+    let host = url.host_str()?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host.starts_with("127.")
+        || host.eq("::1")
+        || host.eq("[::1]");
+    if loopback {
+        return None;
+    }
+    Some(AppError::localized(
+        "sync.plaintext_http.warning",
+        "同步端点使用 HTTP 明文传输：账号密码与同步数据（含供应商 API Key）可能被网络中间人截获。局域网 NAS 等可信环境可忽略此警告。",
+        "Sync endpoint uses plaintext HTTP: credentials and sync data (including provider API keys) may be intercepted on the network. Ignore this warning only for trusted LAN environments.",
+    )
+    .to_string())
+}
+
 fn persist_sync_error(settings: &mut WebDavSyncSettings, error: &AppError, source: &str) {
     settings.status.last_error = Some(error.to_string());
     settings.status.last_error_source = Some(source.to_string());
@@ -184,8 +208,16 @@ pub async fn webdav_sync_save_settings(
 
     sync_settings.normalize();
     sync_settings.validate().map_err(|e| e.to_string())?;
+    let base_url_for_warning = sync_settings.base_url.clone();
     settings::set_webdav_sync_settings(Some(sync_settings)).map_err(|e| e.to_string())?;
-    Ok(json!({ "success": true }))
+    let warning = plaintext_http_warning(&base_url_for_warning);
+    if let Some(msg) = warning.as_ref() {
+        log::warn!("[WebDAV] plaintext HTTP endpoint saved: {msg}");
+    }
+    Ok(match warning {
+        Some(msg) => json!({ "success": true, "warning": msg }),
+        None => json!({ "success": true }),
+    })
 }
 
 #[tauri::command]
