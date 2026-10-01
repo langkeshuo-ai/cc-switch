@@ -148,7 +148,7 @@ pub async fn auth_start_login(
                 .map_err(|e| e.to_string())?;
             Ok(map_device_code_response(auth_provider, response))
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -213,7 +213,7 @@ pub async fn auth_poll_for_account(
                 Err(e) => Err(e.to_string()),
             }
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -269,7 +269,7 @@ pub async fn auth_list_accounts(
                 .map(|account| map_xai_account(account, default_account_id.as_deref()))
                 .collect())
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -334,7 +334,7 @@ pub async fn auth_get_status(
                     .collect(),
             })
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -365,7 +365,7 @@ pub async fn auth_remove_account(
                 .await
                 .map_err(|e| e.to_string())
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -418,7 +418,7 @@ pub async fn auth_set_default_account(
                 .await
                 .map_err(|e| e.to_string())
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 
@@ -440,7 +440,7 @@ pub async fn auth_logout(
             let auth_manager = xai_state.0.write().await;
             auth_manager.clear_auth().await.map_err(|e| e.to_string())
         }
-        _ => unreachable!(),
+        _ => Err(format!("Unknown auth provider: {auth_provider}")),
     }
 }
 

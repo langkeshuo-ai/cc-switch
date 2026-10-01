@@ -863,7 +863,13 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     ))
                 }
                 CredentialStatus::Valid => {
-                    let token = token.expect("token must be Some when status is Valid");
+                    // 理论上 Valid 状态必有 token；缺失则显式报错而非 panic，
+                    // 前端可以走 retry 路径。
+                    let Some(token) = token else {
+                        return Err(
+                            "Claude credential token is missing while status is Valid".to_string()
+                        );
+                    };
                     query_claude_quota(&token).await
                 }
             }
@@ -899,7 +905,13 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                     ))
                 }
                 CredentialStatus::Valid => {
-                    let token = token.expect("token must be Some when status is Valid");
+                    // 理论上 Valid 状态必有 token；缺失则显式报错而非 panic，
+                    // 前端可以走 retry 路径。
+                    let Some(token) = token else {
+                        return Err(
+                            "Codex credential token is missing while status is Valid".to_string()
+                        );
+                    };
                     query_codex_quota(
                         &token,
                         account_id.as_deref(),

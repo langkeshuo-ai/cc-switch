@@ -17,14 +17,59 @@ fn write_skill(dir: &std::path::Path, name: &str) {
     .expect("write SKILL.md");
 }
 
+/// 创建目录符号链接。返回 false 表示当前环境无法构造真实 symlink（应跳过
+/// 依赖 symlink 的测试而非红失败）。
+///
+/// Windows 创建符号链接需要 SeCreateSymbolicLinkPrivilege（管理员或开发者
+/// 模式），未提权环境返回错误 1314（ERROR_PRIVILEGE_NOT_HELD）或 1
+/// （ERROR_INVALID_FUNCTION，未开开发者模式常见）。另有一些环境（安全软件 /
+/// FS 过滤驱动）会让 symlink 调用"假成功"——实际落盘的是普通空目录而非
+/// reparse point。两种情况都检测并报告 skip。（模式同 codex_config/tests.rs
+/// resolve_catalog_rejects_symlink_escaping_config_dir。）
 #[cfg(unix)]
-fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) {
-    std::os::unix::fs::symlink(src, dest).expect("create symlink");
+fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) -> bool {
+    match std::os::unix::fs::symlink(src, dest) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("skipping symlink-dependent test: {e}");
+            false
+        }
+    }
 }
 
 #[cfg(windows)]
-fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) {
-    std::os::windows::fs::symlink_dir(src, dest).expect("create symlink");
+fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) -> bool {
+    match std::os::windows::fs::symlink_dir(src, dest) {
+        Ok(()) => {}
+        Err(e) if e.raw_os_error() == Some(1314) || e.raw_os_error() == Some(1) => {
+            eprintln!(
+                "skipping symlink-dependent test: creating symlinks requires \
+                 SeCreateSymbolicLinkPrivilege (run as admin or enable \
+                 Developer Mode); os error = {:?}",
+                e.raw_os_error()
+            );
+            return false;
+        }
+        Err(e) => panic!("symlink: {e}"),
+    }
+    // 假成功检测：symlink 调用返回 Ok 但落盘的是普通目录（无 reparse point）。
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        let md = match std::fs::symlink_metadata(dest) {
+            Ok(md) => md,
+            Err(e) => panic!("symlink_metadata after Ok(()) creation: {e}"),
+        };
+        if md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+            eprintln!(
+                "skipping symlink-dependent test: symlink call reported success but \
+                 produced a plain directory without a reparse point (likely a \
+                 filter driver neutering symlink creation on this host)"
+            );
+            return false;
+        }
+    }
+    true
 }
 
 #[test]
@@ -124,8 +169,13 @@ fn sync_to_app_removes_disabled_and_orphaned_ssot_symlinks() {
 
     let codex_skills_dir = home.join(".codex").join("skills");
     fs::create_dir_all(&codex_skills_dir).expect("create codex skills dir");
-    symlink_dir(&disabled_skill, &codex_skills_dir.join("disabled-skill"));
-    symlink_dir(&orphan_skill, &codex_skills_dir.join("orphan-skill"));
+    let links_ready = symlink_dir(&disabled_skill, &codex_skills_dir.join("disabled-skill"))
+        && symlink_dir(&orphan_skill, &codex_skills_dir.join("orphan-skill"));
+    if !links_ready {
+        // 环境无法构造真实 symlink（见 symlink_dir 文档），前置条件不成立，
+        // 优雅跳过而非红失败。
+        return;
+    }
 
     let state = create_test_state().expect("create test state");
     state

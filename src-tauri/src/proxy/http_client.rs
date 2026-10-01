@@ -167,12 +167,25 @@ pub fn get() -> Client {
         }
     }
 
-    build_client(None).unwrap_or_else(|e| {
-        // build_client(None) 只在 reqwest TLS 后端初始化失败时报错；此时
-        // Client::default() 也会以同样原因失败。真到这步说明进程已经无法发
-        // 出任何 HTTP 请求，panic 让 crash.log 抓到比继续跑更安全。
-        panic!("[GlobalProxy] failed to build fallback HTTP client: {e}");
-    })
+    match build_client(None) {
+        Ok(client) => client,
+        Err(e) => {
+            // build_client(None) 只在 reqwest TLS 后端初始化失败时报错。此时
+            // 先降级为无自定义配置的默认客户端兜底；若默认客户端也构建失败
+            // （实际不会发生，说明进程已无法发出任何 HTTP 请求），才 panic
+            // 让 crash.log 抓到。
+            log::error!(
+                "[GlobalProxy] [GP-004] Failed to build fallback HTTP client with custom config: {e}; \
+                 falling back to a plain default client"
+            );
+            match Client::builder().build() {
+                Ok(client) => client,
+                Err(default_err) => {
+                    panic!("[GlobalProxy] failed to build fallback HTTP client: {default_err}");
+                }
+            }
+        }
+    }
 }
 
 /// 获取当前代理 URL

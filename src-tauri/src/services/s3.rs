@@ -89,12 +89,13 @@ fn build_bucket_url(creds: &S3Credentials) -> String {
 
 // ─── Cryptographic helpers ───────────────────────────────────
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+fn hmac_sha256(key: &[u8], data: &[u8]) -> Result<Vec<u8>, AppError> {
     use hmac::{Hmac, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|e| AppError::Message(format!("HMAC key init failed: {e}")))?;
     mac.update(data);
-    mac.finalize().into_bytes().to_vec()
+    Ok(mac.finalize().into_bytes().to_vec())
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -120,6 +121,17 @@ fn uri_encode(input: &str, encode_slash: bool) -> String {
     out
 }
 
+/// Parse an HTTP header value, propagating failure as an [`AppError`].
+fn parse_header_value(value: &str) -> Result<reqwest::header::HeaderValue, AppError> {
+    value.parse::<reqwest::header::HeaderValue>().map_err(|e| {
+        AppError::localized(
+            "s3.header.invalid",
+            format!("构造 S3 请求头失败: {e}"),
+            format!("Failed to build S3 request header: {e}"),
+        )
+    })
+}
+
 // ─── AWS Signature V4 signing ────────────────────────────────
 
 /// Sign an HTTP request using AWS Signature Version 4.
@@ -133,7 +145,7 @@ fn sign_request(
     body_hash: &str,
     creds: &S3Credentials,
     now: chrono::DateTime<chrono::Utc>,
-) {
+) -> Result<(), AppError> {
     let timestamp = now.format("%Y%m%dT%H%M%SZ").to_string();
     let datestamp = now.format("%Y%m%d").to_string();
 
@@ -142,9 +154,9 @@ fn sign_request(
         Some(port) => format!("{}:{}", url.host_str().unwrap_or_default(), port),
         None => url.host_str().unwrap_or_default().to_string(),
     };
-    headers.insert("host", host_value.parse().unwrap());
-    headers.insert("x-amz-date", timestamp.parse().unwrap());
-    headers.insert("x-amz-content-sha256", body_hash.parse().unwrap());
+    headers.insert("host", parse_header_value(&host_value)?);
+    headers.insert("x-amz-date", parse_header_value(&timestamp)?);
+    headers.insert("x-amz-content-sha256", parse_header_value(body_hash)?);
 
     // ── Step 2: Build canonical request ──
 
@@ -209,13 +221,13 @@ fn sign_request(
     let k_date = hmac_sha256(
         format!("AWS4{}", creds.secret_access_key).as_bytes(),
         datestamp.as_bytes(),
-    );
-    let k_region = hmac_sha256(&k_date, creds.region.as_bytes());
-    let k_service = hmac_sha256(&k_region, b"s3");
-    let k_signing = hmac_sha256(&k_service, b"aws4_request");
+    )?;
+    let k_region = hmac_sha256(&k_date, creds.region.as_bytes())?;
+    let k_service = hmac_sha256(&k_region, b"s3")?;
+    let k_signing = hmac_sha256(&k_service, b"aws4_request")?;
 
     // ── Step 5: Compute signature ──
-    let sig_bytes = hmac_sha256(&k_signing, string_to_sign.as_bytes());
+    let sig_bytes = hmac_sha256(&k_signing, string_to_sign.as_bytes())?;
     let signature: String = sig_bytes.iter().map(|b| format!("{:02x}", b)).collect();
 
     // ── Step 6: Add Authorization header ──
@@ -223,7 +235,8 @@ fn sign_request(
         "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
         creds.access_key_id, scope, signed_headers, signature
     );
-    headers.insert("authorization", authorization.parse().unwrap());
+    headers.insert("authorization", parse_header_value(&authorization)?);
+    Ok(())
 }
 
 // ─── Error helpers ───────────────────────────────────────────
@@ -342,7 +355,7 @@ pub(crate) async fn test_connection(creds: &S3Credentials) -> Result<(), AppErro
         &body_hash,
         creds,
         chrono::Utc::now(),
-    );
+    )?;
 
     let resp = client
         .head(url.as_str())
@@ -377,7 +390,7 @@ pub(crate) async fn put_object(
     let client = http_client::get();
     let body_hash = sha256_hex(&bytes);
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("content-type", content_type.parse().unwrap());
+    headers.insert("content-type", parse_header_value(content_type)?);
     sign_request(
         "PUT",
         &url,
@@ -385,7 +398,7 @@ pub(crate) async fn put_object(
         &body_hash,
         creds,
         chrono::Utc::now(),
-    );
+    )?;
 
     let resp = client
         .put(url.as_str())
@@ -429,7 +442,7 @@ pub(crate) async fn get_object(
         &body_hash,
         creds,
         chrono::Utc::now(),
-    );
+    )?;
 
     let resp = client
         .get(url.as_str())
@@ -495,7 +508,7 @@ pub(crate) async fn head_object(
         &body_hash,
         creds,
         chrono::Utc::now(),
-    );
+    )?;
 
     let resp = client
         .head(url.as_str())
@@ -547,7 +560,7 @@ mod tests {
     #[test]
     fn hmac_sha256_rfc2104_test_vector() {
         // HMAC-SHA256("key", "The quick brown fox jumps over the lazy dog")
-        let result = hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog");
+        let result = hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog").unwrap();
         let hex: String = result.iter().map(|b| format!("{:02x}", b)).collect();
         assert_eq!(
             hex,
@@ -735,7 +748,8 @@ mod tests {
         let body_hash = sha256_hex(b"");
 
         let mut headers = reqwest::header::HeaderMap::new();
-        sign_request("GET", &url, &mut headers, &body_hash, &creds, now);
+        sign_request("GET", &url, &mut headers, &body_hash, &creds, now)
+            .expect("sign_request should not fail for test constants");
 
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
 
@@ -776,7 +790,8 @@ mod tests {
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("content-type", "application/json".parse().unwrap());
-        sign_request("PUT", &url, &mut headers, &body_hash, &creds, now);
+        sign_request("PUT", &url, &mut headers, &body_hash, &creds, now)
+            .expect("sign_request should not fail for test constants");
 
         let auth = headers.get("authorization").unwrap().to_str().unwrap();
         // content-type must appear in the signed headers
@@ -794,19 +809,21 @@ mod tests {
         let datestamp = "20130524";
         let region = "us-east-1";
 
-        let k_date = hmac_sha256(format!("AWS4{}", secret).as_bytes(), datestamp.as_bytes());
-        let k_region = hmac_sha256(&k_date, region.as_bytes());
-        let k_service = hmac_sha256(&k_region, b"s3");
-        let k_signing = hmac_sha256(&k_service, b"aws4_request");
+        let k_date =
+            hmac_sha256(format!("AWS4{}", secret).as_bytes(), datestamp.as_bytes()).unwrap();
+        let k_region = hmac_sha256(&k_date, region.as_bytes()).unwrap();
+        let k_service = hmac_sha256(&k_region, b"s3").unwrap();
+        let k_signing = hmac_sha256(&k_service, b"aws4_request").unwrap();
 
         // The signing key should be a 32-byte value (256 bits).
         assert_eq!(k_signing.len(), 32);
 
         // Verify it is deterministic — computing again yields the same result.
-        let k_date2 = hmac_sha256(format!("AWS4{}", secret).as_bytes(), datestamp.as_bytes());
-        let k_region2 = hmac_sha256(&k_date2, region.as_bytes());
-        let k_service2 = hmac_sha256(&k_region2, b"s3");
-        let k_signing2 = hmac_sha256(&k_service2, b"aws4_request");
+        let k_date2 =
+            hmac_sha256(format!("AWS4{}", secret).as_bytes(), datestamp.as_bytes()).unwrap();
+        let k_region2 = hmac_sha256(&k_date2, region.as_bytes()).unwrap();
+        let k_service2 = hmac_sha256(&k_region2, b"s3").unwrap();
+        let k_signing2 = hmac_sha256(&k_service2, b"aws4_request").unwrap();
         assert_eq!(k_signing, k_signing2);
     }
 
