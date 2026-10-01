@@ -469,6 +469,49 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::Provider;
+    use serial_test::serial;
+
+    /// Isolate the Skills SSOT (and app config dir) under a temp home so
+    /// snapshot build/apply tests never touch the real user directory.
+    struct TestHomeGuard {
+        previous: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl TestHomeGuard {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("create isolated test home");
+            let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", dir.path());
+            Self {
+                previous,
+                _dir: dir,
+            }
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match self.previous.as_ref() {
+                Some(previous) => std::env::set_var("CC_SWITCH_TEST_HOME", previous),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
+
+    fn save_baseline_provider(db: &crate::database::Database) {
+        db.save_provider(
+            "claude",
+            &Provider::with_id(
+                "baseline-provider".to_string(),
+                "Baseline Provider".to_string(),
+                serde_json::json!({ "claude_base_url": "https://example.invalid" }),
+                None,
+            ),
+        )
+        .expect("save baseline provider");
+    }
 
     #[tokio::test]
     async fn webdav_and_s3_operations_share_one_sync_mutex() {
@@ -743,5 +786,131 @@ mod tests {
             size: data.len() as u64,
         };
         assert!(verify_artifact(data, "test.bin", &meta).is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn build_local_snapshot_produces_self_verifying_manifest() {
+        let _home = TestHomeGuard::new();
+        let db = crate::database::Database::memory().expect("create memory db");
+
+        let snapshot = build_local_snapshot(&db).expect("build local snapshot");
+
+        let manifest: SyncManifest = serde_json::from_slice(&snapshot.manifest_bytes)
+            .expect("manifest bytes deserialize back into SyncManifest");
+        assert_eq!(manifest.format, PROTOCOL_FORMAT);
+        assert_eq!(manifest.version, PROTOCOL_VERSION);
+        assert_eq!(manifest.db_compat_version, Some(DB_COMPAT_VERSION));
+        assert_eq!(
+            manifest.snapshot_id,
+            compute_snapshot_id(&manifest.artifacts),
+            "snapshot_id must derive from the artifact hashes"
+        );
+        assert_eq!(snapshot.manifest_hash, sha256_hex(&snapshot.manifest_bytes));
+
+        let db_meta = manifest
+            .artifacts
+            .get(REMOTE_DB_SQL)
+            .expect("db.sql artifact present");
+        assert_eq!(db_meta.size, snapshot.db_sql.len() as u64);
+        assert_eq!(db_meta.sha256, sha256_hex(&snapshot.db_sql));
+
+        let zip_meta = manifest
+            .artifacts
+            .get(REMOTE_SKILLS_ZIP)
+            .expect("skills.zip artifact present");
+        assert_eq!(zip_meta.size, snapshot.skills_zip.len() as u64);
+        assert_eq!(zip_meta.sha256, sha256_hex(&snapshot.skills_zip));
+    }
+
+    #[test]
+    #[serial]
+    fn build_local_snapshot_changes_identity_when_providers_change() {
+        let _home = TestHomeGuard::new();
+        let db = crate::database::Database::memory().expect("create memory db");
+
+        let before = build_local_snapshot(&db).expect("build snapshot before provider change");
+        save_baseline_provider(&db);
+        let after = build_local_snapshot(&db).expect("build snapshot after provider change");
+
+        assert_ne!(
+            sha256_hex(&before.db_sql),
+            sha256_hex(&after.db_sql),
+            "a provider insert must change the exported db.sql"
+        );
+
+        let before_manifest: SyncManifest =
+            serde_json::from_slice(&before.manifest_bytes).expect("deserialize before manifest");
+        let after_manifest: SyncManifest =
+            serde_json::from_slice(&after.manifest_bytes).expect("deserialize after manifest");
+        assert_ne!(
+            before_manifest.snapshot_id, after_manifest.snapshot_id,
+            "a provider insert must produce a new snapshot identity"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn apply_snapshot_restores_database_and_skills() {
+        let _home = TestHomeGuard::new();
+        let source = crate::database::Database::memory().expect("create source db");
+        save_baseline_provider(&source);
+
+        let ssot = crate::services::skill::SkillService::get_ssot_dir().expect("resolve ssot dir");
+        std::fs::create_dir_all(ssot.join("baseline-skill")).expect("create skill dir");
+        std::fs::write(ssot.join("baseline-skill").join("SKILL.md"), "hello")
+            .expect("write skill file");
+
+        let snapshot = build_local_snapshot(&source).expect("build local snapshot");
+
+        let target = crate::database::Database::memory().expect("create target db");
+        apply_snapshot(&target, &snapshot.db_sql, &snapshot.skills_zip)
+            .expect("apply snapshot onto empty database");
+
+        assert!(
+            ssot.join("baseline-skill").join("SKILL.md").is_file(),
+            "skills.zip contents must be restored into the SSOT dir"
+        );
+        let sql = target
+            .export_sql_string_for_sync()
+            .expect("export applied database");
+        assert!(
+            sql.contains("baseline-provider"),
+            "applied database must contain the provider rows from the snapshot"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn apply_snapshot_rejects_foreign_sql_and_rolls_back_skills() {
+        let _home = TestHomeGuard::new();
+        let db = crate::database::Database::memory().expect("create memory db");
+        let snapshot = build_local_snapshot(&db).expect("build local snapshot");
+
+        let ssot = crate::services::skill::SkillService::get_ssot_dir().expect("resolve ssot dir");
+        std::fs::create_dir_all(ssot.join("keep-me")).expect("create skill dir");
+        std::fs::write(ssot.join("keep-me").join("SKILL.md"), "keep").expect("write skill file");
+
+        apply_snapshot(
+            &db,
+            b"definitely not a cc-switch export",
+            &snapshot.skills_zip,
+        )
+        .expect_err("non cc-switch SQL must be rejected");
+
+        assert!(
+            ssot.join("keep-me").join("SKILL.md").is_file(),
+            "a failed database import must roll skills back to their pre-apply state"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_sync_lock_propagates_operation_results() {
+        let ok = run_with_sync_lock(async { Ok::<u32, AppError>(7) }).await;
+        assert_eq!(ok.expect("success value passes through"), 7);
+
+        let err =
+            run_with_sync_lock(async { Err::<u32, _>(AppError::Config("boom".to_string())) }).await;
+        assert!(err.is_err(), "operation error passes through");
     }
 }

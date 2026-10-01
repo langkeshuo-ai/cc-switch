@@ -212,6 +212,47 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn suppression_guard_supports_nesting() {
+        assert!(!is_auto_sync_suppressed());
+        let outer = AutoSyncSuppressionGuard::new();
+        {
+            let _inner = AutoSyncSuppressionGuard::new();
+            assert!(is_auto_sync_suppressed());
+            drop(outer);
+            assert!(
+                is_auto_sync_suppressed(),
+                "an inner guard must keep suppression active"
+            );
+        }
+        assert!(!is_auto_sync_suppressed());
+    }
+
+    #[test]
+    fn auto_sync_wait_duration_debounces_then_clamps_to_remaining_max_wait() {
+        let started = Instant::now();
+        assert_eq!(
+            auto_sync_wait_duration(started, started),
+            Some(Duration::from_millis(1000)),
+            "a fresh cycle waits the full debounce window"
+        );
+
+        let almost_max = started + Duration::from_millis(MAX_AUTO_SYNC_WAIT_MS - 100);
+        assert_eq!(
+            auto_sync_wait_duration(started, almost_max),
+            Some(Duration::from_millis(100)),
+            "the debounce wait is clamped to the remaining max wait budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_change_signal_fails_when_channel_closed() {
+        let (tx, rx) = channel::<String>(1);
+        drop(rx);
+        assert!(!enqueue_change_signal(&tx, "providers"));
+    }
+
+    #[test]
     fn max_wait_caps_flush_latency_for_continuous_events() {
         let started = Instant::now();
         let later = started + Duration::from_millis(MAX_AUTO_SYNC_WAIT_MS + 1);
