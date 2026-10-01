@@ -2,7 +2,7 @@
 //!
 //! This module implements the ccswitch:// protocol for importing configurations
 //! via deep links. Supports importing:
-//! - Provider configurations (Claude/Codex/Gemini)
+//! - Provider configurations (Claude/Codex/Pi)
 //! - MCP server configurations
 //! - Prompts
 //! - Skills
@@ -136,4 +136,77 @@ pub struct DeepLinkImportRequest {
     /// Auto query interval in minutes (0 to disable)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_auto_interval: Option<u64>,
+}
+
+/// 统一处理 ccswitch:// 深链接 URL（自 lib.rs 拆出，M2）
+///
+/// - 解析 URL
+/// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
+/// - 可选：在成功时聚焦主窗口
+pub(crate) fn handle_deeplink_url(
+    app: &tauri::AppHandle,
+    url_str: &str,
+    focus_main_window: bool,
+    source: &str,
+) -> bool {
+    use crate::log_redact::url_for_log;
+    use tauri::{Emitter, Manager};
+
+    if !url_str.starts_with("ccswitch://") {
+        return false;
+    }
+
+    log::info!(
+        "✓ Deep link URL detected from {source}: {}",
+        url_for_log(url_str)
+    );
+
+    match parse_deeplink_url(url_str) {
+        Ok(request) => {
+            log::info!(
+                "✓ Successfully parsed deep link: resource={}, app={:?}, name={:?}",
+                request.resource,
+                request.app,
+                request.name
+            );
+
+            if let Err(e) = app.emit("deeplink-import", &request) {
+                log::error!("✗ Failed to emit deeplink-import event: {e}");
+            } else {
+                log::info!("✓ Emitted deeplink-import event to frontend");
+            }
+
+            if focus_main_window {
+                if let Some(window) = app.get_webview_window("main") {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = window.set_skip_taskbar(false);
+                    }
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    #[cfg(target_os = "linux")]
+                    {
+                        crate::linux_fix::nudge_main_window(window.clone());
+                    }
+                    log::info!("✓ Window shown and focused");
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("✗ Failed to parse deep link URL: {e}");
+
+            if let Err(emit_err) = app.emit(
+                "deeplink-error",
+                serde_json::json!({
+                    "url": url_str,
+                    "error": e.to_string()
+                }),
+            ) {
+                log::error!("✗ Failed to emit deeplink-error event: {emit_err}");
+            }
+        }
+    }
+
+    true
 }

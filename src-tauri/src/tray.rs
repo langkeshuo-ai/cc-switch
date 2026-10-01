@@ -1715,3 +1715,42 @@ mod tests {
         assert!(format_script_summary(&r).is_none());
     }
 }
+
+// ============================================================
+// 托盘菜单更新命令（自 lib.rs 拆出，M2）
+// ============================================================
+
+/// 更新托盘菜单的 Tauri 命令
+#[tauri::command]
+pub(crate) async fn update_tray_menu(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    match create_tray_menu(&app, state.inner()) {
+        Ok(new_menu) => {
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                tray.set_menu(Some(new_menu))
+                    .map_err(|e| format!("更新托盘菜单失败: {e}"))?;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        Err(err) => {
+            log::error!("创建托盘菜单失败: {err}");
+            Ok(false)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn macos_tray_icon() -> Option<tauri::image::Image<'static>> {
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
+
+    match tauri::image::Image::from_bytes(ICON_BYTES) {
+        Ok(icon) => Some(icon),
+        Err(err) => {
+            log::warn!("Failed to load macOS tray icon: {err}");
+            None
+        }
+    }
+}
