@@ -32,6 +32,7 @@ mod sync_support;
 mod xai_oauth;
 
 mod s3_sync;
+mod sync_shared;
 mod usage;
 mod webdav_sync;
 

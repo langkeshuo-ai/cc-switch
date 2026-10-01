@@ -3,6 +3,9 @@
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::commands::sync_shared::{
+    map_sync_result, plaintext_http_warning, require_enabled_settings, run_download_with_sync_lock,
+};
 use crate::commands::sync_support::{
     attach_warning, post_sync_warning_from_result, run_post_import_sync,
 };
@@ -11,34 +14,13 @@ use crate::services::webdav_sync as webdav_sync_service;
 use crate::settings::{self, WebDavSyncSettings};
 use crate::store::AppState;
 
-/// 检测明文 HTTP 同步端点（非回环主机），返回面向用户的中英双语警示。
-/// 共享给 WebDAV 与 S3 的保存设置命令：不强制 https（兼容局域网 NAS），
-/// 但必须让用户知道凭据与同步数据将明文传输。
-pub(crate) fn plaintext_http_warning(raw_url: &str) -> Option<String> {
-    let url = url::Url::parse(raw_url).ok()?;
-    if url.scheme() != "http" {
-        return None;
-    }
-    let host = url.host_str()?;
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host.starts_with("127.")
-        || host.eq("::1")
-        || host.eq("[::1]");
-    if loopback {
-        return None;
-    }
-    Some(AppError::localized(
-        "sync.plaintext_http.warning",
-        "同步端点使用 HTTP 明文传输：账号密码与同步数据（含供应商 API Key）可能被网络中间人截获。局域网 NAS 等可信环境可忽略此警告。",
-        "Sync endpoint uses plaintext HTTP: credentials and sync data (including provider API keys) may be intercepted on the network. Ignore this warning only for trusted LAN environments.",
-    )
-    .to_string())
-}
-
 fn persist_sync_error(settings: &mut WebDavSyncSettings, error: &AppError, source: &str) {
-    settings.status.last_error = Some(error.to_string());
-    settings.status.last_error_source = Some(source.to_string());
-    let _ = settings::update_webdav_sync_status(settings.status.clone());
+    crate::services::sync_protocol::persist_sync_error(
+        settings,
+        error,
+        source,
+        settings::update_webdav_sync_status,
+    );
 }
 
 fn webdav_not_configured_error() -> String {
@@ -60,24 +42,26 @@ fn webdav_sync_disabled_error() -> String {
 }
 
 fn require_enabled_webdav_settings() -> Result<WebDavSyncSettings, String> {
-    let settings = settings::get_webdav_sync_settings().ok_or_else(webdav_not_configured_error)?;
-    if !settings.enabled {
-        return Err(webdav_sync_disabled_error());
-    }
-    Ok(settings)
+    require_enabled_settings(
+        settings::get_webdav_sync_settings,
+        |settings| settings.enabled,
+        webdav_not_configured_error,
+        webdav_sync_disabled_error,
+    )
 }
 
 fn resolve_password_for_request(
-    mut incoming: WebDavSyncSettings,
+    incoming: WebDavSyncSettings,
     existing: Option<WebDavSyncSettings>,
     preserve_empty_password: bool,
 ) -> WebDavSyncSettings {
-    if let Some(existing_settings) = existing {
-        if preserve_empty_password && incoming.password.is_empty() {
-            incoming.password = existing_settings.password;
-        }
-    }
-    incoming
+    crate::commands::sync_shared::resolve_secret_for_request(
+        incoming,
+        existing,
+        preserve_empty_password,
+        |settings: &WebDavSyncSettings| &settings.password,
+        |settings, password| settings.password = password,
+    )
 }
 
 #[cfg(test)]
@@ -101,28 +85,12 @@ where
     Project: FnOnce(T) -> ProjectFut,
     ProjectFut: std::future::Future<Output = Result<U, AppError>>,
 {
-    run_with_webdav_lock(async {
-        let result = {
-            let _auto_sync_suppression =
-                crate::services::webdav_auto_sync::AutoSyncSuppressionGuard::new();
-            download.await?
-        };
-        project(result).await
-    })
+    run_download_with_sync_lock(
+        crate::services::webdav_auto_sync::AutoSyncSuppressionGuard::new,
+        download,
+        project,
+    )
     .await
-}
-
-fn map_sync_result<T, F>(result: Result<T, AppError>, on_error: F) -> Result<T, String>
-where
-    F: FnOnce(&AppError),
-{
-    match result {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            on_error(&err);
-            Err(err.to_string())
-        }
-    }
 }
 
 #[tauri::command]

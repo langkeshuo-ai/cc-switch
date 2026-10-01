@@ -3,6 +3,9 @@
 use serde_json::{json, Value};
 use tauri::State;
 
+use crate::commands::sync_shared::{
+    map_sync_result, plaintext_http_warning, require_enabled_settings, run_download_with_sync_lock,
+};
 use crate::commands::sync_support::{
     attach_warning, post_sync_warning_from_result, run_post_import_sync,
 };
@@ -12,9 +15,12 @@ use crate::settings::{self, S3SyncSettings};
 use crate::store::AppState;
 
 fn persist_sync_error(settings: &mut S3SyncSettings, error: &AppError, source: &str) {
-    settings.status.last_error = Some(error.to_string());
-    settings.status.last_error_source = Some(source.to_string());
-    let _ = settings::update_s3_sync_status(settings.status.clone());
+    crate::services::sync_protocol::persist_sync_error(
+        settings,
+        error,
+        source,
+        settings::update_s3_sync_status,
+    );
 }
 
 fn s3_not_configured_error() -> String {
@@ -31,24 +37,26 @@ fn s3_sync_disabled_error() -> String {
 }
 
 fn require_enabled_s3_settings() -> Result<S3SyncSettings, String> {
-    let settings = settings::get_s3_sync_settings().ok_or_else(s3_not_configured_error)?;
-    if !settings.enabled {
-        return Err(s3_sync_disabled_error());
-    }
-    Ok(settings)
+    require_enabled_settings(
+        settings::get_s3_sync_settings,
+        |settings| settings.enabled,
+        s3_not_configured_error,
+        s3_sync_disabled_error,
+    )
 }
 
 fn resolve_secret_for_request(
-    mut incoming: S3SyncSettings,
+    incoming: S3SyncSettings,
     existing: Option<S3SyncSettings>,
     preserve_empty_secret: bool,
 ) -> S3SyncSettings {
-    if let Some(existing_settings) = existing {
-        if preserve_empty_secret && incoming.secret_access_key.is_empty() {
-            incoming.secret_access_key = existing_settings.secret_access_key;
-        }
-    }
-    incoming
+    crate::commands::sync_shared::resolve_secret_for_request(
+        incoming,
+        existing,
+        preserve_empty_secret,
+        |settings: &S3SyncSettings| &settings.secret_access_key,
+        |settings, secret| settings.secret_access_key = secret,
+    )
 }
 
 #[cfg(test)]
@@ -72,28 +80,12 @@ where
     Project: FnOnce(T) -> ProjectFut,
     ProjectFut: std::future::Future<Output = Result<U, AppError>>,
 {
-    run_with_s3_lock(async {
-        let result = {
-            let _auto_sync_suppression =
-                crate::services::s3_auto_sync::AutoSyncSuppressionGuard::new();
-            download.await?
-        };
-        project(result).await
-    })
+    run_download_with_sync_lock(
+        crate::services::s3_auto_sync::AutoSyncSuppressionGuard::new,
+        download,
+        project,
+    )
     .await
-}
-
-fn map_sync_result<T, F>(result: Result<T, AppError>, on_error: F) -> Result<T, String>
-where
-    F: FnOnce(&AppError),
-{
-    match result {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            on_error(&err);
-            Err(err.to_string())
-        }
-    }
 }
 
 #[tauri::command]
@@ -178,7 +170,7 @@ pub async fn s3_sync_save_settings(
     sync_settings.validate().map_err(|e| e.to_string())?;
     let endpoint_for_warning = sync_settings.endpoint.clone();
     settings::set_s3_sync_settings(Some(sync_settings)).map_err(|e| e.to_string())?;
-    let warning = super::webdav_sync::plaintext_http_warning(&endpoint_for_warning);
+    let warning = plaintext_http_warning(&endpoint_for_warning);
     if let Some(msg) = warning.as_ref() {
         log::warn!("[S3] plaintext HTTP endpoint saved: {msg}");
     }

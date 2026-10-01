@@ -1,65 +1,37 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+//! S3 binding for the shared auto-sync worker loop.
+//!
+//! Owns the S3 channel slot + suppression depth statics and binds the S3
+//! settings/upload service to [`crate::services::auto_sync`].
 
-use serde_json::json;
-use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, OnceLock};
 
 use crate::error::AppError;
-use crate::services::s3_sync;
-use crate::services::sync_protocol::should_trigger_auto_sync_for_table;
+use crate::services::auto_sync::{self, AutoSyncBackend};
+use crate::services::s3_sync as s3_sync_service;
+use crate::services::sync_protocol::persist_sync_error;
 use crate::settings::{self, S3SyncSettings};
 
-const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
-pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;
-
-static DB_CHANGE_TX: OnceLock<Sender<String>> = OnceLock::new();
+static DB_CHANGE_TX: OnceLock<tokio::sync::mpsc::Sender<String>> = OnceLock::new();
 static AUTO_SYNC_SUPPRESS_DEPTH: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) struct AutoSyncSuppressionGuard;
+pub(crate) struct AutoSyncSuppressionGuard(#[allow(dead_code)] auto_sync::SuppressGuard);
 
 impl AutoSyncSuppressionGuard {
     pub fn new() -> Self {
-        AUTO_SYNC_SUPPRESS_DEPTH.fetch_add(1, Ordering::SeqCst);
-        Self
+        Self(auto_sync::SuppressGuard::new(&AUTO_SYNC_SUPPRESS_DEPTH))
     }
 }
 
-impl Drop for AutoSyncSuppressionGuard {
-    fn drop(&mut self) {
-        let _ =
-            AUTO_SYNC_SUPPRESS_DEPTH.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-                Some(value.saturating_sub(1))
-            });
-    }
-}
-
+/// Test-only: commands' download flow checks S3 suppression in tests.
+#[cfg(test)]
 pub(crate) fn is_auto_sync_suppressed() -> bool {
-    AUTO_SYNC_SUPPRESS_DEPTH.load(Ordering::SeqCst) > 0
+    auto_sync::is_auto_sync_suppressed(&AUTO_SYNC_SUPPRESS_DEPTH)
 }
 
+#[cfg(test)]
 pub fn should_trigger_for_table(table: &str) -> bool {
-    should_trigger_auto_sync_for_table(table)
-}
-
-pub(crate) fn enqueue_change_signal(tx: &Sender<String>, table: &str) -> bool {
-    match tx.try_send(table.to_string()) {
-        Ok(()) => true,
-        Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => false,
-    }
-}
-
-pub(crate) fn auto_sync_wait_duration(started_at: Instant, now: Instant) -> Option<Duration> {
-    let max_wait = Duration::from_millis(MAX_AUTO_SYNC_WAIT_MS);
-    let debounce = Duration::from_millis(AUTO_SYNC_DEBOUNCE_MS);
-    let elapsed = now.saturating_duration_since(started_at);
-    if elapsed >= max_wait {
-        return None;
-    }
-    Some(debounce.min(max_wait - elapsed))
+    crate::services::sync_protocol::should_trigger_auto_sync_for_table(table)
 }
 
 fn should_run_auto_sync(settings: Option<&S3SyncSettings>) -> bool {
@@ -70,114 +42,52 @@ fn should_run_auto_sync(settings: Option<&S3SyncSettings>) -> bool {
 }
 
 fn persist_auto_sync_error(settings: &mut S3SyncSettings, error: &AppError) {
-    settings.status.last_error = Some(error.to_string());
-    settings.status.last_error_source = Some("auto".to_string());
-    let _ = settings::update_s3_sync_status(settings.status.clone());
-}
-
-fn emit_auto_sync_status_updated(app: &AppHandle, status: &str, error: Option<&str>) {
-    let payload = match error {
-        Some(message) => json!({
-            "source": "auto",
-            "status": status,
-            "error": message,
-        }),
-        None => json!({
-            "source": "auto",
-            "status": status,
-        }),
-    };
-
-    if let Err(err) = app.emit("s3-sync-status-updated", payload) {
-        log::debug!("[S3] failed to emit sync status update event: {err}");
-    }
-}
-
-async fn run_auto_sync_upload(
-    db: &crate::database::Database,
-    app: &AppHandle,
-) -> Result<(), AppError> {
-    let mut settings = settings::get_s3_sync_settings();
-    if !should_run_auto_sync(settings.as_ref()) {
-        return Ok(());
-    }
-
-    let mut sync_settings = match settings.take() {
-        Some(value) => value,
-        None => return Ok(()),
-    };
-
-    let result = s3_sync::run_with_sync_lock(s3_sync::upload(db, &mut sync_settings)).await;
-    match result {
-        Ok(_) => {
-            emit_auto_sync_status_updated(app, "success", None);
-            Ok(())
-        }
-        Err(err) => {
-            persist_auto_sync_error(&mut sync_settings, &err);
-            emit_auto_sync_status_updated(app, "error", Some(&err.to_string()));
-            Err(err)
-        }
-    }
+    persist_sync_error(settings, error, "auto", settings::update_s3_sync_status);
 }
 
 pub fn notify_db_changed(table: &str) {
-    if is_auto_sync_suppressed() {
-        return;
-    }
-    if !should_trigger_for_table(table) {
-        return;
-    }
-    let Some(tx) = DB_CHANGE_TX.get() else {
-        return;
-    };
-    let _ = enqueue_change_signal(tx, table);
+    auto_sync::notify_db_changed::<S3Backend>(&AUTO_SYNC_SUPPRESS_DEPTH, &DB_CHANGE_TX, table);
 }
 
 pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
-    if DB_CHANGE_TX.get().is_some() {
-        return;
-    }
-
-    // Buffer size 1 is enough: we only need "dirty" signals, not every event.
-    let (tx, rx) = channel::<String>(1);
-    if DB_CHANGE_TX.set(tx).is_err() {
-        return;
-    }
-
-    tauri::async_runtime::spawn(async move {
-        run_worker_loop(db, rx, app).await;
-    });
+    auto_sync::start_worker::<S3Backend>(db, app, &DB_CHANGE_TX);
 }
 
-async fn run_worker_loop(
-    db: Arc<crate::database::Database>,
-    mut rx: Receiver<String>,
-    app: tauri::AppHandle,
-) {
-    while let Some(first_table) = rx.recv().await {
-        let started_at = Instant::now();
-        let mut merged_count = 1usize;
+struct S3Backend;
 
-        while let Some(wait_for) = auto_sync_wait_duration(started_at, Instant::now()) {
-            let timeout = tokio::time::timeout(wait_for, rx.recv()).await;
+impl AutoSyncBackend for S3Backend {
+    type Settings = S3SyncSettings;
 
-            match timeout {
-                Ok(Some(_)) => merged_count += 1,
-                Ok(None) => return,
-                Err(_) => break,
-            }
-        }
+    fn get_settings() -> Option<S3SyncSettings> {
+        settings::get_s3_sync_settings()
+    }
 
-        log::debug!(
-            "[S3][AutoSync] Triggered by table={first_table}, merged_changes={merged_count}"
-        );
+    fn should_run(settings: Option<&S3SyncSettings>) -> bool {
+        should_run_auto_sync(settings)
+    }
 
-        if let Err(err) = run_auto_sync_upload(&db, &app).await {
-            log::warn!("[S3][AutoSync] Upload failed: {err}");
-        }
+    fn persist_error(settings: &mut S3SyncSettings, error: &AppError) {
+        persist_auto_sync_error(settings, error)
+    }
+
+    async fn upload(
+        db: &crate::database::Database,
+        settings: &mut S3SyncSettings,
+    ) -> Result<serde_json::Value, AppError> {
+        s3_sync_service::upload(db, settings).await
+    }
+
+    fn event_name() -> &'static str {
+        "s3-sync-status-updated"
+    }
+
+    fn log_tag() -> &'static str {
+        "S3"
     }
 }
+
+#[cfg(test)]
+pub(crate) use auto_sync::{auto_sync_wait_duration, enqueue_change_signal, MAX_AUTO_SYNC_WAIT_MS};
 
 #[cfg(test)]
 mod tests {

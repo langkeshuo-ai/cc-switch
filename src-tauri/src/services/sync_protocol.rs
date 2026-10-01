@@ -15,6 +15,7 @@ use tempfile::tempdir;
 
 use crate::error::AppError;
 use crate::services::skill::{skill_state_read_guard, skill_state_write_guard};
+use crate::settings::WebDavSyncStatus;
 
 // Re-export archive functions for use by transport layers.
 pub(crate) use super::webdav_sync::archive::{
@@ -462,6 +463,61 @@ where
             false
         }
     }
+}
+
+// ─── Sync status slot access ─────────────────────────────────
+
+/// Uniform access to the shared [`WebDavSyncStatus`] slot kept on both the
+/// WebDAV and S3 settings structs.
+pub(crate) trait SyncStatusHolder {
+    fn sync_status_mut(&mut self) -> &mut WebDavSyncStatus;
+}
+
+impl SyncStatusHolder for crate::settings::WebDavSyncSettings {
+    fn sync_status_mut(&mut self) -> &mut WebDavSyncStatus {
+        &mut self.status
+    }
+}
+
+impl SyncStatusHolder for crate::settings::S3SyncSettings {
+    fn sync_status_mut(&mut self) -> &mut WebDavSyncStatus {
+        &mut self.status
+    }
+}
+
+/// Record a sync failure on the transport's status slot and persist it.
+pub(crate) fn persist_sync_error<S, F>(settings: &mut S, error: &AppError, source: &str, update: F)
+where
+    S: SyncStatusHolder,
+    F: FnOnce(WebDavSyncStatus) -> Result<(), AppError>,
+{
+    let status = settings.sync_status_mut();
+    status.last_error = Some(error.to_string());
+    status.last_error_source = Some(source.to_string());
+    let _ = update(status.clone());
+}
+
+/// Record a successful sync on the transport's status slot and persist it.
+pub(crate) fn persist_sync_success_with<S, F>(
+    settings: &mut S,
+    manifest_hash: String,
+    etag: Option<String>,
+    update: F,
+) -> Result<(), AppError>
+where
+    S: SyncStatusHolder,
+    F: FnOnce(WebDavSyncStatus) -> Result<(), AppError>,
+{
+    let status = WebDavSyncStatus {
+        last_sync_at: Some(Utc::now().timestamp()),
+        last_error: None,
+        last_error_source: None,
+        last_local_manifest_hash: Some(manifest_hash.clone()),
+        last_remote_manifest_hash: Some(manifest_hash),
+        last_remote_etag: etag,
+    };
+    *settings.sync_status_mut() = status.clone();
+    update(status)
 }
 
 // ─── Tests ───────────────────────────────────────────────────
