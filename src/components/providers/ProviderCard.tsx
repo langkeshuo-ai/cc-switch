@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { memo, useMemo, useState, useEffect } from "react";
 import {
   AlertTriangle,
   GripVertical,
@@ -80,7 +80,11 @@ interface ProviderCardProps {
 }
 
 /** 判断是否为官方供应商（无自定义 base URL / API key，直连官方 API） */
-function isOfficialProvider(provider: Provider, appId: AppId): boolean {
+function isOfficialProvider(
+  provider: Provider,
+  appId: AppId,
+  codexBearerToken?: string,
+): boolean {
   if (provider.category === "official") {
     return true;
   }
@@ -93,12 +97,8 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
   if (appId === "codex") {
     // 无 OPENAI_API_KEY → 使用 Codex CLI 内置 OAuth（官方）
     const apiKey = config?.auth?.OPENAI_API_KEY;
-    const bearerToken =
-      typeof config?.config === "string"
-        ? extractCodexExperimentalBearerToken(config.config)
-        : undefined;
     return (
-      !bearerToken &&
+      !codexBearerToken &&
       (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
     );
   }
@@ -153,7 +153,7 @@ const extractApiUrl = (provider: Provider, fallbackText: string) => {
   return fallbackText;
 };
 
-export function ProviderCard({
+export const ProviderCard = memo(function ProviderCard({
   provider,
   isCurrent,
   appId,
@@ -245,7 +245,18 @@ export function ProviderCard({
   const isBoundCodexOfficial = codexOfficialIdentity === "managed_account";
   const usageEnabled =
     provider.meta?.usage_script?.enabled ?? isBoundCodexOfficial;
-  const isOfficial = isOfficialProvider(provider, appId);
+  const rawCodexConfig = (
+    provider.settingsConfig as Record<string, any> | undefined
+  )?.config;
+  // TOML 解析较重且仅 Codex 分支需要：按原始 config 字符串 memo，避免渲染路径反复解析
+  const codexBearerToken = useMemo(
+    () =>
+      typeof rawCodexConfig === "string"
+        ? extractCodexExperimentalBearerToken(rawCodexConfig)
+        : undefined,
+    [rawCodexConfig],
+  );
+  const isOfficial = isOfficialProvider(provider, appId, codexBearerToken);
   const supportsOfficialSubscription =
     isOfficial && ["claude", "codex"].includes(appId);
   const isOfficialSubscriptionUsage =
@@ -699,4 +710,4 @@ export function ProviderCard({
       )}
     </div>
   );
-}
+});
