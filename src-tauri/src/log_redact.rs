@@ -37,6 +37,14 @@ pub(crate) fn redact_known_secrets(text: &str, known_secrets: &[String]) -> Stri
     redact_known_secrets_with_min_length(text, known_secrets, MIN_KNOWN_SECRET_LEN)
 }
 
+/// 严格变体：不设最短长度门槛，任何已知值都替换。
+///
+/// 用于错误响应体等短凭据也必须隐藏的场景（如 request_headers 里的自定义
+/// 鉴权头可能只有几个字符）。URL 日志不用它——过短的值作 URL 子串会误伤。
+pub(crate) fn redact_known_secrets_strict(text: &str, known_secrets: &[String]) -> String {
+    redact_known_secrets_with_min_length(text, known_secrets, 1)
+}
+
 fn redact_known_secrets_with_min_length(
     text: &str,
     known_secrets: &[String],

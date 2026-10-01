@@ -139,13 +139,73 @@ impl StreamCheckService {
         let timeout = std::time::Duration::from_secs(config.timeout_secs);
         let ua = Self::custom_user_agent(provider);
 
-        let result = Self::probe_reachability(&client, &base_url, timeout, ua).await;
+        let result = Self::probe_reachability(&client, &base_url, timeout, ua.clone()).await;
         let response_time = start.elapsed().as_millis() as u64;
-        Ok(Self::build_result(
-            result,
-            response_time,
-            config.degraded_threshold_ms,
-        ))
+        let mut check = Self::build_result(result, response_time, config.degraded_threshold_ms);
+
+        // 模型级验证（在域名可达性之上）：用该供应商自己的凭据拉一次模型列表
+        // （GET /v1/models），验证 API key 与真实 API 路径可用——比裸 GET 域名
+        // 更接近"能真正用"。列表获取失败不判 failed：可达 ≠ 可用，第三方网关
+        // 对 /models 的拦截（WAF/403）不应盖棺定论，降级为 degraded 并附原因，
+        // 供用户自行判断。
+        if check.success {
+            match Self::verify_models(&base_url, provider, ua).await {
+                Some(Ok(models)) => {
+                    check.message = format!("模型列表验证通过（{} 个模型）", models.len());
+                }
+                Some(Err(e)) => {
+                    check.status = HealthStatus::Degraded;
+                    check.message = format!("域名可达，但模型列表获取失败: {e}");
+                }
+                None => {
+                    check.message = "Reachable（未找到 API key，跳过模型级验证）".to_string();
+                }
+            }
+        }
+        Ok(check)
+    }
+
+    /// 模型级验证：以供应商凭据请求模型列表端点。
+    ///
+    /// 返回 `None` 表示提取不到 API key（如纯 OAuth 供应商），调用方应跳过
+    /// 验证而非误报。
+    async fn verify_models(
+        base_url: &str,
+        provider: &Provider,
+        custom_ua: Option<HeaderValue>,
+    ) -> Option<Result<Vec<crate::services::model_fetch::FetchedModel>, String>> {
+        let api_key = Self::extract_api_key(provider)?;
+        Some(
+            crate::services::model_fetch::fetch_models(
+                base_url, &api_key, false, None, custom_ua, None, None,
+            )
+            .await,
+        )
+    }
+
+    /// 从 `settings_config` 提取 API key（用于模型级验证）。
+    ///
+    /// 各应用存放位置不同：Claude 在 `env.ANTHROPIC_AUTH_TOKEN` / `env.ANTHROPIC_API_KEY`，
+    /// Codex 在 `auth.OPENAI_API_KEY`，Pi 及通用形态在顶层 `apiKey` / `api_key`。
+    fn extract_api_key(provider: &Provider) -> Option<String> {
+        let cfg = &provider.settings_config;
+        let nonempty = |v: Option<&serde_json::Value>| -> Option<String> {
+            v.and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        if let Some(env) = cfg.get("env").and_then(|v| v.as_object()) {
+            for key in ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] {
+                if let Some(found) = nonempty(env.get(key)) {
+                    return Some(found);
+                }
+            }
+        }
+        if let Some(found) = nonempty(cfg.get("auth").and_then(|a| a.get("OPENAI_API_KEY"))) {
+            return Some(found);
+        }
+        nonempty(cfg.get("apiKey")).or_else(|| nonempty(cfg.get("api_key")))
     }
 
     /// 解析供应商 `base_url`。
