@@ -6,6 +6,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     strategy:
@@ -20,6 +24,7 @@ jobs:
             target: universal-apple-darwin
             args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -82,6 +87,24 @@ jobs:
       - name: Build Tauri app (unsigned)
         run: pnpm tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
+      - name: Generate SHA256SUMS (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "src-tauri/target/release/bundle/nsis"
+          $lines = Get-ChildItem -Path "$dir/*.exe" | ForEach-Object {
+            $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          }
+          $lines | Set-Content -Path "$dir/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Generate SHA256SUMS (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
+          shasum -a 256 *.dmg > SHA256SUMS.txt
+
       - name: Upload artifacts (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
@@ -89,6 +112,7 @@ jobs:
           name: cc-switch-windows
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Upload artifacts (macOS)
@@ -98,5 +122,6 @@ jobs:
           name: cc-switch-macos
           path: |
             src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/SHA256SUMS.txt
             src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
           if-no-files-found: error
