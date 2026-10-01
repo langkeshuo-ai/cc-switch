@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { ProviderActions } from "@/components/providers/ProviderActions";
+
+type MockFn = Mock<(...args: unknown[]) => unknown>;
 
 function renderPiActions({
   isCurrent = false,
@@ -22,11 +24,11 @@ function renderPiActions({
   isStateChangeProtected?: boolean;
   isAutoFailoverEnabled?: boolean;
   isInFailoverQueue?: boolean;
-  onSwitch?: ReturnType<typeof vi.fn>;
-  onEdit?: ReturnType<typeof vi.fn>;
-  onRemoveFromConfig?: ReturnType<typeof vi.fn>;
-  onDelete?: ReturnType<typeof vi.fn>;
-  onToggleFailover?: ReturnType<typeof vi.fn>;
+  onSwitch?: MockFn;
+  onEdit?: MockFn;
+  onRemoveFromConfig?: MockFn;
+  onDelete?: MockFn;
+  onToggleFailover?: MockFn;
 }) {
   render(
     <ProviderActions
