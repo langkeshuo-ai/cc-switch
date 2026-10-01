@@ -429,6 +429,16 @@ fn atomic_write_with_unix_mode(
         let _ = fs::remove_file(&tmp);
         return Err(AppError::io(&tmp, source));
     }
+    // fsync：flush 只保证用户态缓冲进入内核页缓存，断电/掉电时 rename 可能
+    // 先于数据块落盘被重排，目标文件会出现半截/空文件（对凭据与主配置不可
+    // 接受）。sync_all 失败仅降级为原尽力而为行为（个别文件系统不支持
+    // fsync），不让持久化增强反过来阻断配置写入。
+    if let Err(e) = file.sync_all() {
+        log::warn!(
+            "fsync 失败（继续替换，持久性降级）: {} ({e})",
+            tmp.display()
+        );
+    }
     drop(file);
 
     #[cfg(unix)]
@@ -556,6 +566,169 @@ fn atomic_write_with_unix_mode(
     Ok(())
 }
 
+/// 复制文件
+pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
+    fs::copy(from, to).map_err(|e| AppError::IoContext {
+        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
+        source: e,
+    })?;
+    Ok(())
+}
+
+/// Windows: 将文件 DACL 收紧为"仅当前用户完全控制"，移除所有继承 ACE。
+///
+/// 这是 Unix `chmod 600` 在 Windows 上的等价物。实现路径：
+/// 1. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` 拿当前进程令牌
+/// 2. `GetTokenInformation(TokenUser)` 取出用户 SID
+/// 3. 构造只含一条 ACCESS_ALLOWED_ACE（GENERIC_ALL → 用户 SID）的 ACL
+/// 4. `SetNamedSecurityInfoW` 以 `PROTECTED_DACL_SECURITY_INFORMATION` 写回，
+///    PROTECTED 标志阻止后续再从父目录继承 ACE
+///
+/// 所有 Win32 句柄/缓冲都在本函数内释放；失败路径返回 `String` 错误供调用方
+/// log warn，不 panic、不传播到写入结果（best-effort 加固）。
+#[cfg(windows)]
+fn restrict_file_to_current_user(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
+        Security::{
+            AddAccessAllowedAce,
+            Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
+            GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACL, ACL_REVISION,
+            DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, TOKEN_QUERY,
+            TOKEN_USER,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    // ---- Step 1: 打开当前进程令牌 ----
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess 返回伪句柄（无需 CloseHandle）；token 是出参，
+    // 指向本栈帧的有效可写位置；TOKEN_QUERY 是只读查询权限。
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+    if opened == 0 {
+        return Err(format!(
+            "OpenProcessToken failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // RAII guard：确保所有提前返回路径都关闭令牌句柄。
+    struct TokenGuard(HANDLE);
+    impl Drop for TokenGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: token 由 OpenProcessToken 成功返回，本 guard 拥有
+                // 唯一所有权，CloseHandle 是文档规定的配对释放。
+                unsafe { CloseHandle(self.0) };
+            }
+        }
+    }
+    let _token_guard = TokenGuard(token);
+
+    // ---- Step 2: 取 TokenUser（含用户 SID）----
+    let mut needed: u32 = 0;
+    // 第一次调用故意传空缓冲拿所需大小，预期返回 0 + ERROR_INSUFFICIENT_BUFFER。
+    // SAFETY: 传 null 缓冲 + 0 长度是 GetTokenInformation 文档化的"查询大小"用法；
+    // needed 是有效出参。
+    unsafe {
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
+    }
+    if needed == 0 {
+        return Err(format!(
+            "GetTokenInformation size query failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // TOKEN_USER 内含 SID_AND_ATTRIBUTES（其 Sid 是指针）。用 LocalAlloc 风格：
+    // 这里改用 Vec<u8> 做分配器并手动 8 字节对齐，避免 HLOCAL 生命周期管理。
+    let mut buffer: Vec<u8> = vec![0u8; needed as usize + 8];
+    let aligned_ptr = ((buffer.as_mut_ptr() as usize + 7) & !7) as *mut u8;
+    let mut returned: u32 = 0;
+    // SAFETY: aligned_ptr 指向本栈上 Vec 的有效可写区域，长度 >= needed；
+    // GetTokenInformation 只会写入 needed 字节。buffer 在函数返回前一直存活。
+    let ok =
+        unsafe { GetTokenInformation(token, TokenUser, aligned_ptr.cast(), needed, &mut returned) };
+    if ok == 0 {
+        return Err(format!(
+            "GetTokenInformation(TokenUser) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let token_user = aligned_ptr.cast::<TOKEN_USER>();
+    // SAFETY: GetTokenInformation 成功返回后，token_user 指向有效的 TOKEN_USER，
+    // 其 User.Sid 字段指向同一缓冲内的有效 SID。buffer 仍存活。
+    let user_sid: PSID = unsafe { (*token_user).User.Sid };
+
+    // ---- Step 3: 构造只含一条 ACE 的 ACL ----
+    // SAFETY: user_sid 是上一步取得的有效 SID 指针，buffer 仍存活。
+    let sid_len = unsafe { GetLengthSid(user_sid) };
+    // ACCESS_ALLOWED_ACE 的 SidStart 与 ACE 头重叠 4 字节（DWORD），
+    // 故 ACE 实际大小 = size_of(ACCESS_ALLOWED_ACE) - 4 + sid_len。
+    let ace_size = std::mem::size_of::<windows_sys::Win32::Security::ACCESS_ALLOWED_ACE>()
+        - std::mem::size_of::<u32>()
+        + sid_len as usize;
+    let acl_size = (std::mem::size_of::<ACL>() + ace_size) as u32;
+
+    let mut acl_buffer: Vec<u8> = vec![0u8; acl_size as usize];
+    let acl_ptr = acl_buffer.as_mut_ptr().cast::<ACL>();
+    // SAFETY: acl_ptr 指向 acl_size 字节的有效可写缓冲，恰好容纳 ACL 头 + 一条 ACE；
+    // InitializeAcl 只会写入 acl_size 字节。acl_buffer 在函数返回前一直存活。
+    let init_ok = unsafe { InitializeAcl(acl_ptr, acl_size, ACL_REVISION) };
+    if init_ok == 0 {
+        return Err(format!(
+            "InitializeAcl failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: acl_ptr 已初始化且空间足够；user_sid 有效；GENERIC_ALL 是合法访问掩码。
+    let add_ok = unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, GENERIC_ALL, user_sid) };
+    if add_ok == 0 {
+        return Err(format!(
+            "AddAccessAllowedAce failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    // ---- Step 4: 写回文件安全信息 ----
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: wide_path 是 NUL 终止的 UTF-16，在本调用期间存活；acl_ptr 是已初始化
+    // 的有效 ACL（acl_buffer 仍存活）；owner/group/sacl 传 null 表示不修改这些字段；
+    // PROTECTED_DACL 阻止后续再从父目录继承 ACE。
+    let set_result = unsafe {
+        SetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl_ptr,
+            std::ptr::null(),
+        )
+    };
+    if set_result != 0 {
+        return Err(format!(
+            "SetNamedSecurityInfoW failed with code {set_result}"
+        ));
+    }
+
+    // 显式持有 buffer / acl_buffer 到此处，防止编译器提前释放栈上 Vec。
+    drop(buffer);
+    drop(acl_buffer);
+
+    Ok(())
+}
+
+/// 删除文件
+pub fn delete_file(path: &Path) -> Result<(), AppError> {
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,185 +1069,5 @@ mod tests {
 
         // SAFETY: sd 由 GetNamedSecurityInfoW 经 LocalAlloc 分配，LocalFree 配对释放。
         unsafe { LocalFree(sd) };
-    }
-}
-
-/// 复制文件
-pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
-    fs::copy(from, to).map_err(|e| AppError::IoContext {
-        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
-        source: e,
-    })?;
-    Ok(())
-}
-
-/// Windows: 将文件 DACL 收紧为"仅当前用户完全控制"，移除所有继承 ACE。
-///
-/// 这是 Unix `chmod 600` 在 Windows 上的等价物。实现路径：
-/// 1. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` 拿当前进程令牌
-/// 2. `GetTokenInformation(TokenUser)` 取出用户 SID
-/// 3. 构造只含一条 ACCESS_ALLOWED_ACE（GENERIC_ALL → 用户 SID）的 ACL
-/// 4. `SetNamedSecurityInfoW` 以 `PROTECTED_DACL_SECURITY_INFORMATION` 写回，
-///    PROTECTED 标志阻止后续再从父目录继承 ACE
-///
-/// 所有 Win32 句柄/缓冲都在本函数内释放；失败路径返回 `String` 错误供调用方
-/// log warn，不 panic、不传播到写入结果（best-effort 加固）。
-#[cfg(windows)]
-fn restrict_file_to_current_user(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
-        Security::{
-            AddAccessAllowedAce,
-            Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
-            GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACL, ACL_REVISION,
-            DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, TOKEN_QUERY,
-            TOKEN_USER,
-        },
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
-    };
-
-    // ---- Step 1: 打开当前进程令牌 ----
-    let mut token: HANDLE = std::ptr::null_mut();
-    // SAFETY: GetCurrentProcess 返回伪句柄（无需 CloseHandle）；token 是出参，
-    // 指向本栈帧的有效可写位置；TOKEN_QUERY 是只读查询权限。
-    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
-    if opened == 0 {
-        return Err(format!(
-            "OpenProcessToken failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // RAII guard：确保所有提前返回路径都关闭令牌句柄。
-    struct TokenGuard(HANDLE);
-    impl Drop for TokenGuard {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: token 由 OpenProcessToken 成功返回，本 guard 拥有
-                // 唯一所有权，CloseHandle 是文档规定的配对释放。
-                unsafe { CloseHandle(self.0) };
-            }
-        }
-    }
-    let _token_guard = TokenGuard(token);
-
-    // ---- Step 2: 取 TokenUser（含用户 SID）----
-    let mut needed: u32 = 0;
-    // 第一次调用故意传空缓冲拿所需大小，预期返回 0 + ERROR_INSUFFICIENT_BUFFER。
-    // SAFETY: 传 null 缓冲 + 0 长度是 GetTokenInformation 文档化的"查询大小"用法；
-    // needed 是有效出参。
-    unsafe {
-        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
-    }
-    if needed == 0 {
-        return Err(format!(
-            "GetTokenInformation size query failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // TOKEN_USER 内含 SID_AND_ATTRIBUTES（其 Sid 是指针）。用 LocalAlloc 风格：
-    // 这里改用 Vec<u8> 做分配器并手动 8 字节对齐，避免 HLOCAL 生命周期管理。
-    let mut buffer: Vec<u8> = vec![0u8; needed as usize + 8];
-    let aligned_ptr = ((buffer.as_mut_ptr() as usize + 7) & !7) as *mut u8;
-    let mut returned: u32 = 0;
-    // SAFETY: aligned_ptr 指向本栈上 Vec 的有效可写区域，长度 >= needed；
-    // GetTokenInformation 只会写入 needed 字节。buffer 在函数返回前一直存活。
-    let ok =
-        unsafe { GetTokenInformation(token, TokenUser, aligned_ptr.cast(), needed, &mut returned) };
-    if ok == 0 {
-        return Err(format!(
-            "GetTokenInformation(TokenUser) failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let token_user = aligned_ptr.cast::<TOKEN_USER>();
-    // SAFETY: GetTokenInformation 成功返回后，token_user 指向有效的 TOKEN_USER，
-    // 其 User.Sid 字段指向同一缓冲内的有效 SID。buffer 仍存活。
-    let user_sid: PSID = unsafe { (*token_user).User.Sid };
-
-    // ---- Step 3: 构造只含一条 ACE 的 ACL ----
-    // SAFETY: user_sid 是上一步取得的有效 SID 指针，buffer 仍存活。
-    let sid_len = unsafe { GetLengthSid(user_sid) };
-    // ACCESS_ALLOWED_ACE 的 SidStart 与 ACE 头重叠 4 字节（DWORD），
-    // 故 ACE 实际大小 = size_of(ACCESS_ALLOWED_ACE) - 4 + sid_len。
-    let ace_size = std::mem::size_of::<windows_sys::Win32::Security::ACCESS_ALLOWED_ACE>()
-        - std::mem::size_of::<u32>()
-        + sid_len as usize;
-    let acl_size = (std::mem::size_of::<ACL>() + ace_size) as u32;
-
-    let mut acl_buffer: Vec<u8> = vec![0u8; acl_size as usize];
-    let acl_ptr = acl_buffer.as_mut_ptr().cast::<ACL>();
-    // SAFETY: acl_ptr 指向 acl_size 字节的有效可写缓冲，恰好容纳 ACL 头 + 一条 ACE；
-    // InitializeAcl 只会写入 acl_size 字节。acl_buffer 在函数返回前一直存活。
-    let init_ok = unsafe { InitializeAcl(acl_ptr, acl_size, ACL_REVISION) };
-    if init_ok == 0 {
-        return Err(format!(
-            "InitializeAcl failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: acl_ptr 已初始化且空间足够；user_sid 有效；GENERIC_ALL 是合法访问掩码。
-    let add_ok = unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, GENERIC_ALL, user_sid) };
-    if add_ok == 0 {
-        return Err(format!(
-            "AddAccessAllowedAce failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    // ---- Step 4: 写回文件安全信息 ----
-    let wide_path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: wide_path 是 NUL 终止的 UTF-16，在本调用期间存活；acl_ptr 是已初始化
-    // 的有效 ACL（acl_buffer 仍存活）；owner/group/sacl 传 null 表示不修改这些字段；
-    // PROTECTED_DACL 阻止后续再从父目录继承 ACE。
-    let set_result = unsafe {
-        SetNamedSecurityInfoW(
-            wide_path.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            acl_ptr,
-            std::ptr::null(),
-        )
-    };
-    if set_result != 0 {
-        return Err(format!(
-            "SetNamedSecurityInfoW failed with code {set_result}"
-        ));
-    }
-
-    // 显式持有 buffer / acl_buffer 到此处，防止编译器提前释放栈上 Vec。
-    drop(buffer);
-    drop(acl_buffer);
-
-    Ok(())
-}
-
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
-    Ok(())
-}
-
-/// 检查 Claude Code 配置状态
-#[derive(Serialize, Deserialize)]
-pub struct ConfigStatus {
-    pub exists: bool,
-    pub path: String,
-}
-
-/// 获取 Claude Code 配置状态
-pub fn get_claude_config_status() -> ConfigStatus {
-    let path = get_claude_settings_path();
-    ConfigStatus {
-        exists: path.exists(),
-        path: path.to_string_lossy().to_string(),
     }
 }

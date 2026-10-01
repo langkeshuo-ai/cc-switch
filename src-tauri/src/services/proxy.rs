@@ -1177,7 +1177,9 @@ impl ProxyService {
                         if let Err(e) = self.restore_live_config_for_app_inner(app).await {
                             log::warn!("{app_type_str} 残留备份还原失败（按首次接管继续）: {e}");
                         }
-                        let _ = self.db.delete_live_backup(app_type_str).await;
+                        if let Err(e) = self.db.delete_live_backup(app_type_str).await {
+                            log::warn!("清理 {app_type_str} live 备份失败（残留备份可能干扰下次接管判定）: {e}");
+                        }
                     }
                     Ok(None) => {}
                     Err(e) => log::warn!("读取 {app_type_str} 备份失败（将按首次接管处理）: {e}"),
@@ -1225,7 +1227,9 @@ impl ProxyService {
 
                 // 4) 同步 Live Token 到数据库（仅当前 app）
                 if let Err(e) = self.sync_live_to_provider(app).await {
-                    let _ = self.db.delete_live_backup(app_type_str).await;
+                    if let Err(e) = self.db.delete_live_backup(app_type_str).await {
+                        log::warn!("清理 {app_type_str} live 备份失败（残留备份可能干扰下次接管判定）: {e}");
+                    }
                     return Err(e);
                 }
             }
@@ -1252,7 +1256,9 @@ impl ProxyService {
                 {
                     Ok(()) => {
                         // 恢复成功才清理备份，避免失败场景下丢失唯一可回滚来源
-                        let _ = self.db.delete_live_backup(app_type_str).await;
+                        if let Err(e) = self.db.delete_live_backup(app_type_str).await {
+                            log::warn!("清理 {app_type_str} live 备份失败（残留备份可能干扰下次接管判定）: {e}");
+                        }
                     }
                     Err(restore_err) => {
                         log::error!(
@@ -1284,7 +1290,9 @@ impl ProxyService {
                     .await
                 {
                     Ok(()) => {
-                        let _ = self.db.delete_live_backup(app_type_str).await;
+                        if let Err(e) = self.db.delete_live_backup(app_type_str).await {
+                            log::warn!("清理 {app_type_str} live 备份失败（残留备份可能干扰下次接管判定）: {e}");
+                        }
                     }
                     Err(restore_error) => {
                         log::error!(
@@ -2053,7 +2061,14 @@ impl ProxyService {
                             None,
                         );
                     }
-                    let _ = self.write_claude_live(&live_config);
+                    // 尽力而为，但失败必须可见：写失败意味着 ANTHROPIC_BASE_URL
+                    // 未落盘，CLI 请求不会经过代理，failover/用量统计全部静默失效。
+                    if let Err(e) = self.write_claude_live(&live_config) {
+                        log::error!(
+                            "代理接管启动，但 Claude live 配置写入失败——请求将不经过代理，\
+                             failover/统计失效: {e}"
+                        );
+                    }
                 }
             }
             AppType::Codex if self.read_codex_live().is_ok() => {

@@ -775,38 +775,56 @@ async fn get_single_tool_version_impl(
     let client = crate::proxy::http_client::get();
 
     // 1. 获取本地版本
-    let probe = if let Some(distro) = wsl_distro.as_deref() {
-        try_get_version_wsl(tool, distro, wsl_shell, wsl_shell_flag)
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            // Probe the PATH-default entry (what `tool` resolves to in a
-            // terminal) first, and only fall back to the directory scan when it
-            // is genuinely absent (NotFound). Two goals:
-            // 1. Keep the displayed "current version" aligned with the version
-            //    the user actually runs — a stale shim in a hardcoded fallback
-            //    dir (e.g. an old `%APPDATA%\npm`) must not override a newer
-            //    PATH install (#4701: "updated but still shows the old version").
-            // 2. Mirror the non-Windows structure (`try_get_version` →
-            //    `scan_cli_version`).
-            // `probe_path_default_version` executes only the real executable
-            //    resolved by `where` (App Execution Aliases filtered out), so
-            //    it never `cmd /C tool` into a protocol handler.
-            match probe_path_default_version(tool) {
-                ShellProbe::NotFound(_) => scan_cli_version(tool),
-                found => found,
+    //
+    // 探测全程为阻塞调用（子进程 exec `--version` + 目录扫描，单个可达数百
+    // ms）。本 runtime 同时承载代理转发，必须移入 spawn_blocking，避免占死
+    // tokio worker 放大请求延迟——run_tool_lifecycle_action /
+    // probe_tool_installations 均已是此模式，此处补齐。
+    let tool_owned = tool.to_string();
+    let wsl_shell_owned = wsl_shell.map(str::to_string);
+    let wsl_shell_flag_owned = wsl_shell_flag.map(str::to_string);
+    let wsl_distro_for_probe = wsl_distro.clone();
+    let probe = tokio::task::spawn_blocking(move || {
+        if let Some(distro) = wsl_distro_for_probe.as_deref() {
+            try_get_version_wsl(
+                &tool_owned,
+                distro,
+                wsl_shell_owned.as_deref(),
+                wsl_shell_flag_owned.as_deref(),
+            )
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                // Probe the PATH-default entry (what `tool` resolves to in a
+                // terminal) first, and only fall back to the directory scan when it
+                // is genuinely absent (NotFound). Two goals:
+                // 1. Keep the displayed "current version" aligned with the version
+                //    the user actually runs — a stale shim in a hardcoded fallback
+                //    dir (e.g. an old `%APPDATA%\npm`) must not override a newer
+                //    PATH install (#4701: "updated but still shows the old version").
+                // 2. Mirror the non-Windows structure (`try_get_version` →
+                //    `scan_cli_version`).
+                // `probe_path_default_version` executes only the real executable
+                //    resolved by `where` (App Execution Aliases filtered out), so
+                //    it never `cmd /C tool` into a protocol handler.
+                match probe_path_default_version(&tool_owned) {
+                    ShellProbe::NotFound(_) => scan_cli_version(&tool_owned),
+                    found => found,
+                }
             }
-        }
 
-        #[cfg(not(target_os = "windows"))]
-        {
-            // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
-            match try_get_version(tool) {
-                ShellProbe::NotFound(_) => scan_cli_version(tool),
-                found => found,
+            #[cfg(not(target_os = "windows"))]
+            {
+                // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
+                match try_get_version(&tool_owned) {
+                    ShellProbe::NotFound(_) => scan_cli_version(&tool_owned),
+                    found => found,
+                }
             }
         }
-    };
+    })
+    .await
+    .unwrap_or_else(|e| ShellProbe::NotFound(format!("版本探测任务失败: {e}")));
     let (local_version, local_error, installed_but_broken) = match probe {
         ShellProbe::Found(v) => (Some(v), None, false),
         ShellProbe::FoundButFailed(e) => (None, Some(e), true),

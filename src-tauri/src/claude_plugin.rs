@@ -37,17 +37,6 @@ pub fn read_claude_config() -> Result<Option<String>, AppError> {
     }
 }
 
-fn is_managed_config(content: &str) -> bool {
-    match serde_json::from_str::<serde_json::Value>(content) {
-        Ok(value) => value
-            .get("primaryApiKey")
-            .and_then(|v| v.as_str())
-            .map(|val| val == "any")
-            .unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
 pub fn write_claude_config() -> Result<bool, AppError> {
     // 增量写入：仅设置 primaryApiKey = "any"，保留其它字段
     let path = claude_config_path()?;
@@ -80,7 +69,8 @@ pub fn write_claude_config() -> Result<bool, AppError> {
     if changed || !path.exists() {
         let serialized = serde_json::to_string_pretty(&obj)
             .map_err(|e| AppError::JsonSerialize { source: e })?;
-        fs::write(&path, format!("{serialized}\n")).map_err(|e| AppError::io(&path, e))?;
+        // 原子写：~/.claude.json 是 Claude Code 主配置，中途崩溃/断电不能留半截文件
+        crate::config::atomic_write(&path, format!("{serialized}\n").as_bytes())?;
         Ok(true)
     } else {
         Ok(false)
@@ -114,18 +104,6 @@ pub fn clear_claude_config() -> Result<bool, AppError> {
 
     let serialized =
         serde_json::to_string_pretty(&value).map_err(|e| AppError::JsonSerialize { source: e })?;
-    fs::write(&path, format!("{serialized}\n")).map_err(|e| AppError::io(&path, e))?;
+    crate::config::atomic_write(&path, format!("{serialized}\n").as_bytes())?;
     Ok(true)
-}
-
-pub fn claude_config_status() -> Result<(bool, PathBuf), AppError> {
-    let path = claude_config_path()?;
-    Ok((path.exists(), path))
-}
-
-pub fn is_claude_config_applied() -> Result<bool, AppError> {
-    match read_claude_config()? {
-        Some(content) => Ok(is_managed_config(&content)),
-        None => Ok(false),
-    }
 }
