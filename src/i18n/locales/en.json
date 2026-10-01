@@ -1,7 +1,7 @@
 {
   "app": {
     "title": "CC Switch",
-    "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
+    "description": "All-in-One Assistant for Claude Code, Codex & Pi"
   },
   "common": {
     "add": "Add",
