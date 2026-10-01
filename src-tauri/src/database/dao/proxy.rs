@@ -691,25 +691,6 @@ impl Database {
         .await
     }
 
-    /// 重置Provider健康状态
-    pub async fn reset_provider_health(
-        &self,
-        provider_id: &str,
-        app_type: &str,
-    ) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-
-        conn.execute(
-            "DELETE FROM provider_health WHERE provider_id = ?1 AND app_type = ?2",
-            rusqlite::params![provider_id, app_type],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        log::debug!("Reset health status for provider {provider_id} (app: {app_type})");
-
-        Ok(())
-    }
-
     /// 清空指定应用的健康状态（关闭单个代理时使用）
     pub async fn clear_provider_health_for_app(&self, app_type: &str) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);

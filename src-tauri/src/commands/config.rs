@@ -1,14 +1,13 @@
 #![allow(non_snake_case)]
 
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
 use crate::codex_config;
-use crate::config::{self, get_claude_settings_path, ConfigStatus};
+use crate::config::{self, get_claude_settings_path};
 use crate::settings;
-use crate::store::AppState;
 
 fn invalid_json_format_error(error: serde_json::Error) -> String {
     let lang = settings::get_settings()
@@ -53,37 +52,6 @@ fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), S
     }
 
     Ok(())
-}
-
-#[tauri::command]
-pub async fn get_config_status(
-    _state: State<'_, AppState>,
-    app: String,
-) -> Result<ConfigStatus, String> {
-    match super::parse_app(&app)? {
-        AppType::Claude => Ok(config::get_claude_config_status()),
-        AppType::Codex => {
-            let auth_path = codex_config::get_codex_auth_path();
-            let config_text = codex_config::read_codex_config_text().unwrap_or_default();
-            let exists = auth_path.exists() || !config_text.trim().is_empty();
-            let path = codex_config::get_codex_config_dir()
-                .to_string_lossy()
-                .to_string();
-
-            Ok(ConfigStatus { exists, path })
-        }
-        AppType::Pi => {
-            let config_path = crate::pi_config::get_pi_models_path().map_err(|e| e.to_string())?;
-            let path = crate::pi_config::get_pi_agent_dir()
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
-            Ok(ConfigStatus {
-                exists: config_path.exists(),
-                path,
-            })
-        }
-    }
 }
 
 #[tauri::command]

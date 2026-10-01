@@ -211,7 +211,6 @@ pub fn run() {
             commands::switch_provider,
             commands::import_default_config,
             commands::ensure_codex_official_provider,
-            commands::get_config_status,
             commands::get_claude_code_config_path,
             commands::get_config_dir,
             commands::open_config_folder,
@@ -235,17 +234,12 @@ pub fn run() {
             commands::set_rectifier_config,
             commands::get_optimizer_config,
             commands::set_optimizer_config,
-            commands::get_copilot_optimizer_config,
-            commands::set_copilot_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
-            commands::get_claude_plugin_status,
-            commands::read_claude_plugin_config,
             commands::apply_claude_plugin_config,
-            commands::is_claude_plugin_applied,
             commands::apply_claude_onboarding_skip,
             commands::clear_claude_onboarding_skip,
             // Claude MCP management
@@ -380,7 +374,6 @@ pub fn run() {
             commands::get_proxy_takeover_status,
             commands::set_proxy_takeover_for_app,
             commands::get_proxy_status,
-            commands::get_proxy_config,
             commands::update_proxy_config,
             // Global & Per-App Config
             commands::get_global_proxy_config,
@@ -391,9 +384,6 @@ pub fn run() {
             commands::set_default_cost_multiplier,
             commands::get_pricing_model_source,
             commands::set_pricing_model_source,
-            commands::is_proxy_running,
-            commands::is_live_takeover_active,
-            commands::switch_proxy_provider,
             // Proxy failover commands
             commands::get_provider_health,
             commands::reset_circuit_breaker,
@@ -479,10 +469,6 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
-            // lightweight mode (for testing or low-resource environments)
-            commands::enter_lightweight_mode,
-            commands::exit_lightweight_mode,
-            commands::is_lightweight_mode,
         ]);
 
     let app = builder

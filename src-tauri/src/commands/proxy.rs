@@ -71,12 +71,6 @@ pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<Proxy
     state.proxy_service.get_status().await
 }
 
-/// 获取代理配置
-#[tauri::command]
-pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
-    state.proxy_service.get_config().await
-}
-
 /// 更新代理配置
 #[tauri::command]
 pub async fn update_proxy_config(
@@ -265,48 +259,6 @@ pub async fn set_pricing_model_source(
     set_pricing_model_source_internal(&state, &app_type, &value)
         .await
         .map_err(|e| e.to_string())
-}
-
-/// 检查代理服务器是否正在运行
-#[tauri::command]
-pub async fn is_proxy_running(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.proxy_service.is_running().await)
-}
-
-/// 检查是否处于 Live 接管模式
-#[tauri::command]
-pub async fn is_live_takeover_active(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    state.proxy_service.is_takeover_active().await
-}
-
-/// 代理模式下切换供应商（热切换）
-#[tauri::command]
-pub async fn switch_proxy_provider(
-    state: tauri::State<'_, AppState>,
-    app_type: String,
-    provider_id: String,
-) -> Result<(), String> {
-    let app = require_proxy_app(&app_type)?;
-    // Codex official account cards can use the client's native OpenAI login
-    // through takeover. Other apps' official providers remain blocked.
-    let provider = state
-        .db
-        .get_provider_by_id(&provider_id, &app_type)
-        .map_err(|e| format!("读取供应商失败: {e}"))?
-        .ok_or_else(|| format!("供应商不存在: {provider_id}"))?;
-    if provider.category.as_deref() == Some("official")
-        && !crate::services::provider::official_provider_supports_proxy_takeover(&app, &provider)
-    {
-        return Err(
-            "代理接管模式下不能切换到官方供应商 (Cannot switch to official provider during proxy takeover)"
-                .to_string(),
-        );
-    }
-
-    state
-        .proxy_service
-        .switch_proxy_target(&app_type, &provider_id)
-        .await
 }
 
 // ==================== 故障转移相关命令 ====================
