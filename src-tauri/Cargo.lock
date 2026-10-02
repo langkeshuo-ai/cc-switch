@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch"
-version = "3.20.4-trim.9"
+version = "3.20.4-trim.10"
 dependencies = [
  "aes-gcm",
  "anyhow",
