@@ -270,6 +270,9 @@ export function WebdavSyncSection({
     remoteRoot: config?.remoteRoot ?? "cc-switch-sync",
     profile: config?.profile ?? "default",
     autoSync: config?.autoSync ?? false,
+    allowPlaintextHttp: config?.allowPlaintextHttp ?? false,
+    encryptionEnabled: config?.encryptionEnabled ?? false,
+    encryptionPassword: config?.encryptionPassword ?? "",
   }));
 
   // ─── S3 form state ─────────────────────────────────────────
@@ -289,6 +292,15 @@ export function WebdavSyncSection({
   const [s3Profile, setS3Profile] = useState(s3Config?.profile ?? "default");
   const [s3AutoSync, setS3AutoSync] = useState(s3Config?.autoSync ?? false);
   const [s3Enabled, setS3Enabled] = useState(s3Config?.enabled ?? false);
+  const [s3AllowPlaintextHttp, setS3AllowPlaintextHttp] = useState(
+    s3Config?.allowPlaintextHttp ?? false,
+  );
+  const [s3EncryptionEnabled, setS3EncryptionEnabled] = useState(
+    s3Config?.encryptionEnabled ?? false,
+  );
+  const [s3EncryptionPassword, setS3EncryptionPassword] = useState(
+    s3Config?.encryptionPassword ?? "",
+  );
   const [s3SecretTouched, setS3SecretTouched] = useState(false);
   const [s3Dirty, setS3Dirty] = useState(false);
   const [s3JustSaved, setS3JustSaved] = useState(false);
@@ -366,6 +378,9 @@ export function WebdavSyncSection({
         remoteRoot: nextRemoteRoot,
         profile: nextProfile,
         autoSync: config.autoSync ?? false,
+        allowPlaintextHttp: config.allowPlaintextHttp ?? false,
+        encryptionEnabled: config.encryptionEnabled ?? false,
+        encryptionPassword: config.encryptionPassword ?? "",
       };
     });
     setPasswordTouched(false);
@@ -384,21 +399,53 @@ export function WebdavSyncSection({
     setS3Profile(s3Config.profile ?? "default");
     setS3AutoSync(s3Config.autoSync ?? false);
     setS3Enabled(s3Config.enabled ?? false);
+    setS3AllowPlaintextHttp(s3Config.allowPlaintextHttp ?? false);
+    setS3EncryptionEnabled(s3Config.encryptionEnabled ?? false);
+    setS3EncryptionPassword(s3Config.encryptionPassword ?? "");
     setS3SecretTouched(false);
   }, [s3Config, s3Dirty]);
 
-  const updateField = useCallback((field: keyof typeof form, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    if (field === "password") {
-      setPasswordTouched(true);
-    }
-    setDirty(true);
-    setJustSaved(false);
-    if (justSavedTimerRef.current) {
-      clearTimeout(justSavedTimerRef.current);
-      justSavedTimerRef.current = null;
-    }
-  }, []);
+  const updateField = useCallback(
+    (
+      field:
+        | "baseUrl"
+        | "username"
+        | "password"
+        | "remoteRoot"
+        | "profile"
+        | "encryptionPassword",
+      value: string,
+    ) => {
+      setForm((prev) => ({ ...prev, [field]: value }));
+      if (field === "password") {
+        setPasswordTouched(true);
+      }
+      setDirty(true);
+      setJustSaved(false);
+      if (justSavedTimerRef.current) {
+        clearTimeout(justSavedTimerRef.current);
+        justSavedTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  /** Toggle a boolean WebDAV form field (auto-sync / HTTP exemption / E2E). */
+  const updateToggle = useCallback(
+    (
+      field: "autoSync" | "allowPlaintextHttp" | "encryptionEnabled",
+      value: boolean,
+    ) => {
+      setForm((prev) => ({ ...prev, [field]: value }));
+      setDirty(true);
+      setJustSaved(false);
+      if (justSavedTimerRef.current) {
+        clearTimeout(justSavedTimerRef.current);
+        justSavedTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const handlePresetChange = useCallback((id: string) => {
     setPresetId(id);
@@ -464,6 +511,10 @@ export function WebdavSyncSection({
       remoteRoot: form.remoteRoot.trim() || "cc-switch-sync",
       profile: form.profile.trim() || "default",
       autoSync: form.autoSync,
+      allowPlaintextHttp: form.allowPlaintextHttp,
+      encryptionEnabled: form.encryptionEnabled,
+      // 后端下发时口令被脱敏为空；空值提交即"沿用已保存口令"
+      encryptionPassword: form.encryptionPassword,
     };
   }, [form, passwordTouched]);
 
@@ -683,6 +734,10 @@ export function WebdavSyncSection({
       endpoint: s3Endpoint.trim() || undefined,
       remoteRoot: s3RemoteRoot.trim() || "cc-switch-sync",
       profile: s3Profile.trim() || "default",
+      allowPlaintextHttp: s3AllowPlaintextHttp,
+      encryptionEnabled: s3EncryptionEnabled,
+      // 后端下发时口令被脱敏为空；空值提交即"沿用已保存口令"
+      encryptionPassword: s3EncryptionPassword,
     };
   }, [
     s3Enabled,
@@ -694,6 +749,9 @@ export function WebdavSyncSection({
     s3Endpoint,
     s3RemoteRoot,
     s3Profile,
+    s3AllowPlaintextHttp,
+    s3EncryptionEnabled,
+    s3EncryptionPassword,
   ]);
 
   // ─── S3 Handlers ──────────────────────────────────────────
@@ -1130,6 +1188,72 @@ export function WebdavSyncSection({
                 />
               </div>
             </div>
+
+            {/* Plaintext HTTP exemption */}
+            <div className="flex items-start gap-4">
+              <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                {t("settings.webdavSync.allowPlaintextHttp")}
+                <span className="block text-[10px] font-normal text-muted-foreground">
+                  {t("settings.webdavSync.allowPlaintextHttpHint")}
+                </span>
+              </label>
+              <div className="pt-1">
+                <Switch
+                  checked={form.allowPlaintextHttp}
+                  onCheckedChange={(checked) =>
+                    updateToggle("allowPlaintextHttp", checked)
+                  }
+                  aria-label={t("settings.webdavSync.allowPlaintextHttp")}
+                  disabled={isLoading}
+                />
+              </div>
+            </div>
+
+            {/* End-to-end encryption */}
+            <div className="flex items-start gap-4">
+              <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                {t("settings.webdavSync.e2eEncryption")}
+                <span className="block text-[10px] font-normal text-muted-foreground">
+                  {t("settings.webdavSync.e2eEncryptionHint")}
+                </span>
+              </label>
+              <div className="pt-1">
+                <Switch
+                  checked={form.encryptionEnabled}
+                  onCheckedChange={(checked) =>
+                    updateToggle("encryptionEnabled", checked)
+                  }
+                  aria-label={t("settings.webdavSync.e2eEncryption")}
+                  disabled={isLoading}
+                />
+              </div>
+            </div>
+            {form.encryptionEnabled && (
+              <>
+                <div className="flex items-center gap-4">
+                  <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                    {t("settings.webdavSync.e2ePassword")}
+                  </label>
+                  <Input
+                    type="password"
+                    value={form.encryptionPassword}
+                    onChange={(e) =>
+                      updateField("encryptionPassword", e.target.value)
+                    }
+                    placeholder={t(
+                      "settings.webdavSync.e2ePasswordPlaceholder",
+                    )}
+                    className="text-xs flex-1"
+                    autoComplete="new-password"
+                    disabled={isLoading}
+                  />
+                </div>
+                <div className="flex items-start gap-2 pl-44 text-xs text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span>{t("settings.webdavSync.e2eWarning")}</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Last sync time */}
@@ -1420,6 +1544,73 @@ export function WebdavSyncSection({
                 />
               </div>
             </div>
+
+            {/* Plaintext HTTP exemption */}
+            <div className="flex items-start gap-4">
+              <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                {t("settings.s3Sync.allowPlaintextHttp")}
+                <span className="block text-[10px] font-normal text-muted-foreground">
+                  {t("settings.s3Sync.allowPlaintextHttpHint")}
+                </span>
+              </label>
+              <div className="pt-1">
+                <Switch
+                  checked={s3AllowPlaintextHttp}
+                  onCheckedChange={(checked) => {
+                    setS3AllowPlaintextHttp(checked);
+                    markS3Dirty();
+                  }}
+                  aria-label={t("settings.s3Sync.allowPlaintextHttp")}
+                  disabled={isS3Loading}
+                />
+              </div>
+            </div>
+
+            {/* End-to-end encryption */}
+            <div className="flex items-start gap-4">
+              <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                {t("settings.s3Sync.e2eEncryption")}
+                <span className="block text-[10px] font-normal text-muted-foreground">
+                  {t("settings.s3Sync.e2eEncryptionHint")}
+                </span>
+              </label>
+              <div className="pt-1">
+                <Switch
+                  checked={s3EncryptionEnabled}
+                  onCheckedChange={(checked) => {
+                    setS3EncryptionEnabled(checked);
+                    markS3Dirty();
+                  }}
+                  aria-label={t("settings.s3Sync.e2eEncryption")}
+                  disabled={isS3Loading}
+                />
+              </div>
+            </div>
+            {s3EncryptionEnabled && (
+              <>
+                <div className="flex items-center gap-4">
+                  <label className="w-40 text-xs font-medium text-foreground shrink-0">
+                    {t("settings.s3Sync.e2ePassword")}
+                  </label>
+                  <Input
+                    type="password"
+                    value={s3EncryptionPassword}
+                    onChange={(e) => {
+                      setS3EncryptionPassword(e.target.value);
+                      markS3Dirty();
+                    }}
+                    placeholder={t("settings.s3Sync.e2ePasswordPlaceholder")}
+                    className="text-xs flex-1"
+                    autoComplete="new-password"
+                    disabled={isS3Loading}
+                  />
+                </div>
+                <div className="flex items-start gap-2 pl-44 text-xs text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  <span>{t("settings.s3Sync.e2eWarning")}</span>
+                </div>
+              </>
+            )}
 
             {/* Enabled toggle */}
             <div className="flex items-start gap-4">

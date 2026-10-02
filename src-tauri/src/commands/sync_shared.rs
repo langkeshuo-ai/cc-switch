@@ -76,6 +76,20 @@ pub(crate) fn resolve_secret_for_request<S>(
     incoming
 }
 
+/// Preserve the stored end-to-end encryption passphrase.
+///
+/// The passphrase is redacted before reaching the frontend, so the UI always
+/// submits it empty unless the user retypes it. An empty field therefore means
+/// "keep the stored passphrase", mirroring the credential-preservation rule.
+pub(crate) fn preserve_encryption_password<S>(
+    incoming: S,
+    existing: Option<S>,
+    get_secret: impl Fn(&S) -> &str,
+    set_secret: impl Fn(&mut S, String),
+) -> S {
+    resolve_secret_for_request(incoming, existing, true, get_secret, set_secret)
+}
+
 /// Run a download under the global sync lock with auto-sync suppression held
 /// only while the snapshot itself is in flight; the post-download projection
 /// runs after the guard is dropped.

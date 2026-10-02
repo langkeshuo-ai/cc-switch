@@ -14,9 +14,10 @@ use serde_json::{json, Value};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::services::sync_protocol::{
-    apply_snapshot, build_local_snapshot, effective_db_compat_version, localized,
+    apply_remote_snapshot, build_local_snapshot, build_local_snapshot_with_crypto,
+    effective_db_compat_version, enforce_secure_transport, localized,
     persist_sync_success_best_effort, sha256_hex, validate_artifact_size_limit,
-    validate_manifest_compat, verify_artifact, ArtifactMeta, RemoteLayout, SyncManifest,
+    validate_manifest_compat, ArtifactMeta, RemoteLayout, SyncManifest, SyncSecuritySettings,
     MAX_MANIFEST_BYTES, MAX_SYNC_ARTIFACT_BYTES, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
 };
 
@@ -83,6 +84,12 @@ pub(crate) trait SyncTransport {
     /// Human-readable remote directory for UI payloads.
     fn display_path(&self, layout: RemoteLayout) -> String;
 
+    /// Remote endpoint URL subject to the plaintext-HTTP policy. Returning an
+    /// empty string (the default) means "no transport-level endpoint to check".
+    fn remote_endpoint(&self) -> &str {
+        ""
+    }
+
     /// Localization keys for flow-level errors (per-transport `webdav.sync.*`
     /// / `s3.sync.*` namespaces).
     fn key_remote_empty(&self) -> &'static str;
@@ -100,7 +107,14 @@ pub(crate) trait SyncTransport {
 // ─── Shared flows ────────────────────────────────────────────
 
 /// Probe connectivity and prepare the current remote layout.
-pub(crate) async fn check_connection<T: SyncTransport>(t: &T) -> Result<(), AppError> {
+///
+/// The plaintext-HTTP policy is enforced first so a blocked endpoint fails
+/// before any credentials are sent over the wire.
+pub(crate) async fn check_connection<T: SyncTransport>(
+    t: &T,
+    allow_plaintext_http: bool,
+) -> Result<(), AppError> {
+    enforce_secure_transport(t.remote_endpoint(), allow_plaintext_http)?;
     t.probe().await?;
     t.ensure_layout(RemoteLayout::Current).await
 }
@@ -114,10 +128,15 @@ pub(crate) async fn upload_snapshot<T, S, F>(
 ) -> Result<Value, AppError>
 where
     T: SyncTransport,
+    S: SyncSecuritySettings,
     F: FnOnce(&mut S, String, Option<String>) -> Result<(), AppError>,
 {
+    enforce_secure_transport(t.remote_endpoint(), settings.allow_plaintext_http())?;
     t.ensure_layout(RemoteLayout::Current).await?;
-    let snapshot = build_local_snapshot(db)?;
+    let snapshot = match settings.encryption_password()? {
+        Some(password) => build_local_snapshot_with_crypto(db, Some(password))?,
+        None => build_local_snapshot(db)?,
+    };
 
     // Upload order: artifacts first, manifest last (best-effort consistency)
     t.put_artifact(
@@ -168,8 +187,11 @@ pub(crate) async fn download_snapshot<T, S, F>(
 ) -> Result<Value, AppError>
 where
     T: SyncTransport,
+    S: SyncSecuritySettings,
     F: FnOnce(&mut S, String, Option<String>) -> Result<(), AppError>,
 {
+    enforce_secure_transport(t.remote_endpoint(), settings.allow_plaintext_http())?;
+
     let snapshot = find_remote_snapshot(t).await?.ok_or_else(|| {
         localized(
             t.key_remote_empty(),
@@ -180,15 +202,16 @@ where
 
     validate_manifest_compat(&snapshot.manifest, snapshot.layout)?;
 
-    // Download and verify artifacts
-    let db_sql = download_and_verify(
+    // Download the raw (possibly encrypted) artifacts; verification + decryption
+    // happen together in `apply_remote_snapshot` before any local mutation.
+    let db_sql = download_artifact(
         t,
         snapshot.layout,
         REMOTE_DB_SQL,
         &snapshot.manifest.artifacts,
     )
     .await?;
-    let skills_zip = download_and_verify(
+    let skills_zip = download_artifact(
         t,
         snapshot.layout,
         REMOTE_SKILLS_ZIP,
@@ -196,8 +219,14 @@ where
     )
     .await?;
 
-    // Apply snapshot
-    apply_snapshot(db, &db_sql, &skills_zip)?;
+    // Apply snapshot (verify manifest + artifact hashes, decrypt, then restore)
+    apply_remote_snapshot(
+        db,
+        &snapshot.manifest,
+        &db_sql,
+        &skills_zip,
+        settings.encryption_password()?,
+    )?;
 
     let manifest_hash = sha256_hex(&snapshot.manifest_bytes);
     let _persisted = persist_sync_success_best_effort(
@@ -219,9 +248,15 @@ where
 }
 
 /// Fetch remote manifest info without downloading artifacts.
+///
+/// This flow still transmits transport credentials (WebDAV Basic / S3 SigV4),
+/// so it enforces the same plaintext-HTTP policy as upload/download *before*
+/// issuing any request.
 pub(crate) async fn fetch_remote_info_payload<T: SyncTransport>(
     t: &T,
+    allow_plaintext_http: bool,
 ) -> Result<Option<Value>, AppError> {
+    enforce_secure_transport(t.remote_endpoint(), allow_plaintext_http)?;
     let Some(snapshot) = find_remote_snapshot(t).await? else {
         return Ok(None);
     };
@@ -283,9 +318,13 @@ async fn fetch_remote_snapshot<T: SyncTransport>(
     }))
 }
 
-// ─── Download & verify ───────────────────────────────────────
+// ─── Download ────────────────────────────────────────────────
 
-async fn download_and_verify<T: SyncTransport>(
+/// Download one artifact and enforce the manifest's size limit.
+///
+/// Hash verification is intentionally left to `apply_remote_snapshot` so the
+/// check runs in the shared protocol layer immediately before applying.
+async fn download_artifact<T: SyncTransport>(
     t: &T,
     layout: RemoteLayout,
     artifact_name: &str,
@@ -311,6 +350,137 @@ async fn download_and_verify<T: SyncTransport>(
             )
         })?;
 
-    verify_artifact(&bytes, artifact_name, meta)?;
     Ok(bytes)
+}
+
+// ─── Tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// In-memory transport stub: no network, no credentials. It exercises the
+    /// transport-policy gate and the encryption-password gate, which both run
+    /// before any real request would be issued.
+    struct StubTransport {
+        endpoint: String,
+    }
+
+    impl SyncTransport for StubTransport {
+        fn log_tag(&self) -> &'static str {
+            "Stub"
+        }
+
+        async fn probe(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn put_artifact(
+            &self,
+            _layout: RemoteLayout,
+            _name: &str,
+            _bytes: &[u8],
+            _content_type: &str,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn get_artifact(
+            &self,
+            _layout: RemoteLayout,
+            _name: &str,
+            _max_bytes: usize,
+        ) -> Result<Option<ArtifactBytes>, AppError> {
+            Ok(None)
+        }
+
+        async fn head_artifact(
+            &self,
+            _layout: RemoteLayout,
+            _name: &str,
+        ) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+
+        fn display_path(&self, _layout: RemoteLayout) -> String {
+            String::new()
+        }
+
+        fn remote_endpoint(&self) -> &str {
+            &self.endpoint
+        }
+
+        fn key_remote_empty(&self) -> &'static str {
+            "stub.sync.remote_empty"
+        }
+
+        fn key_manifest_missing_artifact(&self) -> &'static str {
+            "stub.sync.manifest_missing_artifact"
+        }
+
+        fn key_remote_missing_artifact(&self) -> &'static str {
+            "stub.sync.remote_missing_artifact"
+        }
+    }
+
+    /// `fetch_remote_info` sends transport credentials (WebDAV Basic / S3
+    /// SigV4), so it must honour the same plaintext-HTTP policy as upload and
+    /// download instead of bypassing it.
+    #[tokio::test]
+    async fn fetch_remote_info_enforces_plaintext_http_policy() {
+        // Public plaintext HTTP without an exemption is blocked before the
+        // manifest request (and thus any credentials) goes out.
+        let blocked = StubTransport {
+            endpoint: "http://nas.example.com:5005".to_string(),
+        };
+        assert!(
+            fetch_remote_info_payload(&blocked, false).await.is_err(),
+            "public plaintext HTTP must be blocked for fetch_remote_info"
+        );
+        // The same endpoint is allowed once the user grants the exemption; the
+        // stub then reports there is no remote snapshot.
+        assert!(
+            fetch_remote_info_payload(&blocked, true)
+                .await
+                .expect("exempted plaintext HTTP is allowed")
+                .is_none(),
+            "an exempted endpoint with no manifest yields no info"
+        );
+
+        // Loopback / private-LAN hosts are always allowed without an exemption.
+        for endpoint in ["http://192.168.1.5:5005", "http://127.0.0.1:5005"] {
+            let trusted = StubTransport {
+                endpoint: endpoint.to_string(),
+            };
+            assert!(
+                fetch_remote_info_payload(&trusted, false).await.is_ok(),
+                "{endpoint} should be allowed without an exemption"
+            );
+        }
+    }
+
+    /// Defense in depth: the shared upload flow rejects a settings object that
+    /// enabled encryption but left the password empty, rather than silently
+    /// uploading plaintext.
+    #[tokio::test]
+    async fn upload_rejects_enabled_encryption_with_empty_password() {
+        let db = crate::database::Database::memory().expect("create memory db");
+        let transport = StubTransport {
+            endpoint: "https://dav.example.com".to_string(),
+        };
+        let mut settings = crate::settings::WebDavSyncSettings {
+            encryption_enabled: true,
+            ..crate::settings::WebDavSyncSettings::default()
+        };
+
+        let err = upload_snapshot(&transport, &db, &mut settings, |_settings, _hash, _etag| {
+            Ok::<(), AppError>(())
+        })
+        .await
+        .expect_err("enabled encryption with an empty password must be rejected");
+        assert!(
+            err.to_string().contains("口令") || err.to_string().contains("password"),
+            "unexpected error: {err}"
+        );
+    }
 }

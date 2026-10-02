@@ -303,6 +303,12 @@ export interface WebDavSyncSettings {
   password?: string;
   remoteRoot?: string;
   profile?: string;
+  /** 显式豁免：允许对非回环/内网 HTTP 端点执行上传/下载。 */
+  allowPlaintextHttp?: boolean;
+  /** 端到端加密开关（默认关闭）。 */
+  encryptionEnabled?: boolean;
+  /** 端到端加密口令（后端下发时脱敏为空）。 */
+  encryptionPassword?: string;
   status?: WebDavSyncStatus;
 }
 
@@ -317,6 +323,12 @@ export interface S3SyncSettings {
   endpoint?: string;
   remoteRoot?: string;
   profile?: string;
+  /** 显式豁免：允许对非回环/内网 HTTP 端点执行上传/下载。 */
+  allowPlaintextHttp?: boolean;
+  /** 端到端加密开关（默认关闭）。 */
+  encryptionEnabled?: boolean;
+  /** 端到端加密口令（后端下发时脱敏为空）。 */
+  encryptionPassword?: string;
   status?: WebDavSyncStatus;
 }
 

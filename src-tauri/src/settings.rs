@@ -54,6 +54,25 @@ impl VisibleApps {
     }
 }
 
+/// Validate the opt-in end-to-end encryption settings for a sync transport.
+///
+/// Encryption is only meaningful with a password, so enabling it without one is
+/// rejected at the settings boundary rather than failing later at upload time.
+fn validate_encryption_settings(
+    namespace: &str,
+    enabled: bool,
+    password: &str,
+) -> Result<(), AppError> {
+    if enabled && password.is_empty() {
+        return Err(AppError::localized(
+            "sync.encryption.password_required_setting",
+            format!("已启用 {namespace} 端到端加密，但口令为空"),
+            format!("{namespace} end-to-end encryption is enabled but the password is empty."),
+        ));
+    }
+    Ok(())
+}
+
 /// WebDAV 同步状态（持久化同步进度信息）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -97,6 +116,15 @@ pub struct WebDavSyncSettings {
     pub remote_root: String,
     #[serde(default = "default_profile")]
     pub profile: String,
+    /// 显式豁免：允许对非回环/内网的 HTTP 端点执行上传/下载（自建内网场景）。
+    #[serde(default)]
+    pub allow_plaintext_http: bool,
+    /// 端到端加密开关（默认关闭，opt-in）。
+    #[serde(default)]
+    pub encryption_enabled: bool,
+    /// 端到端加密口令。仅当 `encryption_enabled` 为真时使用；下发到前端时脱敏。
+    #[serde(default)]
+    pub encryption_password: String,
     #[serde(default)]
     pub status: WebDavSyncStatus,
 }
@@ -111,6 +139,9 @@ impl Default for WebDavSyncSettings {
             password: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
+            allow_plaintext_http: false,
+            encryption_enabled: false,
+            encryption_password: String::new(),
             status: WebDavSyncStatus::default(),
         }
     }
@@ -132,6 +163,7 @@ impl WebDavSyncSettings {
                 "WebDAV username is required.",
             ));
         }
+        validate_encryption_settings("webdav", self.encryption_enabled, &self.encryption_password)?;
         Ok(())
     }
 
@@ -176,6 +208,15 @@ pub struct S3SyncSettings {
     pub remote_root: String,
     #[serde(default = "default_profile")]
     pub profile: String,
+    /// 显式豁免：允许对非回环/内网的 HTTP 端点执行上传/下载（自建内网场景）。
+    #[serde(default)]
+    pub allow_plaintext_http: bool,
+    /// 端到端加密开关（默认关闭，opt-in）。
+    #[serde(default)]
+    pub encryption_enabled: bool,
+    /// 端到端加密口令。仅当 `encryption_enabled` 为真时使用；下发到前端时脱敏。
+    #[serde(default)]
+    pub encryption_password: String,
     #[serde(default)]
     pub status: WebDavSyncStatus,
 }
@@ -192,6 +233,9 @@ impl Default for S3SyncSettings {
             endpoint: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
+            allow_plaintext_http: false,
+            encryption_enabled: false,
+            encryption_password: String::new(),
             status: WebDavSyncStatus::default(),
         }
     }
@@ -227,6 +271,7 @@ impl S3SyncSettings {
                 "S3 Secret Access Key is required.",
             ));
         }
+        validate_encryption_settings("s3", self.encryption_enabled, &self.encryption_password)?;
         Ok(())
     }
 
@@ -635,6 +680,12 @@ fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
 pub(crate) const DPAPI_MARKER: &str = "ccswitch-dpapi-v1:";
 
 /// 加密 settings 中的凭据字段（原地）。仅 Windows 生效。
+///
+/// 注意：DPAPI 只在 Windows 生效。非 Windows 平台（见函数末尾 no-op 分支）
+/// 没有 DPAPI，凭据与端到端加密口令以**明文**落盘，仅靠 0o600 文件权限保护；
+/// Windows 上若 DPAPI 调用失败，也会回退明文并 warn。E2E 口令是保护远端快照
+/// 的密钥（丢失即无法解密，泄露即失去加密保护），其"本地明文存储"这一事实
+/// 应被明确知晓，而非被"已加密"的假象掩盖。
 fn encrypt_credentials_in_place(settings: &mut AppSettings) {
     #[cfg(windows)]
     {
@@ -645,6 +696,18 @@ fn encrypt_credentials_in_place(settings: &mut AppSettings) {
                     None => log::warn!("WebDAV 密码 DPAPI 加密失败，将以明文保存（DACL 仍受限）"),
                 }
             }
+            if !sync.encryption_password.is_empty()
+                && !sync.encryption_password.starts_with(DPAPI_MARKER)
+            {
+                // 失败即回退明文：E2E 口令因此可能以明文留在 settings.json，
+                // 仅受 DACL 保护。这在丢弃/拷贝磁盘场景下等于泄露远端数据密钥。
+                match dpapi_protect(&sync.encryption_password) {
+                    Some(encrypted) => sync.encryption_password = encrypted,
+                    None => {
+                        log::warn!("WebDAV 加密口令 DPAPI 加密失败，将以明文保存（DACL 仍受限）")
+                    }
+                }
+            }
         }
         if let Some(s3) = settings.s3_sync.as_mut() {
             if !s3.secret_access_key.is_empty() && !s3.secret_access_key.starts_with(DPAPI_MARKER) {
@@ -653,8 +716,22 @@ fn encrypt_credentials_in_place(settings: &mut AppSettings) {
                     None => log::warn!("S3 secret DPAPI 加密失败，将以明文保存（DACL 仍受限）"),
                 }
             }
+            if !s3.encryption_password.is_empty()
+                && !s3.encryption_password.starts_with(DPAPI_MARKER)
+            {
+                // 同上：DPAPI 失败时 E2E 口令以明文存储，仅受 DACL 保护。
+                match dpapi_protect(&s3.encryption_password) {
+                    Some(encrypted) => s3.encryption_password = encrypted,
+                    None => {
+                        log::warn!("S3 加密口令 DPAPI 加密失败，将以明文保存（DACL 仍受限）")
+                    }
+                }
+            }
         }
     }
+    // 非 Windows 无 DPAPI：凭据与 E2E 口令全部以明文写入 settings.json，仅靠
+    // 0o600 文件权限（atomic_write_private）限制"同机其他用户"读取。这是该平台
+    // 威胁模型下的既定取舍，但意味着本地明文口令是已知暴露面。
     #[cfg(not(windows))]
     let _ = settings;
 }
@@ -675,6 +752,15 @@ fn decrypt_credentials_in_place(settings: &mut AppSettings) {
                     }
                 }
             }
+            if sync.encryption_password.starts_with(DPAPI_MARKER) {
+                match dpapi_unprotect(&sync.encryption_password) {
+                    Some(plain) => sync.encryption_password = plain,
+                    None => {
+                        log::warn!("WebDAV 加密口令 DPAPI 解密失败，已清空，需重新输入");
+                        sync.encryption_password.clear();
+                    }
+                }
+            }
         }
         if let Some(s3) = settings.s3_sync.as_mut() {
             if s3.secret_access_key.starts_with(DPAPI_MARKER) {
@@ -683,6 +769,15 @@ fn decrypt_credentials_in_place(settings: &mut AppSettings) {
                     None => {
                         log::warn!("S3 secret DPAPI 解密失败，已清空，需重新输入");
                         s3.secret_access_key.clear();
+                    }
+                }
+            }
+            if s3.encryption_password.starts_with(DPAPI_MARKER) {
+                match dpapi_unprotect(&s3.encryption_password) {
+                    Some(plain) => s3.encryption_password = plain,
+                    None => {
+                        log::warn!("S3 加密口令 DPAPI 解密失败，已清空，需重新输入");
+                        s3.encryption_password.clear();
                     }
                 }
             }
@@ -843,9 +938,13 @@ pub fn get_settings_for_frontend() -> AppSettings {
     let mut settings = get_settings();
     if let Some(sync) = &mut settings.webdav_sync {
         sync.password.clear();
+        // The E2E passphrase must never leave the backend; the UI shows a
+        // placeholder and preserves the stored value on save when left blank.
+        sync.encryption_password.clear();
     }
     if let Some(s3) = &mut settings.s3_sync {
         s3.secret_access_key.clear();
+        s3.encryption_password.clear();
     }
     settings.webdav_backup = None;
     settings

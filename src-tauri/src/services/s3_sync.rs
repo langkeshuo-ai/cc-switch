@@ -10,7 +10,8 @@ use serde_json::Value;
 use crate::error::AppError;
 use crate::services::s3::{self, S3Credentials};
 use crate::services::sync_protocol::{
-    persist_sync_success_with, RemoteLayout, DB_COMPAT_VERSION, PROTOCOL_VERSION,
+    persist_sync_success_with, RemoteLayout, SyncSecuritySettings, DB_COMPAT_VERSION,
+    PROTOCOL_VERSION,
 };
 use crate::services::sync_transport::{self, SyncTransport};
 use crate::settings::{update_s3_sync_status, S3SyncSettings};
@@ -27,7 +28,8 @@ pub(crate) fn sync_mutex() -> &'static tokio::sync::Mutex<()> {
 /// Check S3 connectivity by issuing a HEAD request against the bucket.
 pub async fn check_connection(settings: &S3SyncSettings) -> Result<(), AppError> {
     settings.validate()?;
-    sync_transport::check_connection(&S3Transport::new(settings)).await
+    sync_transport::check_connection(&S3Transport::new(settings), settings.allow_plaintext_http())
+        .await
 }
 
 /// Upload local snapshot (db + skills) to remote S3.
@@ -53,7 +55,11 @@ pub async fn download(
 /// Fetch remote manifest info without downloading artifacts.
 pub async fn fetch_remote_info(settings: &S3SyncSettings) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    sync_transport::fetch_remote_info_payload(&S3Transport::new(settings)).await
+    sync_transport::fetch_remote_info_payload(
+        &S3Transport::new(settings),
+        settings.allow_plaintext_http(),
+    )
+    .await
 }
 
 // ─── Sync status persistence ─────────────────────────────────
@@ -162,6 +168,10 @@ impl SyncTransport for S3Transport {
     fn display_path(&self, layout: RemoteLayout) -> String {
         let _ = layout;
         s3_dir_display(&self.settings)
+    }
+
+    fn remote_endpoint(&self) -> &str {
+        &self.settings.endpoint
     }
 
     fn key_remote_empty(&self) -> &'static str {

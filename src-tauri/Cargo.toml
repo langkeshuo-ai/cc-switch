@@ -96,6 +96,11 @@ rust_decimal = "1.33"
 uuid = { version = "1.11", features = ["v4"] }
 sha2 = "0.10"
 hmac = "0.12"
+# Opt-in end-to-end snapshot encryption: Argon2id password KDF + AES-256-GCM AEAD.
+# Shared by every transport through services/sync_crypto.rs so WebDAV and S3
+# cannot diverge on wire format or cryptographic parameters.
+argon2 = "0.5"
+aes-gcm = "0.10"
 json5 = "0.4"
 sys-locale = "0.3"
 

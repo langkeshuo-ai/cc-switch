@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use crate::error::AppError;
 use crate::services::sync_protocol::{
-    persist_sync_success_with, RemoteLayout, DB_COMPAT_VERSION, PROTOCOL_VERSION,
+    persist_sync_success_with, RemoteLayout, SyncSecuritySettings, DB_COMPAT_VERSION,
+    PROTOCOL_VERSION,
 };
 use crate::services::sync_transport::{self, SyncTransport};
 use crate::services::webdav::{
@@ -32,7 +33,11 @@ pub(crate) mod archive;
 /// Check WebDAV connectivity and ensure remote directory structure.
 pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppError> {
     settings.validate()?;
-    sync_transport::check_connection(&WebDavTransport::new(settings)).await
+    sync_transport::check_connection(
+        &WebDavTransport::new(settings),
+        settings.allow_plaintext_http(),
+    )
+    .await
 }
 
 /// Upload local snapshot (db + skills) to remote.
@@ -58,7 +63,11 @@ pub async fn download(
 /// Fetch remote manifest info without downloading artifacts.
 pub async fn fetch_remote_info(settings: &WebDavSyncSettings) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    sync_transport::fetch_remote_info_payload(&WebDavTransport::new(settings)).await
+    sync_transport::fetch_remote_info_payload(
+        &WebDavTransport::new(settings),
+        settings.allow_plaintext_http(),
+    )
+    .await
 }
 
 // ─── Sync status persistence ─────────────────────────────────
@@ -166,6 +175,10 @@ impl SyncTransport for WebDavTransport {
 
     fn display_path(&self, layout: RemoteLayout) -> String {
         remote_dir_display(&self.settings, layout)
+    }
+
+    fn remote_endpoint(&self) -> &str {
+        &self.settings.base_url
     }
 
     fn key_remote_empty(&self) -> &'static str {

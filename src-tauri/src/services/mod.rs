@@ -27,6 +27,7 @@ pub mod speedtest;
 pub mod sql_helpers;
 pub mod stream_check;
 pub mod subscription;
+pub(crate) mod sync_crypto;
 pub mod sync_protocol;
 pub(crate) mod sync_transport;
 pub mod usage_cache;

@@ -35,6 +35,24 @@ fn merge_settings_for_save(
         }
         _ => {}
     }
+    // 端到端加密口令同样在 `get_settings_for_frontend` 中被脱敏为 ""，
+    // 因此全量保存时的空口令意味着"保持现有"而非"用户主动清空"。
+    if let (Some(incoming_sync), Some(existing_sync)) =
+        (&mut incoming.webdav_sync, &existing.webdav_sync)
+    {
+        if incoming_sync.encryption_password.is_empty()
+            && !existing_sync.encryption_password.is_empty()
+        {
+            incoming_sync.encryption_password = existing_sync.encryption_password.clone();
+        }
+    }
+    if let (Some(incoming_sync), Some(existing_sync)) = (&mut incoming.s3_sync, &existing.s3_sync) {
+        if incoming_sync.encryption_password.is_empty()
+            && !existing_sync.encryption_password.is_empty()
+        {
+            incoming_sync.encryption_password = existing_sync.encryption_password.clone();
+        }
+    }
     // local_migrations 是纯后端状态（迁移完成标记），前端没有合法的修改场景，
     // 无条件取现有值。若按 incoming 透传：后端清掉 marker（如关闭统一会话
     // 开关）后、前端 query 缓存刷新前的一次全量保存会把旧 marker 重放回来，

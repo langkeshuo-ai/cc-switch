@@ -64,6 +64,20 @@ fn resolve_password_for_request(
     )
 }
 
+/// The E2E passphrase is redacted before reaching the frontend, so an empty
+/// incoming value always means "keep the stored passphrase".
+fn resolve_encryption_password_for_request(
+    incoming: WebDavSyncSettings,
+    existing: Option<WebDavSyncSettings>,
+) -> WebDavSyncSettings {
+    crate::commands::sync_shared::preserve_encryption_password(
+        incoming,
+        existing,
+        |settings: &WebDavSyncSettings| &settings.encryption_password,
+        |settings, password| settings.encryption_password = password,
+    )
+}
+
 #[cfg(test)]
 fn webdav_sync_mutex() -> &'static tokio::sync::Mutex<()> {
     webdav_sync_service::sync_mutex()
@@ -99,11 +113,9 @@ pub async fn webdav_test_connection(
     #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
 ) -> Result<Value, String> {
     let preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    let resolved = resolve_password_for_request(
-        settings,
-        settings::get_webdav_sync_settings(),
-        preserve_empty,
-    );
+    let existing = settings::get_webdav_sync_settings();
+    let resolved = resolve_password_for_request(settings, existing.clone(), preserve_empty);
+    let resolved = resolve_encryption_password_for_request(resolved, existing);
     webdav_sync_service::check_connection(&resolved)
         .await
         .map_err(|e| e.to_string())?;
@@ -168,6 +180,7 @@ pub async fn webdav_sync_save_settings(
     let existing = settings::get_webdav_sync_settings();
     let mut sync_settings =
         resolve_password_for_request(settings, existing.clone(), !password_touched);
+    sync_settings = resolve_encryption_password_for_request(sync_settings, existing.clone());
 
     // Preserve server-owned fields that the frontend does not manage
     if let Some(existing_settings) = existing {
