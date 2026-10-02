@@ -3500,9 +3500,7 @@ impl ProxyService {
     fn write_claude_live(&self, config: &Value) -> Result<(), String> {
         let path = get_claude_settings_path();
         let settings = crate::services::provider::sanitize_claude_settings_for_live(config);
-        // settings.json 可能含 ANTHROPIC_AUTH_TOKEN 等凭证，权限需收紧
-        crate::config::write_json_file_private(&path, &settings)
-            .map_err(|e| format!("写入 Claude 配置失败: {e}"))
+        write_json_file(&path, &settings).map_err(|e| format!("写入 Claude 配置失败: {e}"))
     }
 
     fn read_codex_live(&self) -> Result<Value, String> {
