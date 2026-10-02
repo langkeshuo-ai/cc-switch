@@ -31,3 +31,6 @@ copilot-api
 .history
 CODEBUDDY.md
 mainWindow.js
+
+# WorkBuddy 项目数据（记忆/技能等本地文件，不应提交）
+.workbuddy/
