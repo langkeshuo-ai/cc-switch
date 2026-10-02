@@ -82,7 +82,9 @@ export function DatabaseUpgrade({ payload }: DatabaseUpgradeProps) {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             className="gap-2 bg-amber-500 text-white hover:bg-amber-600"
-            onClick={() => void invokeCommand("open_external", { url: RELEASES_URL })}
+            onClick={() =>
+              void invokeCommand("open_external", { url: RELEASES_URL })
+            }
           >
             <ExternalLink className="h-4 w-4" />
             {t("dbUpgrade.openReleases", "打开发布页")}

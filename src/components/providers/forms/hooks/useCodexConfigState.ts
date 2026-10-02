@@ -264,6 +264,7 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
   // 剥控制字符：值可能来自 /models 下拉（远端数据），换行等会破坏单行 TOML 语义
   const handleCodexModelChange = useCallback(
     (model: string) => {
+      // eslint-disable-next-line no-control-regex -- 目的就是剥控制字符（远端下拉值可能含换行，会破坏单行 TOML 语义），非误用
       const sanitized = model.replace(/[\u0000-\u001f\u007f]/g, "").trim();
       setCodexModel(sanitized);
 

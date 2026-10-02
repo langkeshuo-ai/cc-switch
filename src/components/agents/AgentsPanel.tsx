@@ -4,7 +4,7 @@ interface AgentsPanelProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export function AgentsPanel({}: AgentsPanelProps) {
+export function AgentsPanel(_props: AgentsPanelProps) {
   return (
     <div className="px-6 flex flex-col flex-1 min-h-0">
       <div className="flex-1 glass-card rounded-xl p-8 flex flex-col items-center justify-center text-center space-y-4">

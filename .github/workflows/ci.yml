@@ -99,6 +99,9 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
+      - name: ESLint
+        run: pnpm lint
+
       - name: Unit tests
         run: pnpm test:unit
 
@@ -176,7 +179,10 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # 必须带 --features test-hooks：mcp_commands / provider_commands 两个
+        # 集成测试声明了 required-features，不开feature 会被 cargo **静默跳过**，
+        # 造成"测试全绿"的假象。
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features test-hooks
 
   backend-windows-wsl2:
     name: Backend Checks (Windows + WSL2 home)

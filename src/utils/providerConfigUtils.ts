@@ -737,6 +737,7 @@ const TOML_BASIC_STRING_ESCAPES: Record<string, string> = {
 };
 
 const escapeTomlBasicString = (value: string): string =>
+  // eslint-disable-next-line no-control-regex -- TOML 规范要求转义 U+0000..U+001F，此处按规范匹配
   value.replace(/["\\\u0000-\u001f]/g, (ch) => {
     const escaped = TOML_BASIC_STRING_ESCAPES[ch];
     if (escaped) return escaped;
