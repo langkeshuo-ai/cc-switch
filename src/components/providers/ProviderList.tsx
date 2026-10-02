@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { usePiCurrentState } from "@/lib/query/pi";
-import { isProxyAppId } from "@/config/appConfig";
+import { isFailoverAppId } from "@/config/appConfig";
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
@@ -82,7 +82,7 @@ export function ProviderList({
     appId,
   );
 
-  const supportsFailover = isProxyAppId(appId);
+  const supportsFailover = isFailoverAppId(appId);
   const { data: isAutoFailoverEnabled } = useAutoFailoverEnabled(
     appId,
     supportsFailover,

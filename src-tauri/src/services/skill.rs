@@ -1994,20 +1994,39 @@ impl SkillService {
 
     // ========== 文件同步方法 ==========
 
-    /// 创建符号链接（跨平台）
+    /// 创建符号链接（跨平台，不做校验）
     ///
     /// - Unix: 使用 std::os::unix::fs::symlink
     /// - Windows: 使用 std::os::windows::fs::symlink_dir
     #[cfg(unix)]
-    fn create_symlink(src: &Path, dest: &Path) -> Result<()> {
+    fn create_symlink_raw(src: &Path, dest: &Path) -> Result<()> {
         std::os::unix::fs::symlink(src, dest)
             .with_context(|| format!("创建符号链接失败: {} -> {}", src.display(), dest.display()))
     }
 
     #[cfg(windows)]
-    fn create_symlink(src: &Path, dest: &Path) -> Result<()> {
+    fn create_symlink_raw(src: &Path, dest: &Path) -> Result<()> {
         std::os::windows::fs::symlink_dir(src, dest)
             .with_context(|| format!("创建符号链接失败: {} -> {}", src.display(), dest.display()))
+    }
+
+    /// 创建符号链接并**校验产物确为符号链接**。
+    ///
+    /// Windows 上 `symlink_dir` 在部分受限环境（沙箱、未启用开发者模式且无特权）中
+    /// 会**不报错，却只建出一个真实空目录**（无 reparse point）。调用方若仅凭
+    /// `Ok(())` 判定成功，就会留下"应用目录已存在但内容为空"的假同步状态，并让
+    /// Pi 的"同名不同内容"保护误判。故此处复核产物：非符号链接即清理并返回错误，
+    /// 由调用方按既定策略回退到文件复制。
+    fn create_symlink(src: &Path, dest: &Path) -> Result<()> {
+        Self::create_symlink_raw(src, dest)?;
+        if !Self::is_symlink(dest) {
+            let _ = Self::remove_path(dest);
+            return Err(anyhow!(
+                "符号链接创建后未生效（平台或权限不支持），已清理: {}",
+                dest.display()
+            ));
+        }
+        Ok(())
     }
 
     /// 检查路径是否为符号链接

@@ -218,8 +218,12 @@ pub async fn set_auto_failover_enabled(
             let app_enum = crate::app_config::AppType::from_str(&app_type)
                 .map_err(|_| format!("无效的应用类型: {app_type}"))?;
 
-            let current_id = crate::settings::get_effective_current_provider(&state.db, &app_enum)
-                .map_err(|e| e.to_string())?;
+            let current_id = crate::settings::get_effective_current_provider_with(
+                &state.db,
+                &app_enum,
+                crate::pi_config::pi_proxy_current_provider_key,
+            )
+            .map_err(|e| e.to_string())?;
 
             let Some(current_id) = current_id else {
                 return Err("故障转移队列为空，且未设置当前供应商，无法开启故障转移".to_string());

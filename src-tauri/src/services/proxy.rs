@@ -752,18 +752,14 @@ impl ProxyService {
     }
 
     fn get_current_provider_for_app(&self, app_type: &AppType) -> Result<Option<Provider>, String> {
-        // Pi：实际生效供应商是 settings.json 的 defaultProvider（Pi CLI 唯一
-        // 跟随的源），代理状态展示与接管路径都应以它为准
-        let current_id = if matches!(app_type, AppType::Pi) {
-            crate::pi_config::pi_proxy_current_provider_key().or_else(|| {
-                crate::settings::get_effective_current_provider(&self.db, app_type)
-                    .ok()
-                    .flatten()
-            })
-        } else {
-            crate::settings::get_effective_current_provider(&self.db, app_type)
-                .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?
-        };
+        // Pi 的权威源是 settings.json 的 defaultProvider（Pi CLI 唯一跟随的源），
+        // 由 get_effective_current_provider_with 内部统一分流
+        let current_id = crate::settings::get_effective_current_provider_with(
+            &self.db,
+            app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
+        .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?;
         let Some(current_id) = current_id else {
             return Ok(None);
         };
@@ -1126,8 +1122,12 @@ impl ProxyService {
         if !matches!(app, AppType::Codex) {
             return Ok(());
         }
-        if let Some(provider_id) = crate::settings::get_effective_current_provider(&self.db, app)
-            .map_err(|error| error.to_string())?
+        if let Some(provider_id) = crate::settings::get_effective_current_provider_with(
+            &self.db,
+            app,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
+        .map_err(|error| error.to_string())?
         {
             if let Some(account_id) = self
                 .db
@@ -1306,9 +1306,11 @@ impl ProxyService {
             self.refresh_active_target_from_current_provider(app).await;
 
             // 8) Warn if the current provider is official (risk of account ban via proxy)
-            if let Ok(Some(current_id)) =
-                crate::settings::get_effective_current_provider(&self.db, app)
-            {
+            if let Ok(Some(current_id)) = crate::settings::get_effective_current_provider_with(
+                &self.db,
+                app,
+                crate::pi_config::pi_proxy_current_provider_key,
+            ) {
                 if let Ok(Some(provider)) = self.db.get_provider_by_id(&current_id, app_type_str) {
                     if provider.category.as_deref() == Some("official")
                         && !crate::services::provider::official_provider_supports_proxy_takeover(
@@ -2289,8 +2291,12 @@ impl ProxyService {
             return self.restore_pi_base_url_from_ssot();
         }
 
-        let current_id = crate::settings::get_effective_current_provider(&self.db, app_type)
-            .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?;
+        let current_id = crate::settings::get_effective_current_provider_with(
+            &self.db,
+            app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
+        .map_err(|e| format!("获取 {app_type:?} 当前供应商失败: {e}"))?;
 
         let Some(current_id) = current_id else {
             return Ok(false);
@@ -2766,9 +2772,12 @@ impl ProxyService {
             );
         }
 
-        let previous_provider_id =
-            crate::settings::get_effective_current_provider(&self.db, &app_type_enum)
-                .map_err(|e| format!("读取当前供应商失败: {e}"))?;
+        let previous_provider_id = crate::settings::get_effective_current_provider_with(
+            &self.db,
+            &app_type_enum,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
+        .map_err(|e| format!("读取当前供应商失败: {e}"))?;
         let previous_provider = previous_provider_id
             .as_deref()
             .map(|id| {

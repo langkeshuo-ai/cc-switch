@@ -24,11 +24,26 @@ export const SKILLS_APP_IDS: AppId[] = ["claude", "codex", "pi"];
 
 export type ProxyAppId = Extract<AppId, "claude" | "codex" | "pi">;
 
-/** Apps with a complete local gateway + failover data plane. */
+/** Apps with a complete local gateway data plane. */
 export const PROXY_APP_IDS: ProxyAppId[] = ["claude", "codex", "pi"];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);
+}
+
+/**
+ * Apps whose gateway can hand off to another provider mid-stream.
+ *
+ * Narrower than {@link PROXY_APP_IDS}: Pi's transparent forwarding cannot
+ * switch dialects safely, so the backend rejects it
+ * (`commands/failover.rs`). Keeping the two lists separate stops the UI from
+ * advertising a capability the backend refuses.
+ */
+export type FailoverAppId = Extract<AppId, "claude" | "codex">;
+export const FAILOVER_APP_IDS: FailoverAppId[] = ["claude", "codex"];
+
+export function isFailoverAppId(appId: string): appId is FailoverAppId {
+  return (FAILOVER_APP_IDS as string[]).includes(appId);
 }
 
 export type AdditiveAppId = Extract<AppId, "pi">;

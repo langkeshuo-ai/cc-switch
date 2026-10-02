@@ -1217,7 +1217,7 @@ export function PiProviderForm({
             validateAbsoluteHttpUrl(
               baseUrl.trim(),
               t("pi.form.absoluteHttpUrlRequired", {
-                label: t("opencode.baseUrl", { defaultValue: "Base URL" }),
+                label: t("piProvider.baseUrl", { defaultValue: "Base URL" }),
               }),
             ),
           "#pi-provider-base-url",
@@ -1373,11 +1373,11 @@ export function PiProviderForm({
                     />
                     <p className="text-xs text-muted-foreground">
                       {isEdit
-                        ? t("opencode.providerKeyLockedHint", {
+                        ? t("piProvider.providerKeyLockedHint", {
                             defaultValue:
                               "该供应商已添加到应用配置中，供应商标识不可修改",
                           })
-                        : t("opencode.providerKeyHint", {
+                        : t("piProvider.providerKeyHint", {
                             defaultValue:
                               "配置文件中的唯一标识符，只能使用小写字母、数字和连字符",
                           })}
@@ -1388,7 +1388,7 @@ export function PiProviderForm({
             />
 
             <Field
-              label={t("opencode.npmPackage", {
+              label={t("piProvider.npmPackage", {
                 defaultValue: "接口格式",
               })}
               htmlFor="pi-provider-api-select"
@@ -1409,7 +1409,7 @@ export function PiProviderForm({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {t("opencode.npmPackageHint", {
+                {t("piProvider.npmPackageHint", {
                   defaultValue: "选择 AI 服务的 API 接口格式",
                 })}
               </p>
@@ -1430,13 +1430,13 @@ export function PiProviderForm({
             <div className="space-y-2">
               <EndpointField
                 id="pi-provider-base-url"
-                label={t("opencode.baseUrl", { defaultValue: "Base URL" })}
+                label={t("piProvider.baseUrl", { defaultValue: "Base URL" })}
                 value={baseUrl}
                 onChange={handleBaseUrlChange}
                 placeholder="https://api.example.com/v1"
               />
               <p className="text-xs text-muted-foreground">
-                {t("opencode.baseUrlHint", {
+                {t("piProvider.baseUrlHint", {
                   defaultValue: "自定义 API 端点地址",
                 })}
               </p>
@@ -1469,7 +1469,7 @@ export function PiProviderForm({
             >
               <div className="flex items-center justify-between gap-3">
                 <FormLabel>
-                  {t("opencode.models", { defaultValue: "模型配置" })}
+                  {t("piProvider.models", { defaultValue: "模型配置" })}
                 </FormLabel>
                 <div className="flex gap-1">
                   <Button
@@ -1970,7 +1970,7 @@ export function PiProviderForm({
               )}
 
               <p className="text-xs text-muted-foreground">
-                {t("opencode.modelsHint", {
+                {t("piProvider.modelsHint", {
                   defaultValue: "配置可用的模型及其显示名称。",
                 })}
               </p>

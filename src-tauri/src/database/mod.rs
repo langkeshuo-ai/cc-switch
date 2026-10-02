@@ -107,6 +107,13 @@ impl Database {
 
         let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 锁竞争时等待而不是立刻失败。rusqlite 默认 busy_timeout=0，
+        // 任何瞬时竞争（另一个进程/测试二进制短暂持锁、WSL2 或网盘等
+        // 锁语义较弱的文件系统）都会直接抛 `database is locked`。
+        // 这里给 5s 上限：足以覆盖瞬时竞争，又不会把真死锁变成无限等待。
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;

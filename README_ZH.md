@@ -244,7 +244,7 @@ Claude Code、Codex、Pi 等 AI 编程工具各有各的配置格式。换一个
 
 ### Windows 用户
 
-从 [Releases](../../releases) 页面下载最新版本的 `CC-Switch-v{版本号}-Windows.msi` 安装包或 `CC-Switch-v{版本号}-Windows-Portable.zip` 绿色版。ARM 版 Windows 请下载 `CC-Switch-v{版本号}-Windows-arm64.msi` 或 `CC-Switch-v{版本号}-Windows-arm64-Portable.zip`。
+本构建仅发布 **Windows x64（NSIS `.exe`）** 与 **macOS 通用版（`.dmg`）**。请从 [Releases](../../releases) 页面下载最新的 `CC Switch_{版本号}_x64-setup.exe`。本发行线不产出 `.msi` 与绿色版压缩包：WiX 工具链不接受带预发布后缀的版本号。
 
 ### macOS 用户
 

@@ -3446,8 +3446,12 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             return Ok(String::new());
         }
-        crate::settings::get_effective_current_provider(&state.db, &app_type)
-            .map(|opt| opt.unwrap_or_default())
+        crate::settings::get_effective_current_provider_with(
+            &state.db,
+            &app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
+        .map(|opt| opt.unwrap_or_default())
     }
 
     /// Add a new provider
@@ -3482,8 +3486,11 @@ impl ProviderService {
         };
 
         if is_managed_codex_add {
-            let effective_current =
-                crate::settings::get_effective_current_provider(&state.db, &app_type)?;
+            let effective_current = crate::settings::get_effective_current_provider_with(
+                &state.db,
+                &app_type,
+                crate::pi_config::pi_proxy_current_provider_key,
+            )?;
 
             // Adding a non-current managed provider only mutates its DB row. Keep
             // the same switch lock until that row is committed so a waiting switch
@@ -3683,8 +3690,11 @@ impl ProviderService {
         }
 
         // For other apps: Check if this is current provider (use effective current, not just DB)
-        let effective_current =
-            crate::settings::get_effective_current_provider(&state.db, &app_type)?;
+        let effective_current = crate::settings::get_effective_current_provider_with(
+            &state.db,
+            &app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )?;
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
         let existing_managed_codex_account_id = existing_provider
@@ -4052,7 +4062,11 @@ impl ProviderService {
 
         // Backfill: Backfill current live config to current provider
         // Use effective current provider (validated existence) to ensure backfill targets valid provider
-        let current_id = crate::settings::get_effective_current_provider(&state.db, &app_type)?;
+        let current_id = crate::settings::get_effective_current_provider_with(
+            &state.db,
+            &app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )?;
         let current_managed_codex_account_id = current_id
             .as_deref()
             .and_then(|current_id| providers.get(current_id))
@@ -4289,11 +4303,14 @@ impl ProviderService {
             return sync_current_provider_for_app_to_live(state, &app_type);
         }
 
-        let current_id =
-            match crate::settings::get_effective_current_provider(&state.db, &app_type)? {
-                Some(id) => id,
-                None => return Ok(()),
-            };
+        let current_id = match crate::settings::get_effective_current_provider_with(
+            &state.db,
+            &app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )? {
+            Some(id) => id,
+            None => return Ok(()),
+        };
 
         let providers = state.db.get_all_providers(app_type.as_str())?;
         let Some(provider) = providers.get(&current_id) else {
@@ -5284,8 +5301,11 @@ impl ProviderService {
         child_id: &str,
         failures: &mut Vec<String>,
     ) {
-        let is_current = match crate::settings::get_effective_current_provider(&state.db, &app_type)
-        {
+        let is_current = match crate::settings::get_effective_current_provider_with(
+            &state.db,
+            &app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        ) {
             Ok(current) => current.as_deref() == Some(child_id),
             Err(err) => {
                 log::warn!(

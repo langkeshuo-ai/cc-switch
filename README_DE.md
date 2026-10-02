@@ -243,7 +243,7 @@ Claude Code, Codex, Pi und andere KI-Programmierwerkzeuge haben jeweils ihr eige
 
 ### Windows-Nutzer
 
-Laden Sie das neueste Installationsprogramm `CC-Switch-v{version}-Windows.msi` oder die portable Version `CC-Switch-v{version}-Windows-Portable.zip` von der Seite [Releases](../../releases) herunter. Unter Windows on ARM laden Sie `CC-Switch-v{version}-Windows-arm64.msi` oder `CC-Switch-v{version}-Windows-arm64-Portable.zip` herunter.
+Dieser Build veröffentlicht ausschließlich **Windows x64 (NSIS `.exe`)** und **macOS Universal (`.dmg`)**. Laden Sie das neueste `CC Switch_{version}_x64-setup.exe` von der Seite [Releases](../../releases) herunter. Für diese Release-Linie werden weder `.msi` noch eine Portable-Version erzeugt: die WiX-Toolchain lehnt den Pre-Release-Suffix der Version ab.
 
 ### macOS-Nutzer
 

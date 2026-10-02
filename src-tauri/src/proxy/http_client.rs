@@ -249,24 +249,38 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
-fn system_proxy_points_to_loopback() -> bool {
-    const KEYS: [&str; 6] = [
-        "HTTP_PROXY",
-        "http_proxy",
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-    ];
+/// 环境代理变量候选；大小写两种拼写都可能出现（各工具链行为不一致）。
+const PROXY_ENV_KEYS: [&str; 6] = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
 
-    KEYS.iter()
-        .filter_map(|key| env::var(key).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .any(|value| proxy_points_to_loopback(&value))
+fn system_proxy_points_to_loopback() -> bool {
+    proxy_env_points_to_loopback(|key| env::var(key).ok(), get_proxy_port())
 }
 
-fn proxy_points_to_loopback(value: &str) -> bool {
+/// `system_proxy_points_to_loopback` 的纯函数版本：env 查找与 CC Switch 端口
+/// 都由调用方注入。
+///
+/// 保持纯函数是为了让测试**无需改写进程级 env 与全局端口**。改写全局状态会与
+/// 同进程内并发运行的用例互相污染（表现为转发用例随机 502，且难以稳定复现）。
+fn proxy_env_points_to_loopback(
+    lookup: impl Fn(&str) -> Option<String>,
+    cc_switch_port: u16,
+) -> bool {
+    PROXY_ENV_KEYS
+        .iter()
+        .filter_map(|key| lookup(key))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .any(|value| proxy_points_to_loopback(&value, cc_switch_port))
+}
+
+fn proxy_points_to_loopback(value: &str, cc_switch_port: u16) -> bool {
     fn host_is_loopback(host: &str) -> bool {
         if host.eq_ignore_ascii_case("localhost") {
             return true;
@@ -276,12 +290,8 @@ fn proxy_points_to_loopback(value: &str) -> bool {
             .unwrap_or(false)
     }
 
-    // 检查是否指向 CC Switch 自己的代理端口
-    // 只有指向自己的代理才需要跳过，避免递归
-    fn is_cc_switch_proxy_port(port: Option<u16>) -> bool {
-        let cc_switch_port = get_proxy_port();
-        port == Some(cc_switch_port)
-    }
+    // 只有指向 CC Switch 自己端口的代理才需要跳过，否则会与自己递归
+    let is_cc_switch_proxy_port = |port: Option<u16>| port == Some(cc_switch_port);
 
     if let Ok(parsed) = url::Url::parse(value) {
         if let Some(host) = parsed.host_str() {
@@ -328,12 +338,6 @@ pub fn mask_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     #[test]
     fn test_mask_url() {
@@ -395,57 +399,59 @@ mod tests {
 
     #[test]
     fn test_proxy_points_to_loopback() {
-        // 设置 CC Switch 代理端口为 15721（默认值）
-        set_proxy_port(15721);
+        const PORT: u16 = 15721;
 
         // 只有指向 CC Switch 自己端口的 loopback 地址才返回 true
-        assert!(proxy_points_to_loopback("http://127.0.0.1:15721"));
-        assert!(proxy_points_to_loopback("socks5://localhost:15721"));
-        assert!(proxy_points_to_loopback("127.0.0.1:15721"));
+        assert!(proxy_points_to_loopback("http://127.0.0.1:15721", PORT));
+        assert!(proxy_points_to_loopback("socks5://localhost:15721", PORT));
+        assert!(proxy_points_to_loopback("127.0.0.1:15721", PORT));
 
         // 其他 loopback 端口不应该被跳过（允许使用其他本地代理工具）
-        assert!(!proxy_points_to_loopback("http://127.0.0.1:7890"));
-        assert!(!proxy_points_to_loopback("socks5://localhost:1080"));
+        assert!(!proxy_points_to_loopback("http://127.0.0.1:7890", PORT));
+        assert!(!proxy_points_to_loopback("socks5://localhost:1080", PORT));
 
         // 非 loopback 地址不应该被跳过
-        assert!(!proxy_points_to_loopback("http://192.168.1.10:7890"));
-        assert!(!proxy_points_to_loopback("http://192.168.1.10:15721"));
+        assert!(!proxy_points_to_loopback("http://192.168.1.10:7890", PORT));
+        assert!(!proxy_points_to_loopback("http://192.168.1.10:15721", PORT));
     }
 
+    /// 纯函数版：env 由调用方注入，**不改写进程级环境变量**。
+    ///
+    /// 原实现临时改写 env 与全局代理端口再还原，既与同进程并发用例互相污染
+    /// （转发用例随机 502），又在 panic 时留下脏状态。
     #[test]
-    fn test_system_proxy_points_to_loopback() {
-        let _guard = env_lock().lock().unwrap();
-
-        // 设置 CC Switch 代理端口
-        set_proxy_port(15721);
-
-        let keys = [
-            "HTTP_PROXY",
-            "http_proxy",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ];
-
-        for key in &keys {
-            std::env::remove_var(key);
-        }
+    fn test_proxy_env_points_to_loopback() {
+        const PORT: u16 = 15721;
+        let http_proxy = |value: &str| {
+            // 捕获 String 而非 &str：`lookup` 是 `for<'a> Fn(&'a str)`，借用会违反 HRTB
+            let value = value.to_string();
+            move |key: &str| (key == "HTTP_PROXY").then(|| value.clone())
+        };
 
         // 指向 CC Switch 端口的代理应该被跳过
-        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:15721");
-        assert!(system_proxy_points_to_loopback());
+        assert!(proxy_env_points_to_loopback(
+            http_proxy("http://127.0.0.1:15721"),
+            PORT
+        ));
+        // 小写变量名同样识别
+        assert!(proxy_env_points_to_loopback(
+            |key| (key == "all_proxy").then(|| "socks5://localhost:15721".to_string()),
+            PORT
+        ));
 
         // 指向其他端口的本地代理不应该被跳过
-        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:7890");
-        assert!(!system_proxy_points_to_loopback());
-
+        assert!(!proxy_env_points_to_loopback(
+            http_proxy("http://127.0.0.1:7890"),
+            PORT
+        ));
         // 非 loopback 地址不应该被跳过
-        std::env::set_var("HTTP_PROXY", "http://10.0.0.2:7890");
-        assert!(!system_proxy_points_to_loopback());
-
-        for key in &keys {
-            std::env::remove_var(key);
-        }
+        assert!(!proxy_env_points_to_loopback(
+            http_proxy("http://10.0.0.2:7890"),
+            PORT
+        ));
+        // 空白值视为未设置
+        assert!(!proxy_env_points_to_loopback(http_proxy("   "), PORT));
+        // 完全没有代理变量
+        assert!(!proxy_env_points_to_loopback(|_| None, PORT));
     }
 }

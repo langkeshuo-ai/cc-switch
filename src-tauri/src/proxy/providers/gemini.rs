@@ -14,26 +14,12 @@ use crate::proxy::error::ProxyError;
 pub struct GeminiAdapter;
 
 /// OAuth 凭证结构
+///
+/// 只保留 `access_token`——本 fork 不做 refresh 交换（见
+/// [`GeminiAdapter::parse_oauth_credentials`] 与 `claude.rs` 的降级分支注释）。
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OAuthCredentials {
     pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub client_id: Option<String>,
-    pub client_secret: Option<String>,
-}
-
-#[allow(dead_code)]
-impl OAuthCredentials {
-    /// 检查是否需要刷新 token（有 refresh_token 但没有有效的 access_token）
-    pub fn needs_refresh(&self) -> bool {
-        self.refresh_token.is_some() && self.access_token.is_empty()
-    }
-
-    /// 检查是否可以刷新 token
-    pub fn can_refresh(&self) -> bool {
-        self.refresh_token.is_some() && self.client_id.is_some() && self.client_secret.is_some()
-    }
 }
 
 impl GeminiAdapter {
@@ -69,6 +55,12 @@ impl GeminiAdapter {
     }
 
     /// 解析 OAuth 凭证
+    ///
+    /// 只提取 `access_token`：`~/.gemini/oauth_creds.json` 里的 `refresh_token` /
+    /// `client_id` / `client_secret` 在本 fork **不被消费**（见 `claude.rs` 的
+    /// GoogleOAuth 分支注释——不做 refresh 交换，需要用户自行刷新该文件）。
+    /// 它们曾以字段形式存在，但无人读取，只会让人误以为已实现自动刷新，故删除。
+    /// 若将来接入 refresh 交换，请连同 `claude.rs` 的降级分支一起改。
     pub fn parse_oauth_credentials(&self, key: &str) -> Option<OAuthCredentials> {
         // 防御性 trim:前端在 input 事件中会 trim,但 JSON 编辑器 / deeplink
         // 导入 / live 回填等路径会绕过。带前导换行的 oauth_creds.json 粘贴
@@ -79,9 +71,6 @@ impl GeminiAdapter {
         if key.starts_with("ya29.") {
             return Some(OAuthCredentials {
                 access_token: key.to_string(),
-                refresh_token: None,
-                client_id: None,
-                client_secret: None,
             });
         }
 
@@ -91,28 +80,14 @@ impl GeminiAdapter {
                 let access_token = json
                     .get("access_token")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
                     .unwrap_or_default();
-                let refresh_token = json
-                    .get("refresh_token")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let client_id = json
-                    .get("client_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                let client_secret = json
-                    .get("client_secret")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
 
-                // 如果有 access_token 或 refresh_token，返回凭证
-                if !access_token.is_empty() || refresh_token.is_some() {
+                // 原判定是「有 access_token 或 refresh_token 就算凭证」；由于不再
+                // 持有 refresh_token，只认非空 access_token——对调用方而言结果等价
+                // （无 access_token 时它本来就只能走 `Some(_)` 降级分支）。
+                if !access_token.is_empty() {
                     return Some(OAuthCredentials {
-                        access_token,
-                        refresh_token,
-                        client_id,
-                        client_secret,
+                        access_token: access_token.to_string(),
                     });
                 }
             }
@@ -422,7 +397,6 @@ mod tests {
             .parse_oauth_credentials("ya29.test-access-token")
             .unwrap();
         assert_eq!(creds.access_token, "ya29.test-access-token");
-        assert!(creds.refresh_token.is_none());
     }
 
     #[test]
@@ -434,7 +408,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(creds.access_token, "ya29.test");
-        assert_eq!(creds.refresh_token, Some("1//refresh".to_string()));
+    }
+
+    #[test]
+    fn test_parse_oauth_credentials_ignores_refresh_token_only() {
+        // 本 fork 不做 refresh 交换：只有 refresh_token 的 JSON 不构成可用凭证，
+        // 解析为 None，调用方会走 GoogleOAuth 降级分支（并 warn 让用户自行刷新）。
+        let adapter = GeminiAdapter::new();
+        assert!(adapter
+            .parse_oauth_credentials("{\"refresh_token\":\"1//refresh\"}")
+            .is_none());
     }
 
     #[test]

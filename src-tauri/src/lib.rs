@@ -32,6 +32,8 @@ mod settings;
 mod startup_dialogs;
 mod startup_restore;
 mod store;
+#[cfg(test)]
+mod test_support;
 
 mod tray;
 mod usage_events;

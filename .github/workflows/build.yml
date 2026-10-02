@@ -50,6 +50,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Record rustc version
+        id: rustc
+        shell: bash
+        run: echo "version=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
       - name: Add universal-apple-darwin targets
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -67,8 +72,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: src-tauri/target
-          key: cargo-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: cargo-build-${{ runner.os }}-${{ matrix.target }}-
+          # rustc 版本进key：编译器产物与编译器版本强相关，工具链升级后
+          # 命中旧target 只会白等一次全量重编（旧产物指纹全部失效）。
+          key: cargo-build-${{ runner.os }}-${{ matrix.target }}-${{ steps.rustc.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-build-${{ runner.os }}-${{ matrix.target }}-${{ steps.rustc.outputs.version }}-
 
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile

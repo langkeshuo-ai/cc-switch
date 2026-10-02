@@ -428,6 +428,7 @@ impl ProxyServer {
 mod tests {
     use super::*;
     use crate::provider::{Provider, ProviderMeta};
+    use crate::proxy::test_support::local_client;
     use crate::AppError;
     use axum::http::{header, HeaderMap, StatusCode};
     use serde_json::{json, Value};
@@ -444,6 +445,7 @@ mod tests {
     /// must derive the sibling standalone endpoint instead of having the
     /// standalone path appended to it.
     #[tokio::test]
+    #[serial_test::serial]
     async fn codex_standalone_endpoints_derive_from_pasted_full_base_url() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let capture_handler = {
@@ -500,7 +502,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = local_client();
 
         let cases = [
             (
@@ -604,6 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn codex_images_generation_aliases_forward_and_record_usage() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(
@@ -676,7 +679,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = local_client();
         let aliases = [
             "/images/generations",
             "/v1/images/generations",
@@ -809,6 +812,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn codex_images_edit_aliases_forward_and_record_usage() {
         // Real Images API responses carry `input_tokens_details` with text/image
         // splits; the shared Codex usage parser must tolerate them.
@@ -886,7 +890,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = local_client();
         let aliases = [
             "/images/edits",
             "/v1/images/edits",
@@ -1030,6 +1034,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn alpha_search_routes_forward_to_canonical_upstream() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(
@@ -1111,7 +1116,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = local_client();
         let aliases = [
             "/alpha/search",
             "/v1/alpha/search",

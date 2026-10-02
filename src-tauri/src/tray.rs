@@ -562,8 +562,11 @@ async fn handle_auto_click(app: &tauri::AppHandle, app_type: &AppType) -> Result
             })
             .collect::<Vec<_>>();
         if queue.is_empty() {
-            let current_id =
-                crate::settings::get_effective_current_provider(&app_state.db, app_type)?;
+            let current_id = crate::settings::get_effective_current_provider_with(
+                &app_state.db,
+                app_type,
+                crate::pi_config::pi_proxy_current_provider_key,
+            )?;
             let Some(current_id) = current_id else {
                 return Err(AppError::Message(
                     "故障转移队列为空，且未设置当前供应商，无法启用 Auto 模式".to_string(),
@@ -754,9 +757,12 @@ pub fn create_tray_menu(
         let app_type_str = section.app_type.as_str();
         let providers = app_state.db.get_all_providers(app_type_str)?;
 
-        let current_id =
-            crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)?
-                .unwrap_or_default();
+        let current_id = crate::settings::get_effective_current_provider_with(
+            &app_state.db,
+            &section.app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )?
+        .unwrap_or_default();
 
         if providers.is_empty() {
             // 空供应商：显示禁用的菜单项
@@ -963,9 +969,11 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
         let Ok(providers) = app_state.db.get_all_providers(section.app_type.as_str()) else {
             continue;
         };
-        let Ok(Some(current_id)) =
-            crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)
-        else {
+        let Ok(Some(current_id)) = crate::settings::get_effective_current_provider_with(
+            &app_state.db,
+            &section.app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        ) else {
             continue;
         };
         let Some(provider) = providers.get(&current_id) else {
@@ -1156,16 +1164,18 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
 
         // 解析 effective current provider；未设置 / 出错都静默跳过，
         // 与 create_tray_menu 的行为保持一致。
-        let current_id =
-            match crate::settings::get_effective_current_provider(&app_state.db, &section.app_type)
-            {
-                Ok(Some(id)) => id,
-                Ok(None) => continue,
-                Err(e) => {
-                    log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
-                    continue;
-                }
-            };
+        let current_id = match crate::settings::get_effective_current_provider_with(
+            &app_state.db,
+            &section.app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        ) {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                log::warn!("[Tray] 读取{log_name}当前供应商失败: {e}");
+                continue;
+            }
+        };
         // 只需当前 provider —— by-id 查询避免把整个 app 的 provider 列表加载
         // 进内存（每次悬停 × 3 sections 的热路径）。
         let current = match app_state.db.get_provider_by_id(&current_id, app_type_str) {

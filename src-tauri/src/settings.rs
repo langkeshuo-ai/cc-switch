@@ -1128,10 +1128,25 @@ pub fn unify_codex_session_history() -> bool {
 
 // ===== 当前供应商管理函数 =====
 
+/// 该应用的"当前供应商"是否由本模块的 `current_provider_*` 字段权威持有。
+///
+/// **Pi 为 `false`**：Pi 处于累加模式，其当前供应商的权威源是 `settings.json`
+/// 的 `defaultProvider`（见 `pi_config`），不走这里的设备级字段。对 Pi 调用
+/// [`get_current_provider`] 恒为 `None`、调用 [`set_current_provider`] 是空操作。
+///
+/// 消费方需要 Pi 当前供应商时必须读 `defaultProvider`（可参考
+/// `proxy::provider_router` 的处理），**不要**把这里的 `None` 当成"未设置"——
+/// 那会让依赖它的逻辑静默降级。新增消费点前先问一句本函数。
+pub fn current_provider_lives_in_settings(app_type: &AppType) -> bool {
+    !matches!(app_type, AppType::Pi)
+}
+
 /// 获取指定应用类型的当前供应商 ID（从本地 settings 读取）
 ///
 /// 这是设备级别的设置，不随数据库同步。
 /// 如果本地没有设置，调用者应该 fallback 到数据库的 `is_current` 字段。
+///
+/// 注意：Pi 不走这里（见 [`current_provider_lives_in_settings`]），恒返回 `None`。
 pub fn get_current_provider(app_type: &AppType) -> Option<String> {
     let settings = settings_store().read().ok()?;
     match app_type {
@@ -1145,6 +1160,8 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
 ///
 /// 这是设备级别的设置，不随数据库同步。
 /// 传入 `None` 会清除当前供应商设置。
+///
+/// 注意：Pi 不走这里（见 [`current_provider_lives_in_settings`]），调用是空操作。
 pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), AppError> {
     let id_owned = id.map(|s| s.to_string());
     mutate_settings(|settings| match app_type {
@@ -1163,10 +1180,44 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
 ///
 /// 这确保了返回的 ID 一定是有效的（在数据库中存在）。
 /// 多设备云同步场景下，配置导入后本地 ID 可能失效，此函数会自动修复。
+///
+/// **Pi 不走上面的路径**（见 [`current_provider_lives_in_settings`]）：Pi 的权威源是
+/// `settings.json` 的 `defaultProvider`，既不在设备级字段里也不在 `is_current` 里。
+/// 调用方必须通过 [`get_effective_current_provider_with`] 传入 Pi 的权威解析器，
+/// 否则对 Pi 调用本函数会静默拿到数据库 `is_current`——一个 Pi CLI 根本不跟随的值。
+/// 保留本函数只为兼容"调用方已自行处理 Pi"的旧路径，新增消费点请用
+/// [`get_effective_current_provider_with`]。
 pub fn get_effective_current_provider(
     db: &crate::database::Database,
     app_type: &AppType,
 ) -> Result<Option<String>, AppError> {
+    get_effective_current_provider_with(db, app_type, || None)
+}
+
+/// [`get_effective_current_provider`] 的显式 Pi 分流版本。
+///
+/// `pi_authoritative`：当 `app_type` 的权威源不在设备级 settings 字段时（本 fork
+/// 即 Pi），用它解析真实的当前供应商；返回 `None` 表示"读不到权威值"，此时本函数
+/// 退回数据库 `is_current` 并记 warn——与 `proxy::provider_router` 的既有兜底语义
+/// 保持一致（consistency over cleverness）。
+///
+/// 之所以做成"由调用方注入"而不是让本模块直接调 `pi_config`：`pi_config` 已经
+/// 依赖 `settings`（取 override 目录），反向调用会形成模块循环依赖。
+pub fn get_effective_current_provider_with(
+    db: &crate::database::Database,
+    app_type: &AppType,
+    pi_authoritative: impl FnOnce() -> Option<String>,
+) -> Result<Option<String>, AppError> {
+    if !current_provider_lives_in_settings(app_type) {
+        let app = app_type.as_str();
+        match pi_authoritative() {
+            Some(id) => return Ok(Some(id)),
+            None => {
+                log::warn!("[{app}] 权威源读不到当前供应商，退回数据库 is_current");
+            }
+        }
+    }
+
     // 1. 从本地 settings 读取
     if let Some(local_id) = get_current_provider(app_type) {
         // 2. 验证该 ID 在数据库中存在
@@ -1309,6 +1360,69 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_current_provider_is_authoritative_in_settings_json() {
+        // Pi 的当前供应商权威源是 settings.json 的 defaultProvider，
+        // 不在本模块字段里。任何新增消费点都应先问这个判定，
+        // 否则会拿到 None 并静默降级。
+        assert!(current_provider_lives_in_settings(&AppType::Claude));
+        assert!(current_provider_lives_in_settings(&AppType::Codex));
+        assert!(!current_provider_lives_in_settings(&AppType::Pi));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn effective_current_provider_for_pi_prefers_injected_authoritative_source() {
+        // 回归护栏（T06 根因）：Pi 的权威源是 settings.json 的 defaultProvider。
+        // 旧实现对 Pi 一律 fallback 到 db.is_current —— 两者可以不同，于是静默
+        // 返回一个 Pi CLI 根本不使用的供应商 id。这里锁定"Pi 必须先问权威源"。
+        let _home = crate::test_support::TestHomeGuard::new();
+        let db = crate::database::Database::init().expect("isolated test database");
+
+        // 注入源有值 -> 原样返回，完全不碰设备级字段与 db.is_current。
+        assert_eq!(
+            get_effective_current_provider_with(&db, &AppType::Pi, || {
+                Some("pi-authoritative".to_string())
+            })
+            .expect("query succeeds"),
+            Some("pi-authoritative".to_string())
+        );
+
+        // 注入源被调用过一次（用计数证明不是"恰好得到同值"）。
+        let calls = std::cell::Cell::new(0u32);
+        get_effective_current_provider_with(&db, &AppType::Pi, || {
+            calls.set(calls.get() + 1);
+            Some("x".to_string())
+        })
+        .expect("query succeeds");
+        assert_eq!(calls.get(), 1, "Pi 的权威源解析器必须被调用一次");
+
+        // Claude / Codex 的权威源是设备级字段，不使用注入源（否则等于又多一个权威源）。
+        assert_eq!(
+            get_effective_current_provider_with(&db, &AppType::Claude, || {
+                Some("must-be-ignored".to_string())
+            })
+            .expect("query succeeds"),
+            None
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn effective_current_provider_for_pi_falls_back_when_authoritative_unreadable() {
+        // 权威源读不到（settings.json 缺失/不可读）时必须允许 fallback 到
+        // db.is_current，而不是伪造值或 panic —— 与 provider_router 既有兜底一致。
+        let _home = crate::test_support::TestHomeGuard::new();
+        let db = crate::database::Database::init().expect("isolated test database");
+
+        // 空库：fallback 后落 None，且不 panic。
+        assert_eq!(
+            get_effective_current_provider_with(&db, &AppType::Pi, || None)
+                .expect("query succeeds"),
+            None
+        );
+    }
 
     #[test]
     fn override_paths_expand_windows_style_tilde_separators() {

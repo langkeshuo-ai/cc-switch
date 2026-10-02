@@ -290,16 +290,6 @@ pub fn sanitize_provider_name(name: &str) -> String {
     cleaned
 }
 
-/// 获取供应商配置文件路径
-#[allow(dead_code)]
-pub fn get_provider_config_path(provider_id: &str, provider_name: Option<&str>) -> PathBuf {
-    let base_name = provider_name
-        .map(sanitize_provider_name)
-        .unwrap_or_else(|| sanitize_provider_name(provider_id));
-
-    get_claude_config_dir().join(format!("settings-{base_name}.json"))
-}
-
 /// 读取 JSON 配置文件
 pub fn read_json_file<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T, AppError> {
     if !path.exists() {

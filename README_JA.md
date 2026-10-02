@@ -243,7 +243,7 @@ Claude Code、Codex、Pi などの AI コーディングツールは、それぞ
 
 ### Windows ユーザー
 
-[Releases](../../releases) ページから最新版の `CC-Switch-v{version}-Windows.msi` インストーラー、またはポータブル版 `CC-Switch-v{version}-Windows-Portable.zip` をダウンロード。ARM 版 Windows では `CC-Switch-v{version}-Windows-arm64.msi` または `CC-Switch-v{version}-Windows-arm64-Portable.zip` をダウンロードしてください。
+本ビルドは **Windows x64（NSIS `.exe`）** と **macOS ユニバーサル（`.dmg`）** のみ公开发布します。[Releases](../../releases) ページから最新の `CC Switch_{version}_x64-setup.exe` をダウンロードしてください。プレリリースサフィックスを WiX ツールチェーンが拒否するため、本リリースラインでは `.msi` およびポータブル版は生成されません。
 
 ### macOS ユーザー
 

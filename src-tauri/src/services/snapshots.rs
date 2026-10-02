@@ -156,7 +156,11 @@ impl SnapshotService {
                 }
             }
         }
-        crate::settings::get_effective_current_provider(&state.db, app)
+        crate::settings::get_effective_current_provider_with(
+            &state.db,
+            app,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )
     }
 
     /// 抓取三个应用的当前状态

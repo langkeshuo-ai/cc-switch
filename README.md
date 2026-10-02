@@ -257,7 +257,7 @@ AI coding tools like Claude Code, Codex, and Pi each have their own configuratio
 
 ### Windows Users
 
-Download the latest `CC-Switch-v{version}-Windows.msi` installer or `CC-Switch-v{version}-Windows-Portable.zip` portable version from the [Releases](../../releases) page. On Windows on ARM, download `CC-Switch-v{version}-Windows-arm64.msi` or `CC-Switch-v{version}-Windows-arm64-Portable.zip`.
+This build publishes **Windows x64 (NSIS `.exe`)** and **macOS universal (`.dmg`)** only. Download the latest `CC Switch_{version}_x64-setup.exe` from the [Releases](../../releases) page. No `.msi` or portable archive is produced for this release line: the WiX toolchain rejects the pre-release version suffix.
 
 ### macOS Users
 

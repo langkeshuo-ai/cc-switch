@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use cc_switch_lib::{update_settings, AppSettings, AppState, Database, MultiAppConfig};
 
@@ -66,10 +66,20 @@ pub fn enable_codex_official_auth_preservation() {
     .expect("enable Codex official auth preservation");
 }
 
-/// 全局互斥锁，避免多测试并发写入相同的 HOME 目录。
-pub fn test_mutex() -> &'static Mutex<()> {
+/// 取测试互斥锁，避免多测试并发写入相同的 HOME 目录。
+///
+/// 直接返回守卫，调用点不必再写 `.lock().expect(...)`。
+///
+/// 刻意吞掉 poison：`std::sync::Mutex` 在持锁用例 panic 后会把锁标记为中毒，
+/// 于是**一个真实失败会放大成后续所有用例的 `PoisonError` 失败**（WSL2 Nightly
+/// 上就出现过 1 个 `database is locked` + 1 个连坐的假失败）。测试锁只需要
+/// 串行化，不需要失败传播。
+pub fn test_mutex() -> MutexGuard<'static, ()> {
     static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-    MUTEX.get_or_init(|| Mutex::new(()))
+    MUTEX
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 创建测试用的 AppState，包含一个空的数据库

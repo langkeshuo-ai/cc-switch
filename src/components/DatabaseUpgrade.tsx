@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "@/lib/api/invoke";
 import { useTranslation } from "react-i18next";
 import { exit } from "@tauri-apps/plugin-process";
 import { ExternalLink, FolderOpen, AlertTriangle } from "lucide-react";
@@ -82,7 +82,7 @@ export function DatabaseUpgrade({ payload }: DatabaseUpgradeProps) {
         <div className="flex flex-wrap items-center gap-2">
           <Button
             className="gap-2 bg-amber-500 text-white hover:bg-amber-600"
-            onClick={() => void invoke("open_external", { url: RELEASES_URL })}
+            onClick={() => void invokeCommand("open_external", { url: RELEASES_URL })}
           >
             <ExternalLink className="h-4 w-4" />
             {t("dbUpgrade.openReleases", "打开发布页")}
@@ -91,7 +91,7 @@ export function DatabaseUpgrade({ payload }: DatabaseUpgradeProps) {
           <Button
             variant="outline"
             className="gap-2"
-            onClick={() => void invoke("open_app_config_folder")}
+            onClick={() => void invokeCommand("open_app_config_folder")}
           >
             <FolderOpen className="h-4 w-4" />
             {t("dbUpgrade.openConfigDir", "打开配置目录")}

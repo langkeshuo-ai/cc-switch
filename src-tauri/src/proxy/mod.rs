@@ -29,6 +29,8 @@ pub mod session;
 pub mod session_affinity;
 pub(crate) mod sse;
 pub(crate) mod switch_lock;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod thinking_budget_rectifier;
 pub mod thinking_optimizer;
 pub mod thinking_rectifier;

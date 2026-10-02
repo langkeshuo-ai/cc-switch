@@ -1285,8 +1285,11 @@ pub(crate) fn sync_current_provider_for_app_to_live(
     if app_type.is_additive_mode() {
         sync_all_providers_to_live(state, app_type)?;
     } else {
-        let current_id = match crate::settings::get_effective_current_provider(&state.db, app_type)?
-        {
+        let current_id = match crate::settings::get_effective_current_provider_with(
+            &state.db,
+            app_type,
+            crate::pi_config::pi_proxy_current_provider_key,
+        )? {
             Some(id) => id,
             None => return Ok(()),
         };
@@ -1435,7 +1438,11 @@ fn sync_current_provider_for_app_respecting_takeover(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<(), AppError> {
-    let current_id = match crate::settings::get_effective_current_provider(&state.db, app_type)? {
+    let current_id = match crate::settings::get_effective_current_provider_with(
+        &state.db,
+        app_type,
+        crate::pi_config::pi_proxy_current_provider_key,
+    )? {
         Some(id) => id,
         None => return Ok(()),
     };

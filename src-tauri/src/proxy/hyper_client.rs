@@ -771,6 +771,7 @@ impl<S: Unpin> tokio::io::AsyncWrite for WriteFilter<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::test_support::local_client;
 
     fn buffered_with_content_type(content_type: Option<&str>) -> ProxyResponse {
         let mut headers = http::HeaderMap::new();
@@ -925,7 +926,7 @@ mod tests {
         const LIMIT: usize = 64 * 1024;
         let (port, written) = spawn_fixed_body_server(BODY_LEN).await;
 
-        let response = reqwest::Client::new()
+        let response = local_client()
             .get(format!("http://127.0.0.1:{port}/"))
             .send()
             .await
