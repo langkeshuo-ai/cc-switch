@@ -4878,6 +4878,15 @@ impl ProviderService {
         .await
     }
 
+    /// 供 Pi 三源收敛（`ProxyService::reconcile_pi_sources`）在写库前复用既有校验。
+    ///
+    /// 收敛路径会凭 `models.json` 原生节点补建 DB 档案，属于一次真实的
+    /// `save_provider`，因此**必须**与 UI 手动新增走同一套校验。此处只做转调，
+    /// 刻意不复制 `validate_provider_settings` 的分支逻辑——避免两套校验漂移。
+    pub(crate) fn validate_pi_provider_for_reconcile(p: &Provider) -> Result<(), AppError> {
+        Self::validate_provider_settings(&AppType::Pi, p)
+    }
+
     fn validate_provider_settings(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
         match app_type {
             AppType::Claude => {

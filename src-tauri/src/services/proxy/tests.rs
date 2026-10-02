@@ -6456,6 +6456,397 @@ async fn backup_skips_when_live_is_already_proxy_placeholder() {
     );
 }
 
+// ========================================================================
+
+/// 写入 Pi settings.json 的 defaultProvider（唯一生效源）
+fn write_pi_default_provider(key: &str) {
+    let path = crate::pi_config::get_pi_settings_path().expect("pi settings path");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create pi settings dir");
+    }
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&json!({
+            "defaultProvider": key
+        }))
+        .expect("serialize settings"),
+    )
+    .expect("write pi settings.json");
+}
+
+/// 读回 settings.json 的 defaultProvider，验证"打开接管"没有隐式改写它
+fn read_pi_default_provider() -> Option<String> {
+    let path = crate::pi_config::get_pi_settings_path().expect("pi settings path");
+    if !path.exists() {
+        return None;
+    }
+    let raw = std::fs::read(&path).expect("read pi settings.json");
+    let value: Value = serde_json::from_slice(&raw).expect("parse pi settings.json");
+    value
+        .get("defaultProvider")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn pi_node(api: &str, base_url: &str, name: &str) -> Value {
+    json!({
+        "name": name,
+        "baseUrl": base_url,
+        "api": api,
+        "apiKey": "sk-pi",
+        "models": [{"id": "m1"}]
+    })
+}
+
+fn seed_native_provider(key: &str, node: Value) {
+    crate::pi_config::insert_pi_provider(key, &node).expect("seed models.json node");
+}
+
+fn seed_archive(db: &Database, key: &str, name: &str, node: Value) {
+    let mut p = Provider::with_id(key.to_string(), name.to_string(), node, None);
+    p.category = Some("custom".to_string());
+    p.icon = Some("pi".to_string());
+    db.save_provider("pi", &p).expect("seed DB archive");
+}
+
+/// 快照 DB 中所有 pi 档案（用于"零改动"断言）
+fn snapshot_pi_archives(db: &Database) -> indexmap::IndexMap<String, Provider> {
+    db.get_all_providers("pi").expect("read pi archives")
+}
+
+// ---- 1. settings+models 有 key、DB 无档案 → 接管成功并自愈补建档案 ----
+#[test]
+#[serial]
+fn pi_takeover_self_heals_missing_archive_from_models_json() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_native_provider(
+        "doulor-pi",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+    // DB 故意不建档案 —— 这正是 v3.20.4-trim.6 报"没有档案，无法接管"的场景
+
+    let (key, prefix) = service
+        .resolve_pi_takeover_target()
+        .expect("takeover target must resolve without a DB archive");
+    assert_eq!(key, "doulor-pi");
+    assert_eq!(prefix, "pi/anthropic");
+
+    service
+        .reconcile_pi_sources(&key)
+        .expect("reconcile must succeed");
+    let archive = db
+        .get_provider_by_id("doulor-pi", "pi")
+        .expect("query archive")
+        .expect("archive must be created by reconcile");
+    assert_eq!(archive.settings_config["api"], "anthropic-messages");
+    assert_eq!(archive.category.as_deref(), Some("custom"));
+}
+
+// ---- 2. 档案有、models.json 节点缺 → 回填节点 ----
+#[test]
+#[serial]
+fn pi_takeover_backfills_models_json_from_archive() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_archive(
+        db.as_ref(),
+        "doulor-pi",
+        "Doulor",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+    assert!(!crate::pi_config::pi_provider_exists("doulor-pi").expect("exists check"));
+
+    let (key, _prefix) = service
+        .resolve_pi_takeover_target()
+        .expect("resolve from archive alone");
+    service.reconcile_pi_sources(&key).expect("reconcile");
+
+    let node = crate::pi_config::read_pi_native_provider("doulor-pi")
+        .expect("read node")
+        .expect("node must be backfilled");
+    assert_eq!(node["baseUrl"], "https://api.doulor.cn");
+    assert_eq!(node["api"], "anthropic-messages");
+}
+
+// ---- 3. defaultProvider 指向三源皆无的幽灵 key → 退回 DB current ----
+#[tokio::test]
+#[serial]
+async fn pi_takeover_falls_back_to_db_current_when_settings_key_is_dangling() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+
+    // 幽灵 key：settings.json 指向它，但 models.json 与 DB 都没有
+    write_pi_default_provider("ghost-key");
+    seed_archive(
+        db.as_ref(),
+        "real-pi",
+        "Real",
+        pi_node("anthropic-messages", "https://api.example.com", "Real"),
+    );
+    db.set_current_provider("pi", "real-pi")
+        .expect("set current");
+
+    // 悬空 key 的容错点在运行期路由（provider_router.rs `pi_proxy_override`），
+    // 它会校验 defaultProvider 指向的 key 在 DB 中确有档案，缺失则退回 DB current。
+    // 注意：不能用 `get_effective_current_provider_with` 验证——那个函数只做
+    // "settings 无值 → 退回 DB"，不校验 key 是否悬空。
+    let router = crate::proxy::provider_router::ProviderRouter::new(db);
+    let providers = router
+        .select_providers("pi", None)
+        .await
+        .expect("router must fall back to DB current");
+    assert_eq!(providers.len(), 1, "only the DB current provider is used");
+    assert_eq!(
+        providers[0].id, "real-pi",
+        "dangling key must fall back to DB current"
+    );
+}
+
+// ---- 4. 三源皆无 → Err 文本含四段可操作诊断 ----
+#[test]
+#[serial]
+fn pi_takeover_diagnostic_error_lists_all_three_sources() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("ghost-key");
+
+    let error = service
+        .resolve_pi_takeover_target()
+        .expect_err("three sources missing must fail");
+    for expected in ["settings.json", "models.json", "CC Switch", "可用修复"] {
+        assert!(
+            error.contains(expected),
+            "diagnostic must mention {expected:?}, got: {error}"
+        );
+    }
+}
+
+// ---- 5. 两侧都有 → 幂等，零改动 ----
+#[test]
+#[serial]
+fn pi_takeover_is_idempotent_when_archive_already_exists() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    let node = pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor");
+    seed_native_provider("doulor-pi", node.clone());
+    seed_archive(db.as_ref(), "doulor-pi", "Doulor", node.clone());
+
+    let before = snapshot_pi_archives(db.as_ref());
+    service
+        .reconcile_pi_sources("doulor-pi")
+        .expect("first reconcile");
+    let after_first = snapshot_pi_archives(db.as_ref());
+    service
+        .reconcile_pi_sources("doulor-pi")
+        .expect("second reconcile");
+    let after_second = snapshot_pi_archives(db.as_ref());
+
+    assert_eq!(before.len(), after_first.len());
+    assert_eq!(after_first.len(), after_second.len());
+    assert_eq!(
+        after_first.get("doulor-pi").map(|p| &p.settings_config),
+        after_second.get("doulor-pi").map(|p| &p.settings_config),
+        "reconcile must be idempotent"
+    );
+}
+
+// ---- 6. api 漂移 → 以 DB 为准 + warn（行为由 B1 决策，此处锁"不失败"）----
+#[test]
+#[serial]
+fn pi_takeover_warns_on_api_dialect_divergence() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_native_provider(
+        "doulor-pi",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+    seed_archive(
+        db.as_ref(),
+        "doulor-pi",
+        "Doulor",
+        pi_node("openai-completions", "https://api.doulor.cn", "Doulor"),
+    );
+
+    // 漂移不得导致失败，且以 DB 档案方言为准
+    let (_key, prefix) = service
+        .resolve_pi_takeover_target()
+        .expect("api divergence must not be fatal");
+    assert_eq!(prefix, "pi/openai", "DB archive wins on divergence");
+}
+
+// ---- 7. 无任何档案也能接管成功，且解析器对 DB 零副作用 ----
+#[test]
+#[serial]
+fn pi_takeover_succeeds_without_any_archive() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_native_provider(
+        "doulor-pi",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+
+    let before = snapshot_pi_archives(db.as_ref());
+    let default_before = read_pi_default_provider();
+
+    let (key, prefix) = service
+        .resolve_pi_takeover_target()
+        .expect("must resolve from native node alone");
+    assert_eq!(key, "doulor-pi");
+    assert_eq!(prefix, "pi/anthropic");
+
+    let after = snapshot_pi_archives(db.as_ref());
+    assert_eq!(before.len(), after.len(), "resolve must not write the DB");
+    assert!(
+        after.get("doulor-pi").is_none(),
+        "resolve must not create an archive"
+    );
+    // 防回归：解析器不得隐式改写 Pi 生效供应商
+    assert_eq!(
+        read_pi_default_provider(),
+        default_before,
+        "resolve must not rewrite settings.json.defaultProvider"
+    );
+    assert_eq!(read_pi_default_provider().as_deref(), Some("doulor-pi"));
+}
+
+// ---- 8. 首次 enable 补建档案；再次 enable 幂等 ----
+#[test]
+#[serial]
+fn pi_reconcile_adopts_native_provider_once() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_native_provider(
+        "doulor-pi",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+
+    service
+        .reconcile_pi_sources("doulor-pi")
+        .expect("first adopt");
+    let first = snapshot_pi_archives(db.as_ref());
+    assert_eq!(first.len(), 1, "archive adopted on first reconcile");
+
+    service
+        .reconcile_pi_sources("doulor-pi")
+        .expect("second adopt");
+    let second = snapshot_pi_archives(db.as_ref());
+    assert_eq!(first.len(), second.len());
+    assert_eq!(
+        first.get("doulor-pi").map(|p| &p.settings_config),
+        second.get("doulor-pi").map(|p| &p.settings_config),
+        "second reconcile must be a no-op"
+    );
+}
+
+// ---- 9. 两侧都有且 api 漂移 → 两侧数据零改动 ----
+#[test]
+#[serial]
+fn pi_reconcile_does_not_touch_user_edits() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    let native_node = pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor");
+    seed_native_provider("doulor-pi", native_node.clone());
+    seed_archive(
+        db.as_ref(),
+        "doulor-pi",
+        "Doulor Renamed",
+        pi_node("openai-completions", "https://other.example.com", "X"),
+    );
+
+    let db_before = snapshot_pi_archives(db.as_ref());
+    let native_before = crate::pi_config::read_pi_native_provider("doulor-pi")
+        .expect("read")
+        .expect("exists");
+
+    service
+        .reconcile_pi_sources("doulor-pi")
+        .expect("drift must not fail reconcile");
+
+    let db_after = snapshot_pi_archives(db.as_ref());
+    let native_after = crate::pi_config::read_pi_native_provider("doulor-pi")
+        .expect("read")
+        .expect("exists");
+
+    assert_eq!(
+        db_before.get("doulor-pi").map(|p| &p.settings_config),
+        db_after.get("doulor-pi").map(|p| &p.settings_config),
+        "archive must not be rewritten on drift"
+    );
+    assert_eq!(
+        db_before.get("doulor-pi").map(|p| &p.name),
+        db_after.get("doulor-pi").map(|p| &p.name),
+        "archive name is user data and must not be touched"
+    );
+    assert_eq!(
+        native_before, native_after,
+        "models.json node must not be rewritten on drift"
+    );
+}
+
+// ---- 10. 接管态 + 档案被删 → 停止接管不得静默 Ok(false) ----
+#[test]
+#[serial]
+fn pi_restore_does_not_silently_skip_when_archive_missing() {
+    let _agent = crate::pi_config::test_support::TestAgentDir::new();
+    let db = Arc::new(Database::memory().expect("init db"));
+    let service = ProxyService::new(db.clone());
+
+    write_pi_default_provider("doulor-pi");
+    seed_native_provider(
+        "doulor-pi",
+        pi_node("anthropic-messages", "https://api.doulor.cn", "Doulor"),
+    );
+    // 模拟"接管期间档案被删"：节点 baseUrl 已被改写为网关地址
+    crate::pi_config::apply_pi_takeover_base_url("doulor-pi", "http://127.0.0.1:15721")
+        .expect("simulate takeover");
+    assert!(
+        db.get_provider_by_id("doulor-pi", "pi")
+            .expect("query")
+            .is_none(),
+        "archive must be absent for this scenario"
+    );
+
+    // 不得 panic，且不能把网关地址当成"原始上游"写回去
+    let restored = service
+        .restore_pi_base_url_from_ssot()
+        .expect("restore must not error");
+    assert!(
+        !restored,
+        "without an archive there is nothing trustworthy to restore"
+    );
+    let node = crate::pi_config::read_pi_native_provider("doulor-pi")
+        .expect("read")
+        .expect("exists");
+    assert_eq!(
+        node["baseUrl"], "http://127.0.0.1:15721/pi/anthropic",
+        "must not silently rewrite baseUrl to the gateway address"
+    );
+}
+
 /// Regression: when ALL apps have Live=proxy-placeholder (worst-case
 /// corrupted state), the bulk `backup_live_configs` path used by
 /// `start_with_takeover` must skip every save — instead of overwriting

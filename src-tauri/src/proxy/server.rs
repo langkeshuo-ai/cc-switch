@@ -299,7 +299,17 @@ impl ProxyServer {
             // Pi API（透明转发，方言由供应商 `api` 字段决定）：
             // - anthropic-messages → baseUrl=http://host:port/pi/anthropic
             // - openai-completions / openai-responses → baseUrl=.../pi/openai
+            //
+            // openai 方言用通配路由透传客户端原始路径：Pi CLI 会把 `/v1` 拼在
+            // baseUrl 之后（`.../pi/openai/v1/chat/completions`），网关必须把
+            // `/v1/chat/completions` 原样送到上游——缺 `/v1` 会被 New API 之类的
+            // 兼容网关判成网页路由并返回 HTML。下方两条精确路由保留为兼容入口
+            // （无 `/v1` 的老客户端），handler 内部对两种形态都能正确落点。
             .route("/pi/anthropic/*rest", post(handlers::handle_pi_messages))
+            .route(
+                "/pi/openai/*rest",
+                post(handlers::handle_pi_chat_completions),
+            )
             .route(
                 "/pi/openai/chat/completions",
                 post(handlers::handle_pi_chat_completions),

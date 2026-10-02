@@ -161,4 +161,24 @@ mod tests {
             "https://api.example.com/v1/chat/completions"
         );
     }
+
+    /// B4 端到端落点锁定：客户端 `/pi/openai/v1/chat/completions`
+    /// → handler 剥前缀得 `/v1/chat/completions` → 拼 base 得最终上游 URL。
+    ///
+    /// 回归背景：endpoint 曾被硬编码为 `/chat/completions`，对 New API 一类
+    /// 兼容网关会命中网页路由返回 HTML（实测 200 + text/html）。
+    #[test]
+    fn build_url_keeps_v1_for_openai_compatible_gateways() {
+        let adapter = PiAdapter;
+        // base 不含 /v1（用户档案里就是裸域名）
+        assert_eq!(
+            adapter.build_url("https://host", "/v1/chat/completions"),
+            "https://host/v1/chat/completions"
+        );
+        // base 自带 /v1 结尾的斜杠形态：不得出现 /v1/v1
+        assert_eq!(
+            adapter.build_url("https://host/v1/", "/v1/chat/completions"),
+            "https://host/v1/v1/chat/completions"
+        );
+    }
 }

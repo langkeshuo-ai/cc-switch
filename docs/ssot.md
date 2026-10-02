@@ -89,6 +89,77 @@ grep -rn "get_effective_current_provider(" src-tauri/src/ | grep -v "_with"   # 
 
 ---
 
+## 3.5 Pi 三源权威表（2026-10-03 新增，接管自愈收敛）
+
+Pi 的"同一个供应商"在三处各有一份数据。**三源允许漂移**，接管流程负责收敛；
+**禁止要求用户手工预对齐**。
+
+| 源 | 角色 | 权威范围 | 读取函数 |
+|----|------|---------|---------|
+| `~/.pi/agent/settings.json` 的 `defaultProvider` | **Pi CLI 唯一跟随的生效源** | 谁在实际生效 | `pi_config::read_pi_native_defaults` / `pi_proxy_current_provider_key` |
+| `~/.pi/agent/models.json` 的 `providers[key]` | **供应商真身**（自带 `api` 方言、`apiKey`） | 供应商定义 | `pi_config::read_pi_native_provider` |
+| DB `providers(app_type='pi')` | **管理面镜像** | UI 展示 / 用量统计 / 失败转移 / 还原源 | `db.get_provider_by_id(key, "pi")` |
+
+### 收敛规则（`ProxyService::reconcile_pi_sources`）
+
+**唯一写点**：`enable_takeover` → `takeover_live_config_strict` 的 Pi 分支，
+且仅在 `resolve_pi_takeover_target` 成功之后。`disable_takeover` / 状态查询 /
+`get_effective_current_provider*` 等**读路径一律不得调用**（否则轮询状态就写库）。
+
+| 原生节点 | DB 档案 | 行为 |
+|:---:|:---:|------|
+| 有 | 无 | 从 `models.json` 节点补建档案（节点是真身，DB 是镜像） |
+| 无 | 有 | 按档案回填 `models.json` 节点（**唯一允许的 DB→原生方向**） |
+| 有 | 有 | **零改动**；仅 `api` 漂移时 `log::warn!` |
+| 无 | 无 | 不可能——`resolve` 已拦截并给出四段诊断 |
+
+补建档案前**必须**走 `ProviderService::validate_pi_provider_for_reconcile`
+（转调既有 `validate_provider_settings(&AppType::Pi, ·)`），不复制校验逻辑。
+
+**锁序**：`set_takeover_for_app`（`services/proxy.rs:1114`）先取 switch 锁，
+`save_provider`（`database/dao/providers.rs:181`）内部才取 DB 锁
+→ 顺序恒为「switch 锁 → DB 锁」。**严禁**在持有 DB 连接锁时调用收敛。
+
+### `api` 方言的四态决策（`resolve_pi_takeover_target`，纯读无副作用）
+
+| 原生 `api` | 档案 `api` | 采用 | 理由 |
+|:---:|:---:|------|------|
+| 有 | 有且一致 | 两者 | 无歧义 |
+| 有 | 有但不一致 | **DB 档案** | 与接管前既有行为一致；`warn!` 打出两侧原文 |
+| 有 | 无 | **原生** | 关键：不再因"没有档案"而失败 |
+| 无 | 有 | 档案 | 收敛会同时回填原生节点 |
+| 无 | 无 | `Err` | 四段诊断（settings.json / models.json / CC Switch / 可用修复） |
+
+### 三条"看着像 bug 其实不是"
+
+| 现象 | 真相 | 依据 |
+|------|------|------|
+| 接管后 `models.json` 注释全没了 | **只在无法做手术式替换时**才整篇重写（JSON5 定位不到替换点）。备份槽保存的是**原始字节**，停止接管经 `restore_models_document_raw` 原样写回，注释与格式不丢失 | `backup_live_config_strict` 的 Pi 分支 |
+| 原生 `api` 与档案 `api` 不一致 | **不是 bug**，以 DB 档案为准并 warn。`models.json` 是真身但接管路由读的是档案；强行"修正"任一侧都是改写用户数据 | 本节四态决策表 |
+| 接管只改了 `baseUrl` 一个字段 | **有意为之**。`apiKey` 由 Pi 原生持有、`api` 决定方言、`models` 列表是用户资产——三者都不该被代理接管改写。放宽此约束会连带改写凭据 | `pi_config::apply_pi_takeover_base_url` 及其单测 |
+
+### 档案读取点审计（2026-10-03，`get_provider_by_id(…, "pi")`）
+
+```bash
+grep -rn 'get_provider_by_id(.*"pi"\|get_provider_by_id(&provider_key' src-tauri/src
+```
+
+生产代码 3 处，**已全部消除"静默放弃"**：
+
+| 位置 | 分类 | 处置 |
+|------|------|------|
+| `services/proxy.rs` `resolve_pi_takeover_target` | 容错 | 档案缺失不再致命；读失败降级为 `warn` + 三源决策 |
+| `services/proxy.rs` `reconcile_pi_sources` | 收敛写点 | 仅显式开接管时调用 |
+| `services/proxy.rs` `restore_pi_base_url_from_ssot` | **原为静默** | **已修**：档案缺失时基于原生节点判断残留并 `warn!` 给出修复指引，不再静默 `Ok(false)` |
+| `proxy/provider_router.rs:76` | 容错 | 档案缺失 → `warn` → 退回 DB current（运行期路由既有行为，正确） |
+| `services/provider/pi.rs` 7 处 | 测试 | 均为 `mod tests` 内的 `"cc-switch-test"` 断言，非生产路径 |
+
+**为什么"静默"是缺陷**：停止接管时若静默 `Ok(false)`，用户看到"关闭成功"，
+但 Pi 的 `baseUrl` 仍指向本地网关——请求全部打到已停止的网关，表现为"Pi 突然
+不能用"，且没有任何线索指向真实原因。
+
+---
+
 ## 4. 本地路由端点
 
 监听 `127.0.0.1:15721`（可配）。已注册的路由（`proxy/server.rs`）：
@@ -96,11 +167,25 @@ grep -rn "get_effective_current_provider(" src-tauri/src/ | grep -v "_with"   # 
 | 路径 | 用途 |
 |------|------|
 | `/v1/messages`、`/claude/v1/messages` | Anthropic Messages |
-| `/pi/anthropic/*rest` | Pi → Anthropic |
-| `/pi/openai/responses` | Pi → OpenAI Responses |
+| `/pi/anthropic/*rest` | Pi → Anthropic（透传 `/v1/messages` 等原始路径） |
+| `/pi/openai/*rest` | Pi → OpenAI（**通配透传**，保留客户端 `/v1`；见下） |
+| `/pi/openai/chat/completions`、`/pi/openai/responses` | Pi → OpenAI 兼容入口（无 `/v1` 的老客户端） |
 | `/chat/completions`、`/v1/chat/completions` | OpenAI Chat |
 | `/models`、`/v1/models` | 模型列表 |
 | `/health`、`/status` | 运维 |
+
+> ⚠️ **Pi openai 方言必须透传 `/v1`**（2026-10-03 修正）。`PiAdapter::build_url` 是
+> 纯拼接 `{base}/{endpoint}`，若 handler 把 endpoint 硬编码成 `/chat/completions`，
+> 上游会收到 `{base}/chat/completions`——对 New API 一类兼容网关这会命中**网页路由**
+> 返回 HTML（实测 200 + `text/html`，看起来"成功"但内容是首页）。
+> `{base}/v1/chat/completions` 才返回 JSON。
+> 因此 openai 两条路由改为 `*rest` 通配 + `strip_prefix`（与 anthropic 同构），
+> handler 内 `endpoint_for_upstream` 只剥网关前缀、保留客户端原始路径。
+> Codex/Claude 路径传 `None`，行为不变（`endpoint_with_query` 仍是 canonical + 原 query）。
+
+```bash
+grep -n "\.route(" src-tauri/src/proxy/server.rs
+```
 
 **已裁剪 app 的端点不存在**（文档里若出现 `…/grokbuild/v1`、`GOOGLE_GEMINI_BASE_URL`
 指向本地端口，即为过时内容）。
@@ -120,6 +205,7 @@ grep -n "\.route(" src-tauri/src/proxy/server.rs
 | `models/anthropic.rs` 曾整体存在 | **已删除**（227 行，零引用，裁剪遗留） | 2026-10-02 |
 | `get_provider_config_path` 曾存在 | **已删除**（零引用含测试） | 2026-10-02 |
 | `OAuthCredentials` 曾有 4 字段 | **已删到只剩 `access_token`**（本 fork 不做 refresh 交换） | `claude.rs` GoogleOAuth 分支注释 |
+| Pi 接管报"在 CC Switch 中没有档案，无法接管" | **已修**（v3.20.4-trim.11 前）。档案只是管理面镜像，缺它不代表 Pi 侧没有该供应商；现在由 `models.json` 节点兜底并在开接管时补建档案 | §3.5 |
 
 ### `#[allow(dead_code)]` 分类（2026-10-02 实测 86 处 → 已删 3 类）
 
