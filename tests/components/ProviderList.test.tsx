@@ -391,20 +391,65 @@ describe("ProviderList Component", () => {
         .filter((props) => props.provider.id === "inactive-pi");
       expect(currentCards).not.toHaveLength(0);
       expect(inactiveCards).not.toHaveLength(0);
-      // pi 是 proxy app（fork 核心能力：pi 接管），卡片应透传接管与故障转移接线
+
+      // pi 支持**代理接管**（本 fork 核心能力），故接管指示必须在卡片上透传，
+      // 不因 pi 不支持 failover 而被一并隐藏。
       expect(currentCards.at(-1)).toMatchObject({
         isCurrent: false,
         isProxyRunning: true,
         isProxyTakeover: true,
-        activeProviderId: "current-pi",
       });
-      expect(currentCards.at(-1)?.onToggleFailover).toBeTypeOf("function");
       expect(inactiveCards.at(-1)).toMatchObject({
         isCurrent: false,
         isProxyRunning: true,
         isProxyTakeover: true,
       });
       expect(currentCards.at(-1)).not.toHaveProperty("piCurrentRoute");
+    });
+  });
+
+  it("withholds failover wiring from Pi, whose forwarding cannot switch dialects", async () => {
+    const currentProvider = createProvider({
+      id: "current-pi",
+      name: "Current Pi",
+    });
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [currentProvider],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+    server.use(
+      http.post(`${TAURI_ENDPOINT}/get_pi_current_state`, () =>
+        HttpResponse.json({ enabledProviderIds: ["current-pi"] }),
+      ),
+    );
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{ [currentProvider.id]: currentProvider }}
+        currentProviderId="current-pi"
+        appId="pi"
+        isProxyRunning
+        isProxyTakeover
+        activeProviderId="current-pi"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const cards = providerCardRenderSpy.mock.calls.map(([props]) => props);
+      expect(cards).not.toHaveLength(0);
+
+      // pi 在 FAILOVER_APP_IDS 之外（见 appConfig.tsx 的 FailoverAppId 契约，
+      // 后端 commands/failover.rs 会拒绝），因此 failover 专属接线必须缺席。
+      // 曾断言 onToggleFailover 是函数、activeProviderId 有值，与该契约脱节。
+      expect(cards.at(-1)).toMatchObject({ isProxyTakeover: true });
+      expect(cards.at(-1)?.onToggleFailover).toBeUndefined();
+      expect(cards.at(-1)?.activeProviderId).toBeUndefined();
     });
   });
 

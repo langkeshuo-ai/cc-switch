@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "./invoke";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
 
@@ -33,15 +34,21 @@ export async function fetchModelsForConfig(
   customUserAgent?: string,
   options?: ModelFetchOptions,
 ): Promise<FetchedModel[]> {
-  return invoke("fetch_models_for_config", {
-    baseUrl,
-    apiKey,
-    isFullUrl,
-    modelsUrl,
-    customUserAgent,
-    apiFormat: options?.apiFormat,
-    requestHeaders: options?.requestHeaders,
-  });
+  // 60s 超时：后端会对多个候选 URL **逐个尝试**（含剥离 /anthropic 兼容子路径的
+  // 兜底），每轮还带重试，慢端点上整体可远超常规命令时长。只读命令，超时安全。
+  return invokeCommand(
+    "fetch_models_for_config",
+    {
+      baseUrl,
+      apiKey,
+      isFullUrl,
+      modelsUrl,
+      customUserAgent,
+      apiFormat: options?.apiFormat,
+      requestHeaders: options?.requestHeaders,
+    },
+    { timeoutMs: 60_000 },
+  );
 }
 
 /**

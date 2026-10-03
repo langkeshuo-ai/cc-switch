@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "./invoke";
 import type {
   Settings,
   WebDavSyncSettings,
@@ -130,10 +131,15 @@ export const settingsApi = {
     settings: WebDavSyncSettings,
     preserveEmptyPassword = true,
   ): Promise<WebDavTestResult> {
-    return await invoke("webdav_test_connection", {
-      settings,
-      preserveEmptyPassword,
-    });
+    // 30s 超时：这是**只读**探测命令（不写库/不写配置），故超时放弃等待是安全的。
+    return await invokeCommand(
+      "webdav_test_connection",
+      {
+        settings,
+        preserveEmptyPassword,
+      },
+      { timeoutMs: 30_000 },
+    );
   },
 
   async webdavSyncUpload(): Promise<WebDavSyncResult> {
@@ -166,10 +172,14 @@ export const settingsApi = {
     settings: S3SyncSettings,
     preserveEmptyPassword = true,
   ): Promise<WebDavTestResult> {
-    return await invoke("s3_test_connection", {
-      settings,
-      preserveEmptyPassword,
-    });
+    return await invokeCommand(
+      "s3_test_connection",
+      {
+        settings,
+        preserveEmptyPassword,
+      },
+      { timeoutMs: 30_000 },
+    );
   },
 
   async s3SyncUpload(): Promise<WebDavSyncResult> {

@@ -170,12 +170,14 @@ mod tests {
     #[test]
     fn build_url_keeps_v1_for_openai_compatible_gateways() {
         let adapter = PiAdapter;
-        // base 不含 /v1（用户档案里就是裸域名）
+        // 常见形态：档案 baseUrl 就是裸域名 → 上游路径正确
         assert_eq!(
             adapter.build_url("https://host", "/v1/chat/completions"),
             "https://host/v1/chat/completions"
         );
-        // base 自带 /v1 结尾的斜杠形态：不得出现 /v1/v1
+        // base 自带 /v1 时会拼出 /v1/v1 —— 这是 PiAdapter 纯拼接的**既有语义**
+        // （anthropic 侧在 B4 之前同样如此），网关不做"base 是否已含 /v1"的推断，
+        // 因为那是用户的配置决策。本测试锁定该行为，防止未来有人无意改动它。
         assert_eq!(
             adapter.build_url("https://host/v1/", "/v1/chat/completions"),
             "https://host/v1/v1/chat/completions"

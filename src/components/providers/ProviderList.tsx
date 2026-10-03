@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { usePiCurrentState } from "@/lib/query/pi";
-import { isFailoverAppId } from "@/config/appConfig";
+import { isFailoverAppId, isProxyAppId } from "@/config/appConfig";
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
@@ -83,6 +83,8 @@ export function ProviderList({
   );
 
   const supportsFailover = isFailoverAppId(appId);
+  // 代理接管能力是 failover 能力的**超集**：pi 支持接管但不支持 failover
+  const supportsProxy = isProxyAppId(appId);
   const { data: isAutoFailoverEnabled } = useAutoFailoverEnabled(
     appId,
     supportsFailover,
@@ -303,8 +305,13 @@ export function ProviderList({
                 onOpenTerminal={onOpenTerminal}
                 onTest={handleTest}
                 isTesting={isChecking(provider.id)}
-                isProxyRunning={supportsFailover && isProxyRunning}
-                isProxyTakeover={supportsFailover && isProxyTakeover}
+                // 接管状态按 **proxy 能力**门控（isProxyAppId），不按 failover：
+                // T06 起 pi 被移出 FAILOVER_APP_IDS（其透传无法安全切换方言），
+                // 若沿用 supportsFailover 会连带把 pi 的接管指示一并隐藏——而接管是
+                // 本 fork 的核心能力，与 failover 无关。failover 专属字段才受
+                // supportsFailover 限制，见下。
+                isProxyRunning={supportsProxy && isProxyRunning}
+                isProxyTakeover={supportsProxy && isProxyTakeover}
                 isAutoFailoverEnabled={isFailoverModeActive}
                 failoverPriority={getFailoverPriority(provider.id)}
                 isInFailoverQueue={isInFailoverQueue(provider.id)}

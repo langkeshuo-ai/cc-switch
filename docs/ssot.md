@@ -138,6 +138,31 @@ Pi 的"同一个供应商"在三处各有一份数据。**三源允许漂移**�
 | 原生 `api` 与档案 `api` 不一致 | **不是 bug**，以 DB 档案为准并 warn。`models.json` 是真身但接管路由读的是档案；强行"修正"任一侧都是改写用户数据 | 本节四态决策表 |
 | 接管只改了 `baseUrl` 一个字段 | **有意为之**。`apiKey` 由 Pi 原生持有、`api` 决定方言、`models` 列表是用户资产——三者都不该被代理接管改写。放宽此约束会连带改写凭据 | `pi_config::apply_pi_takeover_base_url` 及其单测 |
 
+### 已知债：档案 baseUrl 自带 `/v1` 时上游会拼成 `/v1/v1`（2026-10-03 登记）
+
+Pi 网关是**纯透传**——`PiAdapter::build_url` 只做 `{base}/{endpoint}` 拼接，
+handler 只剥网关前缀（`/pi/anthropic`、`/pi/openai`），不做"base 是否已含
+`/v1`"的推断。于是：
+
+| 档案 baseUrl | 客户端路径 | 上游最终 URL | 结果 |
+|-------------|-----------|-------------|------|
+| `https://host` | `/v1/chat/completions` | `https://host/v1/chat/completions` | ✅ |
+| `https://host/v1` | `/v1/chat/completions` | `https://host/v1/v1/chat/completions` | ❌ 多数网关 404 |
+
+**这不是 B4 引入的**：`anthropic` 侧在 openai 透传改造之前就是同一行为
+（`/pi/anthropic/v1/messages` + base `…/v1` → `/v1/v1/messages`）。
+本机实测确有此类配置（`~/.pi/agent/models.json` 里 `linuxdo-hub`、`1`
+两个节点的 baseUrl 都带 `/v1`）。
+
+**为什么不修**：baseUrl 是否含 `/v1` 是**用户的配置决策**，网关替用户"推断"
+并去重，会在"上游本就该有双 `/v1`"（罕见但合法）的场景下改错目标。
+真正的解法在 Pi 侧或用户侧（baseUrl 写成裸域名），不在网关。
+若将来要改，必须同时覆盖两个方言，且新增"base 已含 /v1 时去重"的显式开关
+（默认关闭），不能静默推断。
+
+**守护**：`proxy/providers/pi.rs` 的 `build_url_keeps_v1_for_openai_compatible_gateways`
+锁定当前的纯拼接行为（两条断言分别覆盖含/不含 `/v1` 的 base）。
+
 ### 档案读取点审计（2026-10-03，`get_provider_by_id(…, "pi")`）
 
 ```bash
