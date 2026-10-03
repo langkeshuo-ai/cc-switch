@@ -2676,7 +2676,7 @@ impl ProxyService {
             config["config"] = json!(updated);
         }
 
-        self.write_codex_live_verbatim(&config)?;
+        self.write_codex_live_projected(&config)?;
         Ok(())
     }
 
@@ -3284,7 +3284,7 @@ impl ProxyService {
     /// 持有真实登录凭据（非接管占位符），它就比快照新，必须获胜：登录发生在接管期间时备份
     /// 里是第三方 API key（#6277 的循环覆盖链），把它降级进 config 的
     /// `experimental_bearer_token`；备份也是官方形态时它的 tokens 只是旧
-    /// 副本，同样不写回。摘掉备份 auth 槽后 `write_codex_live_verbatim`
+    /// 副本，同样不写回。摘掉备份 auth 槽后 `write_codex_live_projected`
     /// 只写 config.toml，live 登录零接触。判定用
     /// `codex_auth_has_credential_login_material`——`last_refresh` /
     /// `tokens.account_id` 等元数据残留不算登录，既不让 sk-+元数据形态的
@@ -3510,12 +3510,11 @@ impl ProxyService {
             .map_err(|e| format!("读取 Codex Live 配置失败: {e}"))
     }
 
-    // L9：原 write_codex_live 只是 write_codex_live_verbatim 的同义薄包装
-    // （两个名字一种行为），已折叠为单一入口 write_codex_live_verbatim。
+    // 写入前会投影 model catalog，不是逐字回放，故名 projected 而非 verbatim。
     fn write_codex_restore_backup(&self, config: &Value) -> Result<(), String> {
         let mut config = config.clone();
         let auth_snapshot = self.preserve_codex_oauth_login_on_restore(&mut config)?;
-        self.write_codex_live_verbatim_with_optional_auth_guard(&config, Some(&auth_snapshot))
+        self.write_codex_live_projected_with_optional_auth_guard(&config, Some(&auth_snapshot))
     }
 
     fn write_codex_live_for_provider(
@@ -3545,7 +3544,7 @@ impl ProxyService {
                 }
             }
 
-            return self.write_codex_live_verbatim(config);
+            return self.write_codex_live_projected(config);
         };
 
         let auth = config
@@ -3718,11 +3717,11 @@ impl ProxyService {
         self.write_codex_live_for_provider(config, provider)
     }
 
-    fn write_codex_live_verbatim(&self, config: &Value) -> Result<(), String> {
-        self.write_codex_live_verbatim_with_optional_auth_guard(config, None)
+    fn write_codex_live_projected(&self, config: &Value) -> Result<(), String> {
+        self.write_codex_live_projected_with_optional_auth_guard(config, None)
     }
 
-    fn write_codex_live_verbatim_with_optional_auth_guard(
+    fn write_codex_live_projected_with_optional_auth_guard(
         &self,
         config: &Value,
         expected_auth: Option<&CodexAuthFileSnapshot>,

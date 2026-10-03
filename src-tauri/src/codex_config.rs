@@ -1033,9 +1033,17 @@ pub fn write_codex_live_atomic(
     if let Err(e) = write_text_file_private(&config_path, &cfg_text) {
         // 回滚 auth.json —— 同样必须用 private，否则回滚瞬间又写出 0644 文件
         if let Some(bytes) = old_auth {
-            let _ = atomic_write_private(&auth_path, &bytes);
-        } else {
-            let _ = delete_file(&auth_path);
+            if let Err(rollback_err) = atomic_write_private(&auth_path, &bytes) {
+                log::error!(
+                    "回滚 Codex auth.json 失败，磁盘可能停在半写入状态: path={} err={rollback_err}",
+                    auth_path.display()
+                );
+            }
+        } else if let Err(rollback_err) = delete_file(&auth_path) {
+            log::error!(
+                "回滚删除 Codex auth.json 失败: path={} err={rollback_err}",
+                auth_path.display()
+            );
         }
         return Err(e);
     }

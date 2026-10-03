@@ -103,7 +103,9 @@ pub(crate) fn notify_db_changed<B: AutoSyncBackend>(
     let Some(tx) = tx_slot.get() else {
         return;
     };
-    let _ = enqueue_change_signal(tx, table);
+    if !enqueue_change_signal(tx, table) {
+        log::warn!("自动同步变更信号被丢弃（通道已满或已关闭）: table={table}");
+    }
 }
 
 pub(crate) fn start_worker<B: AutoSyncBackend>(

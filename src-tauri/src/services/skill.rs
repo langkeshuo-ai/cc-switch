@@ -335,10 +335,38 @@ const FILE_ENTRY_BUDGET_COST: u64 = DIRECTORY_BUDGET_COST;
 const MAX_ARCHIVE_DOWNLOAD_BYTES: u64 = 128 * 1024 * 1024;
 
 /// 技能元数据 (从 SKILL.md 解析)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillMetadata {
     pub name: Option<String>,
     pub description: Option<String>,
+}
+
+fn join_block_scalar(lines: &[String]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        out.push_str(trimmed);
+    }
+    out.trim().to_string()
+}
+
+fn unquote_yaml_scalar(raw: &str) -> Result<String, String> {
+    let value = raw.split('#').next().unwrap_or(raw).trim();
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\'')
+        {
+            return Ok(value[1..value.len() - 1].to_string());
+        }
+    }
+    if value.contains(": ") || value.starts_with('-') {
+        return Err(format!("front matter 标量不受支持: {raw}"));
+    }
+    Ok(value.to_string())
 }
 
 /// 导入已有 Skill 时，前端显式提交的启用应用选择
@@ -2684,13 +2712,12 @@ impl SkillService {
         }
 
         let front_matter = parts[1].trim();
-        // YAML 语法错误时**必须留痕**：静默降级会让用户看到 skill 名字/描述
-        // 凭空消失，却完全无从排查（下游 `read_skill_name_desc` 只是回退到目录名）。
-        let meta: SkillMetadata = match serde_yaml::from_str(front_matter) {
+        // 只消费 name/description。语法错误必须留痕：静默降级会让名字/描述凭空消失。
+        let meta = match Self::parse_skill_front_matter(front_matter) {
             Ok(meta) => meta,
             Err(err) => {
                 log::warn!(
-                    "技能 {} 的 front matter YAML 解析失败，回退为默认元数据: {err}",
+                    "技能 {} 的 front matter 解析失败，回退为默认元数据: {err}",
                     path.display()
                 );
                 SkillMetadata {
@@ -2701,6 +2728,75 @@ impl SkillService {
         };
 
         Ok(meta)
+    }
+
+    /// SKILL.md front matter 只用到 `name` / `description` 两个标量。
+    /// 手写这个子集，避免再依赖已归档的 serde_yaml；其它键忽略。
+    fn parse_skill_front_matter(front_matter: &str) -> Result<SkillMetadata, String> {
+        let mut name = None;
+        let mut description = None;
+        let mut pending_block: Option<(String, Vec<String>)> = None;
+
+        let flush_block = |pending: &mut Option<(String, Vec<String>)>,
+                           name: &mut Option<String>,
+                           description: &mut Option<String>| {
+            let Some((key, lines)) = pending.take() else {
+                return;
+            };
+            let value = join_block_scalar(&lines);
+            match key.as_str() {
+                "name" => *name = Some(value),
+                "description" => *description = Some(value),
+                _ => {}
+            }
+        };
+
+        for line in front_matter.lines() {
+            if pending_block.is_some() {
+                if line.is_empty() || line.starts_with(' ') || line.starts_with('\t') {
+                    pending_block.as_mut().unwrap().1.push(line.to_string());
+                    continue;
+                }
+                flush_block(&mut pending_block, &mut name, &mut description);
+            }
+
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if line.starts_with(' ') || line.starts_with('\t') {
+                return Err(format!("front matter 出现未归属的缩进行: {trimmed}"));
+            }
+            let Some((raw_key, rest)) = trimmed.split_once(':') else {
+                return Err(format!("front matter 不是键值行: {trimmed}"));
+            };
+            let key = raw_key.trim();
+            if key.is_empty() || key.contains([' ', '\t']) {
+                return Err(format!("front matter 键名非法: {raw_key}"));
+            }
+            let rest = rest.trim();
+            if rest == "|"
+                || rest == "|-"
+                || rest == "|+"
+                || rest == ">"
+                || rest == ">-"
+                || rest == ">+"
+            {
+                pending_block = Some((key.to_string(), Vec::new()));
+                continue;
+            }
+            if rest.is_empty() {
+                continue;
+            }
+            let value = unquote_yaml_scalar(rest)?;
+            match key {
+                "name" => name = Some(value),
+                "description" => description = Some(value),
+                _ => {}
+            }
+        }
+        flush_block(&mut pending_block, &mut name, &mut description);
+        Ok(SkillMetadata { name, description })
     }
 
     /// 从 SKILL.md 读取名称和描述，不存在则用目录名兜底
@@ -6238,6 +6334,26 @@ mod tests {
         // 两者都没有时按 directory 拼接
         let doc_path = SkillService::choose_doc_path(None, None, "skills/foo");
         assert_eq!(doc_path, "skills/foo/SKILL.md");
+    }
+
+    #[test]
+    fn skill_front_matter_reads_quoted_and_block_scalars() {
+        let meta = SkillService::parse_skill_front_matter(
+            "name: \"hello\"\ndescription: |\n  line one\n  line two\nignored: 1",
+        )
+        .expect("front matter");
+        assert_eq!(
+            meta,
+            SkillMetadata {
+                name: Some("hello".to_string()),
+                description: Some("line one\nline two".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn skill_front_matter_rejects_broken_line() {
+        assert!(SkillService::parse_skill_front_matter("name hello").is_err());
     }
 
     #[test]

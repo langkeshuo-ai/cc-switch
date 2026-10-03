@@ -101,7 +101,14 @@ pub(crate) fn initialize_common_config_snippets(state: &store::AppState) {
             Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
                 match state.db.set_config_snippet(app_type.as_str(), Some(snippet)) {
                     Ok(()) => {
-                        let _ = state.db.set_config_snippet_cleared(app_type.as_str(), false);
+                        if let Err(e) =
+                            state.db.set_config_snippet_cleared(app_type.as_str(), false)
+                        {
+                            log::warn!(
+                                "已保存通用配置片段，但清除 snippet_cleared 标记失败 {}: {e}",
+                                app_type.as_str()
+                            );
+                        }
                         log::info!(
                             "✓ Auto-extracted common config snippet for {}",
                             app_type.as_str()

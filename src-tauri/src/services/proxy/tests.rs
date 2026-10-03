@@ -1683,7 +1683,7 @@ fn codex_empty_restore_snapshot_does_not_delete_existing_auth_json() {
         .expect("seed auth");
 
     service
-        .write_codex_live_verbatim(&json!({
+        .write_codex_live_projected(&json!({
             "auth": {},
             "config": "model = \"gpt-5.4-mini\"\n"
         }))
@@ -4623,7 +4623,7 @@ requires_openai_auth = true
     .await
     .expect("seed live backup");
     service
-        .write_codex_live_verbatim(&json!({
+        .write_codex_live_projected(&json!({
             "auth": {
                 "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER
             },
@@ -4796,7 +4796,7 @@ requires_openai_auth = true
     .await
     .expect("seed live backup");
     service
-        .write_codex_live_verbatim(&json!({
+        .write_codex_live_projected(&json!({
             "auth": {
                 "OPENAI_API_KEY": PROXY_TOKEN_PLACEHOLDER
             },
@@ -5962,7 +5962,7 @@ fn guarded_codex_restore_rejects_a_changed_auth_file() {
     .expect("simulate concurrent login");
 
     let error = service
-        .write_codex_live_verbatim_with_optional_auth_guard(
+        .write_codex_live_projected_with_optional_auth_guard(
             &json!({
                 "auth": { "OPENAI_API_KEY": "stale-key" },
                 "config": "model_provider = \"any\"\n"
@@ -6048,7 +6048,7 @@ fn changed_auth_after_catalog_prepare_rolls_catalog_back() {
     let db = Arc::new(Database::memory().expect("init db"));
     let service = ProxyService::new(db);
     let error = service
-        .write_codex_live_verbatim_with_optional_auth_guard(
+        .write_codex_live_projected_with_optional_auth_guard(
             &json!({
                 "auth": { "OPENAI_API_KEY": "stale-key" },
                 "config": "model = \"model-a\"\n",
@@ -6164,7 +6164,7 @@ fn guarded_restore_final_config_failure_rolls_back_auth_and_catalog() {
     let db = Arc::new(Database::memory().expect("init db"));
     let service = ProxyService::new(db);
     let error = service
-        .write_codex_live_verbatim_with_optional_auth_guard(
+        .write_codex_live_projected_with_optional_auth_guard(
             &json!({
                 "auth": { "OPENAI_API_KEY": "restored-key" },
                 "config": "model = \"model-a\"\n",
