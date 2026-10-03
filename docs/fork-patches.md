@@ -40,7 +40,7 @@
   字节（字节级恢复）+ is_local_proxy_url url::Host 重写 + verbatim 家族折叠
 - `src-tauri/src/services/provider/mod.rs` · L7 switch() 接管闸门错误传播
 - `src-tauri/src/services/snapshots.rs` · capture_provider_id 读 Pi settings.json
-  + apply 补写 set_pi_default_provider + sync_mutex 串行化
+  - apply 补写 set_pi_default_provider + sync_mutex 串行化
 - `src-tauri/src/pi_config/mod.rs` · set_pi_default_provider /
   parse_models_document_raw / baseUrl 手术式替换（注释保留）
 - `src-tauri/src/codex_config.rs` · merge_codex_config_surgical + 多行字面量
@@ -48,6 +48,24 @@
 - `src-tauri/src/tray.rs` · refresh_tray_menu spawn_blocking + handle_auto_click
   异步化（L3）
 - `src-tauri/src/commands/import_export.rs` · validate_transfer_path（M2）
+- `src-tauri/src/database/schema.rs` · 模型定价表已外置为
+  `src/resources/model-pricing.default.json`（原 1192 行硬编码）。`DefaultPricingEntry`
+  是 seed 私有实现细节，**刻意不 pub**；`database::tests` 自带 `PricingRow` 解析，
+  不复用它——schema 加改字段不该牵动测试。`tools/verify_pricing.py` 守护数据不变式
+- `src-tauri/src/services/sync_crypto.rs` · `manifest_mac`（HMAC-SHA256）。
+  MAC 密钥用**固定 domain separator** 派生，不复用 artifact 的随机 salt：manifest
+  在任何 artifact 解密之前就要验签，那时拿不到 salt。固定 salt 兼顾跨设备可验 +
+  与加密 key 不共享字节。`sync_crypto` 文档已如实写明 replay 仍未覆盖
+- `src-tauri/src/services/sync_protocol.rs` · `SyncManifest.mac`（可选）+
+  `manifest_signing_bytes`（置 None 排除自身，签名可验证的前提）+
+  `verify_manifest_authenticity` 三分支（有签名必验 / 有口令无签名拒绝 / 无口令跳过）。
+  验签排在自洽校验之后、artifact 校验之前：自洽几十毫秒，验签要跑 Argon2
+- `src/i18n/index.ts` · 语言包按需加载。zh/en 静态（首帧必须有翻译，i18n init 是
+  同步的），ja/zh-TW 动态。检测 `i18n.isInitialized`：**已初始化就完全不碰资源表**
+  ——tests/setupTests.ts 刻意用空资源 init 让翻译函数回显 key 可被断言，此处二次
+  init 会把那份配置覆盖掉
+- `src/hooks/useSettingsForm.ts` · `syncLanguage` 先查 `isLanguageLoaded` 再决定同步
+  或异步切换。已加载语言必须同步切，否则提示文案与界面状态错开一帧
 - `src-tauri/src/deeplink/parser.rs` · provider/prompt app 白名单收紧为
   claude/codex(/prompt 含 pi)（E11）
 - `src-tauri/src/commands/snapshots.rs` · emit 已有 log::error（L6，无改动）
@@ -95,7 +113,7 @@
   调用（见文件内注释），改了会 panic。
 - `src-tauri/src/proxy/usage/logger.rs` · 删 `get_model_pricing`、
   `log_error_with_context`（零调用，注释谎称"测试使用"）。
-  **保留   `log_with_calculation`**——`mod tests` 确有调用。
+  **保留 `log_with_calculation`**——`mod tests` 确有调用。
   `allow(dead_code)` 归零。
 - `eslint.config.js` ·（整文件新增）本 fork 引入 ESLint 9 flat config。此前
   **154 个 `useEffect` 依赖数组零自动化守护**——`exhaustive-deps` 缺失导致的
@@ -150,16 +168,19 @@
 ## 上游 pick 评审记录（2026-09-29，截至 upstream 846de29c，落后 22）
 
 **已抄（3 笔）：**
+
 - `b9c27393` → b6a1109c：incremental_vacuum 整 freelist 回收（原每次仅回收 1 页）
 - `846de29c` → 46cc61dc：skills 图标（Wrench→SkillsIcon；cherry-pick 在裁撤段冲突，手工套用）
 - `6064fc1c` → 897f0fcd：删 connectivity check 配置面/批量检查/日志（-444 行；批量与日志在 fork 前端零调用，单次检查改用默认配置）
 
 **拒绝（含理由）：**
-- `15c0b3ce` 及其依赖 `b0875f4c`/`08a80b90`/`a79d9ff1`：direct/proxy mode 架构（mode/*、*_direct.rs 在 fork 不存在）——ADR-001 底线：保 backup-restore 中间人能力
+
+- `15c0b3ce` 及其依赖 `b0875f4c`/`08a80b90`/`a79d9ff1`：direct/proxy mode 架构（mode/_、_\_direct.rs 在 fork 不存在）——ADR-001 底线：保 backup-restore 中间人能力
 - `2185498e`：上游泄漏修复针对其 key-field writer；fork 已由 a5b3dd3a 在 surgical 引擎侧覆盖同一安全属性
 - `81df5a08`/`0e6430ab`/`63ed5002`/`fb564537`/`143bc461` + 3 docs：key-field switching 引擎与 fork surgical 引擎对立
 - `69ff69dd`：40 文件重构绑上游 editor 架构，fork 侧 useDraftEditorProjection 等锚点不存在
 
 **候选待评审（月度）：**
+
 - `46fa2e0e` 删成本倍率（-866）：功能移除非修复；与 H4 DAO/schema 列/计价链路交织，7 文件冲突，需连带决定 proxy_config.default_cost_multiplier 列去留——单独会话做
 - `46fa2e0e`/`6064fc1c` 同类上游删除面继续积累时重估
