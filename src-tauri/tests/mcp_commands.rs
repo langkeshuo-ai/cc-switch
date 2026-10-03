@@ -398,6 +398,12 @@ fn set_mcp_enabled_for_codex_writes_live_config() {
         toml_text.contains("codex-server"),
         "codex config should include the enabled server definition"
     );
+    // Codex 的 [mcp_servers.*] 没有 `type` 字段：传输方式由 command / url 推断。
+    // 写出 `type` 会被 Codex 0.158+ 当作未知配置字段告警，--strict-config 下拒绝启动。
+    assert!(
+        !toml_text.contains("type = "),
+        "codex config must not contain a `type` line, got:\n{toml_text}"
+    );
 }
 
 #[test]

@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    atomic_write, delete_file, get_home_dir, path_is_within, read_json_file, write_json_file,
-    write_text_file,
+    atomic_write, atomic_write_private, delete_file, get_home_dir, path_is_within, read_json_file,
+    write_json_file, write_json_file_private, write_text_file_private,
 };
 use crate::error::AppError;
 use crate::model_capabilities::{image_input_capability_from_modalities, ImageInputCapability};
@@ -977,7 +977,7 @@ pub fn sync_codex_managed_oauth_live_auth_after_refresh(
     let was_recorded_managed = marker_path.exists()
         && codex_auth_matches_recorded_managed_oauth(&current_auth, account_id)?;
 
-    write_json_file(&auth_path, refreshed_auth)?;
+    write_json_file_private(&auth_path, refreshed_auth)?;
     if was_recorded_managed {
         record_codex_managed_oauth_live_auth(refreshed_auth, account_id)?;
     }
@@ -1026,14 +1026,14 @@ pub fn write_codex_live_atomic(
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
     }
 
-    // 第一步：写 auth.json
-    write_json_file(&auth_path, auth)?;
+    // 第一步：写 auth.json（含 OAuth 凭证，权限收紧）
+    write_json_file_private(&auth_path, auth)?;
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
-    if let Err(e) = write_text_file(&config_path, &cfg_text) {
-        // 回滚 auth.json
+    if let Err(e) = write_text_file_private(&config_path, &cfg_text) {
+        // 回滚 auth.json —— 同样必须用 private，否则回滚瞬间又写出 0644 文件
         if let Some(bytes) = old_auth {
-            let _ = atomic_write(&auth_path, &bytes);
+            let _ = atomic_write_private(&auth_path, &bytes);
         } else {
             let _ = delete_file(&auth_path);
         }
@@ -1103,7 +1103,7 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
         toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
     }
 
-    write_text_file(&config_path, &cfg_text)
+    write_text_file_private(&config_path, &cfg_text)
 }
 
 // ==================== config.toml 外科手术式合并 ====================

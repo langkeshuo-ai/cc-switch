@@ -318,11 +318,25 @@ fn sort_json_keys(value: &Value) -> Value {
     }
 }
 
-/// 写入 JSON 配置文件并返回实际写入的字节。
-pub fn write_json_file_with_contents<T: Serialize>(
+/// 写入 JSON 配置文件（键按字母排序，确保确定性输出）。
+pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    write_json_file_with_mode(path, data, false)
+}
+
+/// 写入 JSON 配置文件，权限收紧到仅当前用户可读写。
+///
+/// 用于**含凭证**的配置文件（如 Codex 的 `auth.json`）。Unix 上新文件与
+/// 替换文件均为 0600；Windows 上 DACL 受保护且仅含当前用户一条 ACE。
+/// 底层与普通写入共用同一份序列化逻辑，只切换权限模式。
+pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    write_json_file_with_mode(path, data, true)
+}
+
+fn write_json_file_with_mode<T: Serialize>(
     path: &Path,
     data: &T,
-) -> Result<Vec<u8>, AppError> {
+    private: bool,
+) -> Result<(), AppError> {
     // 确保目录存在
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
@@ -334,13 +348,12 @@ pub fn write_json_file_with_contents<T: Serialize>(
         .map_err(|e| AppError::JsonSerialize { source: e })?;
 
     let contents = json.into_bytes();
-    atomic_write(path, &contents)?;
-    Ok(contents)
-}
-
-/// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
-pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    write_json_file_with_contents(path, data).map(|_| ())
+    if private {
+        atomic_write_private(path, &contents)?;
+    } else {
+        atomic_write(path, &contents)?;
+    }
+    Ok(())
 }
 
 /// 原子写入文本文件（用于 TOML/纯文本）
@@ -349,6 +362,17 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
     atomic_write(path, data.as_bytes())
+}
+
+/// 原子写入文本文件，权限收紧到仅当前用户可读写。
+///
+/// 用于可能含内联凭证的配置文件（如 Codex 的 `config.toml`：其
+/// `mcp_servers.*.http_headers` 与 `model_providers.*.env_key` 段可带密钥）。
+pub fn write_text_file_private(path: &Path, data: &str) -> Result<(), AppError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
+    }
+    atomic_write_private(path, data.as_bytes())
 }
 
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
