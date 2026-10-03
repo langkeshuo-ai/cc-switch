@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ensureLanguageLoaded } from "@/i18n";
 import { useSettingsQuery } from "@/lib/query";
 import type { Settings } from "@/types";
 
@@ -92,9 +93,14 @@ export function useSettingsForm(): UseSettingsFormResult {
   const syncLanguage = useCallback(
     (lang: Language) => {
       const current = normalizeLanguage(i18n.language);
-      if (current !== lang) {
-        void i18n.changeLanguage(lang);
+      if (current === lang) {
+        return;
       }
+      // ja / zh-TW 的语言包是动态 chunk，未加载时直接 changeLanguage 会整屏
+      // 显示 fallback 英文。必须先确保包到位再切。
+      void ensureLanguageLoaded(lang).then(() => {
+        void i18n.changeLanguage(lang);
+      });
     },
     [i18n],
   );
