@@ -150,7 +150,7 @@ export const updateCommonConfigSnippet = (
   let config: Record<string, any>;
   try {
     config = jsonString ? JSON.parse(jsonString) : {};
-  } catch (err) {
+  } catch {
     return {
       updatedConfig: jsonString,
       error: "配置 JSON 解析失败，无法应用通用配置",
@@ -206,7 +206,7 @@ export const hasCommonConfigSnippet = (
     //（`isSubset(config, {})` 对任何配置都是 true）。
     if (Object.keys(snippet).length === 0) return false;
     return isSubset(config, snippet);
-  } catch (err) {
+  } catch {
     return false;
   }
 };
@@ -248,7 +248,7 @@ export const getApiKeyFromConfig = (
           ? apiKey
           : "";
     return value;
-  } catch (err) {
+  } catch {
     return "";
   }
 };
@@ -321,7 +321,7 @@ export const hasApiKeyField = (
       Object.prototype.hasOwnProperty.call(env, "ANTHROPIC_AUTH_TOKEN") ||
       Object.prototype.hasOwnProperty.call(env, "ANTHROPIC_API_KEY")
     );
-  } catch (err) {
+  } catch {
     return false;
   }
 };
@@ -375,7 +375,7 @@ export const setApiKeyInConfig = (
       return jsonString;
     }
     return JSON.stringify(config, null, 2);
-  } catch (err) {
+  } catch {
     return jsonString;
   }
 };

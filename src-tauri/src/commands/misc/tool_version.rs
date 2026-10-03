@@ -1495,13 +1495,29 @@ fn merge_path_segments_win(parts: &[&str]) -> String {
 /// 单探兜底 (`scan_cli_version`) 与全量枚举 (`enumerate_tool_installations`) 共用，
 /// 确保两条路径看到的是同一组安装位置。
 fn build_tool_search_paths(tool: &str) -> Vec<std::path::PathBuf> {
-    let home = dirs::home_dir().unwrap_or_default();
+    // 测试注入本地数据目录，避免依赖 SHGetKnownFolderPath：全量并发时该 API 可能返回 None，
+    // 单测若直接 expect 就会把环境抖动误报成功能回归。
+    build_tool_search_paths_in(
+        tool,
+        dirs::home_dir(),
+        dirs::data_local_dir(),
+        dirs::data_dir(),
+    )
+}
+
+fn build_tool_search_paths_in(
+    tool: &str,
+    home: Option<std::path::PathBuf>,
+    local_data: Option<std::path::PathBuf>,
+    appdata: Option<std::path::PathBuf>,
+) -> Vec<std::path::PathBuf> {
+    let home = home.unwrap_or_default();
 
     // 常见的安装路径（原生安装优先）
     let mut search_paths: Vec<std::path::PathBuf> = Vec::new();
     // `tool` 仅在 Windows 分支用于追加平台专属的独立安装目录；其余平台无 per-tool 目录。
     #[cfg(not(target_os = "windows"))]
-    let _ = tool;
+    let _ = (tool, &local_data, &appdata);
     if !home.as_os_str().is_empty() {
         push_unique_path(&mut search_paths, home.join(".local/bin"));
         push_unique_path(&mut search_paths, home.join(".npm-global/bin"));
@@ -1540,7 +1556,7 @@ fn build_tool_search_paths(tool: &str) -> Vec<std::path::PathBuf> {
         // drop the user PATH (#6061), so add them explicitly here. Placed ahead
         // of the npm directory so a native install wins over a stale npm shim
         // (#4701).
-        if let Some(local_data) = dirs::data_local_dir() {
+        if let Some(local_data) = local_data {
             if tool == "codex" {
                 // OpenAI Codex Installer.exe / .msi standalone install location
                 // (#6061, #6047).
@@ -1562,7 +1578,7 @@ fn build_tool_search_paths(tool: &str) -> Vec<std::path::PathBuf> {
                 );
             }
         }
-        if let Some(appdata) = dirs::data_dir() {
+        if let Some(appdata) = appdata {
             push_unique_path(&mut search_paths, appdata.join("npm"));
         }
         push_unique_path(
@@ -4912,11 +4928,18 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn build_tool_search_paths_includes_standalone_installer_dirs() {
-        // Non-npm installer locations must be scanned even when the process PATH
-        // dropped them (regression guard for #6061 / #6278 / #6047).
-        let local_data = dirs::data_local_dir().expect("LOCALAPPDATA should resolve");
+        // 不读本机 Known Folder：并发下 SHGetKnownFolderPath 可能返回 None，
+        // 这里只验证目录拼接，路径由测试注入。
+        let local_data = PathBuf::from(r"D:\injected-local");
+        let home = PathBuf::from(r"D:\injected-home");
+        let appdata = PathBuf::from(r"D:\injected-roaming");
 
-        let codex_paths = build_tool_search_paths("codex");
+        let codex_paths = build_tool_search_paths_in(
+            "codex",
+            Some(home.clone()),
+            Some(local_data.clone()),
+            Some(appdata.clone()),
+        );
         assert!(codex_paths.contains(
             &local_data
                 .join("Programs")
@@ -4925,17 +4948,24 @@ mod tests {
                 .join("bin")
         ));
 
-        let claude_paths = build_tool_search_paths("claude");
+        let claude_paths = build_tool_search_paths_in(
+            "claude",
+            Some(home.clone()),
+            Some(local_data.clone()),
+            Some(appdata),
+        );
         assert!(claude_paths.contains(&local_data.join("Programs").join("claude")));
 
-        // The standalone Codex dir is codex-specific; it must not pollute other tools.
-        assert!(!build_tool_search_paths("pi").contains(
-            &local_data
-                .join("Programs")
-                .join("OpenAI")
-                .join("Codex")
-                .join("bin")
-        ));
+        assert!(
+            !build_tool_search_paths_in("pi", Some(home), Some(local_data.clone()), None,)
+                .contains(
+                    &local_data
+                        .join("Programs")
+                        .join("OpenAI")
+                        .join("Codex")
+                        .join("bin")
+                )
+        );
     }
 
     #[cfg(target_os = "windows")]

@@ -121,8 +121,9 @@
   实际风险相关的规则：`react-hooks/rules-of-hooks`(error)、
   `react-hooks/exhaustive-deps`(warn)、`@typescript-eslint/no-explicit-any`(warn)、
   `no-unused-vars`(warn)、`no-empty`(warn)。**不引 formatting 规则**（prettier 已
-  单独在 CI 跑 `format:check`，两者管同一件事必然打架）。存量 130 warning 不阻断，
-  阻断线为 0 error；`no-control-regex` 的 3 处 disable 均在"目的就是匹配控制字符"
+单独在 CI 跑 `format:check`，两者管同一件事必然打架）。`pnpm lint` 带
+   `--max-warnings 114`（2026-10-04：未使用变量 15 处已清，余 100 条 `no-explicit-any`
+   + 14 条 `exhaustive-deps`），超过即失败；`no-control-regex` 的 3 处 disable 均在"目的就是匹配控制字符"
   的位置（剥控制字符 / TOML 转义 / Windows 非法文件名），非规则误报。
 - `src/lib/frontendLogger.ts` · 2 处字符类内 `\/` → `/`（`no-useless-escape`）。
   已验证行为等价：字符类内 `/` 无需转义，Node 实测 match 结果一致。

@@ -126,7 +126,7 @@ export function ProxyPanel({
           : t("proxy.logging.disabled", { defaultValue: "日志记录已关闭" }),
         { closeButton: true },
       );
-    } catch (error) {
+    } catch {
       toast.error(
         t("proxy.logging.failed", { defaultValue: "切换日志状态失败" }),
       );
@@ -212,7 +212,7 @@ export function ProxyPanel({
         t("proxy.settings.configSaved", { defaultValue: "代理配置已保存" }),
         { closeButton: true },
       );
-    } catch (error) {
+    } catch {
       toast.error(
         t("proxy.settings.configSaveFailed", { defaultValue: "保存配置失败" }),
       );
@@ -233,7 +233,7 @@ export function ProxyPanel({
         t("proxy.settings.configSaved", { defaultValue: "代理配置已保存" }),
         { closeButton: true },
       );
-    } catch (error) {
+    } catch {
       toast.error(
         t("proxy.settings.configSaveFailed", { defaultValue: "保存配置失败" }),
       );

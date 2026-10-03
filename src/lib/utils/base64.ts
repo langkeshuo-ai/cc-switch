@@ -41,7 +41,7 @@ export function decodeBase64Utf8(str: string): string {
       const binString = atob(cleaned);
       const bytes = Uint8Array.from(binString, (m) => m.codePointAt(0)!);
       return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    } catch (e1) {
+    } catch {
       // If standard fails, try adding padding
       const remainder = cleaned.length % 4;
       if (remainder !== 0) {

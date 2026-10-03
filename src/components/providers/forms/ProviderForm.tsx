@@ -1071,7 +1071,7 @@ function ProviderFormFull({
           configObj.modelCatalog = { models: normalizedCatalogModels };
         }
         settingsConfig = JSON.stringify(configObj);
-      } catch (err) {
+      } catch {
         settingsConfig = values.settingsConfig.trim();
       }
     } else {

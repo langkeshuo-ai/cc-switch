@@ -10,7 +10,7 @@
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 114",
     "check:i18n": "node scripts/check-i18n.mjs",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",

@@ -205,7 +205,7 @@ const EndpointSpeedTest: React.FC<EndpointSpeedTestProps> = ({
         ),
       );
       onCustomEndpointsChange(customUrls);
-    } catch (err) {
+    } catch {
       // ignore
     }
   }, [entries, onCustomEndpointsChange, isEditMode]);

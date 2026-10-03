@@ -268,7 +268,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
         const toml = mcpServerToToml(server);
         setFormConfig(toml);
         setConfigError(validateTomlConfig(toml));
-      } catch (e: any) {
+      } catch {
         setConfigError(t("mcp.error.jsonInvalid"));
       }
     } else {

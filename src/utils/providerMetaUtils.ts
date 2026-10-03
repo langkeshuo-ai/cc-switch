@@ -35,7 +35,7 @@ export function mergeProviderMeta(
     }
 
     if ("custom_endpoints" in initialMeta) {
-      const { custom_endpoints, ...rest } = initialMeta;
+      const { custom_endpoints: _custom_endpoints, ...rest } = initialMeta;
       // 保留其他字段（如 usage_script）
       // 即使 rest 为空，也要返回空对象（让后端知道要清空 meta）
       return Object.keys(rest).length > 0 ? rest : {};
@@ -51,7 +51,7 @@ export function mergeProviderMeta(
   }
 
   if ("custom_endpoints" in initialMeta) {
-    const { custom_endpoints, ...rest } = initialMeta;
+    const { custom_endpoints: _custom_endpoints, ...rest } = initialMeta;
     return Object.keys(rest).length > 0 ? rest : undefined;
   }
 

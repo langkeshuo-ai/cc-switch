@@ -69,7 +69,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
       if (saved !== false) {
         onClose();
       }
-    } catch (error) {
+    } catch {
       // Error handled by hook
     } finally {
       savingRef.current = false;
