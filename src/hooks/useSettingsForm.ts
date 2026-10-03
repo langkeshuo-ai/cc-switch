@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ensureLanguageLoaded } from "@/i18n";
+import { ensureLanguageLoaded, isLanguageLoaded } from "@/i18n";
 import { useSettingsQuery } from "@/lib/query";
 import type { Settings } from "@/types";
 
@@ -96,8 +96,15 @@ export function useSettingsForm(): UseSettingsFormResult {
       if (current === lang) {
         return;
       }
-      // ja / zh-TW 的语言包是动态 chunk，未加载时直接 changeLanguage 会整屏
-      // 显示 fallback 英文。必须先确保包到位再切。
+      // zh / en 静态引入，恒已就位——同步切换，不引入微任务延迟。
+      // 这不只是洁癖：设置保存后立刻要用新语言渲染提示文案，延到微任务
+      // 会让"保存成功"和"文案切换"错开一帧。
+      if (isLanguageLoaded(lang)) {
+        void i18n.changeLanguage(lang);
+        return;
+      }
+      // ja / zh-TW 是动态 chunk，未加载时直接 changeLanguage 会整屏显示
+      // fallback 英文。必须先确保包到位再切。
       void ensureLanguageLoaded(lang).then(() => {
         void i18n.changeLanguage(lang);
       });

@@ -1,5 +1,13 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  type MockInstance,
+} from "vitest";
 import i18n from "i18next";
 import { useSettingsForm } from "@/hooks/useSettingsForm";
 
@@ -7,6 +15,16 @@ const useSettingsQueryMock = vi.fn();
 
 vi.mock("@/lib/query", () => ({
   useSettingsQuery: (...args: unknown[]) => useSettingsQueryMock(...args),
+}));
+
+// 语言包现为动态 chunk（ja / zh-TW）。这里 mock 掉加载器，让两条路径都可控：
+// - isLanguageLoaded 报告"已加载" -> syncLanguage 走同步分支
+// - ensureLanguageLoaded 立即 resolve -> 走异步分支也不必真 import JSON
+// 被测行为是"该切语言时确实切了"，不是"chunk 能否加载成功"（那是 i18n 模块
+// 自己的测试范围）。
+vi.mock("@/i18n", () => ({
+  isLanguageLoaded: (lang: string) => lang === "zh" || lang === "en",
+  ensureLanguageLoaded: async () => true,
 }));
 
 let changeLanguageSpy: MockInstance<(lang?: string) => Promise<unknown>>;
@@ -78,7 +96,10 @@ describe("useSettingsForm Hook", () => {
     });
 
     expect(result.current.initialLanguage).toBe("ja");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("ja");
+    // ja 是动态 chunk，切换前需 await ensureLanguageLoaded，故这里必须等待
+    await waitFor(() => {
+      expect(changeLanguageSpy).toHaveBeenCalledWith("ja");
+    });
   });
 
   it("should support traditional chinese language preference aliases", async () => {
@@ -101,7 +122,9 @@ describe("useSettingsForm Hook", () => {
     });
 
     expect(result.current.initialLanguage).toBe("zh-TW");
-    expect(changeLanguageSpy).toHaveBeenCalledWith("zh-TW");
+    await waitFor(() => {
+      expect(changeLanguageSpy).toHaveBeenCalledWith("zh-TW");
+    });
   });
 
   it("should prioritize reading language from local storage in readPersistedLanguage", () => {

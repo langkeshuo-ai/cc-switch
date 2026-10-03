@@ -6,7 +6,12 @@ import zh from "./locales/zh.json";
 
 type Language = "zh" | "zh-TW" | "en" | "ja";
 
-/** 需要动态 import 语言包的语言。其余（zh/en）静态引入，见下方说明。 */
+/**
+ * 需要动态 import 语言包的语言。
+ *
+ * zh / en 不在此列：它们静态引入。首帧必须有翻译可用——i18n 的 init 是同步的，
+ * 若 zh 也走动态加载，应用启动时会先满屏 key 字符串再被替换。
+ */
 type LazyLanguage = "ja" | "zh-TW";
 
 const DEFAULT_LANGUAGE: Language = "zh";
@@ -124,30 +129,44 @@ export const ensureLanguageLoaded = async (lang: string): Promise<boolean> => {
 
 const initialLanguage = getInitialLanguage();
 
-i18n.use(initReactI18next).init({
-  resources: {
-    en: { translation: en },
-    zh: { translation: zh },
-  },
-  lng: initialLanguage,
-  fallbackLng: "en", // 如果缺少中文翻译则退回英文
-
-  interpolation: {
-    escapeValue: false, // React 已经默认转义
-  },
-
-  // 开发模式下显示调试信息
-  debug: false,
-});
-
-// 初始语言若为 ja / zh-TW，补加载对应包。放在 init 之后，是为了让主 chunk 先
-// 解析渲染，语言包到达后由 i18next 触发重渲染。
-if (loaded.has(initialLanguage)) {
-  void i18n.changeLanguage(initialLanguage);
-} else {
-  void ensureLanguageLoaded(initialLanguage).then(() =>
-    i18n.changeLanguage(initialLanguage),
+// tests/setupTests.ts 用**空资源**初始化 i18n，好让翻译函数原样返回
+// key 字符串从而可被断言。此处若再 init 或注入真实语言包，都会覆盖那份配置，
+// 让集成测试断言 key 却拿到英文译文。
+//
+// 故：已初始化（测试环境）时，本模块完全不碰资源表，只导出纯函数；
+// 未初始化（生产）时才装载语言包。
+if (i18n.isInitialized) {
+  // 外部已初始化。测试环境刻意不注入真实包——setup 用空资源正是为了让
+  // t() 回显 key。生产环境不会走到这个分支（无其他模块预先 init）。
+  console.debug(
+    `[i18n] Already initialized externally (lng=${i18n.language}); skipping bundle install.`,
   );
+} else {
+  i18n.use(initReactI18next).init({
+    resources: {
+      en: { translation: en },
+      zh: { translation: zh },
+    },
+    lng: initialLanguage,
+    fallbackLng: "en", // 如果缺少中文翻译则退回英文
+
+    interpolation: {
+      escapeValue: false, // React 已经默认转义
+    },
+
+    // 开发模式下显示调试信息
+    debug: false,
+  });
+
+  // 初始语言若为 ja / zh-TW，补加载对应包。放在 init 之后，是为了让主 chunk
+  // 先解析渲染，语言包到达后由 i18next 触发重渲染。
+  if (loaded.has(initialLanguage)) {
+    void i18n.changeLanguage(initialLanguage);
+  } else {
+    void ensureLanguageLoaded(initialLanguage).then(() =>
+      i18n.changeLanguage(initialLanguage),
+    );
+  }
 }
 
 export default i18n;
