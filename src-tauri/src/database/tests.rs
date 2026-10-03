@@ -1545,3 +1545,78 @@ fn schema_migration_rejects_newer_db_and_reports_version() {
         "error must name the schema version, got: {msg}"
     );
 }
+
+/// 外置定价表的数据完整性。
+///
+/// 定价表从 1192 行 Rust 源码搬到 `resources/model-pricing.default.json` 后，
+/// 最大的风险是「改 JSON 时手滑删了几条」或「字段名写错被静默忽略」。这个测试
+/// 把三条不变量钉死：
+///   1. JSON 可解析，且条目数与 DB 实际落盘行数一致（不多不少不少条）
+///   2. model_id 无重复（重复会被 INSERT OR IGNORE 静默吃掉，表看着"对"实则少行）
+///   3. 每条 6 个字段都非空——空字符串会进 DB，计费时静默算成 0
+///
+/// 迁移时的等价性由 `tools/verify_pricing.py` 保证（219 条全字段逐一比对）；
+/// 本测试保证的是「往后每次改动 JSON 都还能被校验」。
+#[test]
+fn model_pricing_default_json_matches_seeded_rows() {
+    // 刻意不复用 schema::DefaultPricingEntry：那是 seed 的私有实现细节。
+    // 测试自带最小结构，只声明要断言的字段——schema 将来加/改字段不会牵动这里，
+    // 反过来测试也无法依赖它未声明的部分。
+    #[derive(serde::Deserialize)]
+    struct PricingRow {
+        model_id: String,
+        display_name: String,
+        input_cost_per_million: String,
+        output_cost_per_million: String,
+        cache_read_cost_per_million: String,
+        cache_creation_cost_per_million: String,
+    }
+
+    const PRICING_JSON: &str = include_str!("../resources/model-pricing.default.json");
+    let entries: Vec<PricingRow> =
+        serde_json::from_str(PRICING_JSON).expect("内置定价表必须是合法 JSON");
+    assert!(
+        !entries.is_empty(),
+        "内置定价表为空——外置文件被清空或路径指错"
+    );
+
+    // 不变量 2：model_id 唯一
+    let mut ids: Vec<&str> = entries.iter().map(|e| e.model_id.as_str()).collect();
+    ids.sort_unstable();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        before,
+        "内置定价表存在重复 model_id，会被 INSERT OR IGNORE 静默丢弃"
+    );
+
+    // 不变量 3：字段非空
+    for e in &entries {
+        for (label, val) in [
+            ("display_name", &e.display_name),
+            ("input", &e.input_cost_per_million),
+            ("output", &e.output_cost_per_million),
+            ("cache_read", &e.cache_read_cost_per_million),
+            ("cache_creation", &e.cache_creation_cost_per_million),
+        ] {
+            assert!(
+                !val.trim().is_empty(),
+                "{} 的 {label} 为空——空串会进 DB，计费时静默算成 0",
+                e.model_id
+            );
+        }
+    }
+
+    // 不变量 1：DB 落盘行数与 JSON 条数一致
+    let db = Database::memory().expect("create memory db");
+    let conn = db.conn.lock().expect("lock conn");
+    let seeded: i64 = conn
+        .query_row("SELECT COUNT(*) FROM model_pricing", [], |r| r.get(0))
+        .expect("count seeded pricing rows");
+    assert_eq!(
+        seeded,
+        entries.len() as i64,
+        "DB 落盘行数与 JSON 条数不符——seed 逻辑或数据文件被改动过"
+    );
+}
