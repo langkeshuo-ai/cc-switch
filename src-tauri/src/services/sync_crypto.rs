@@ -25,22 +25,34 @@
 //! bytes reach the remote. On download, artifacts are decrypted in memory and
 //! never written to disk in plaintext.
 //!
-//! # Threat model (what this does *not* cover)
+//! # Threat model
 //!
-//! This module provides confidentiality + integrity for the **artifacts**
-//! (AES-256-GCM). It does **not** provide authenticity for the **manifest**:
-//! `manifest.json` is neither signed nor covered by the AEAD tag, and the
-//! integrity checks in [`super::sync_protocol`] only catch naive corruption or
-//! content changed without a matching hash. An actor who controls the remote
-//! can therefore recompute a self-consistent manifest, or replay an older
-//! valid snapshot to force a silent rollback. Authenticity currently rests on
-//! transport-layer security; a follow-up plans to derive a MAC key from the E2E
-//! password and HMAC the manifest (explicitly deferred for now).
+//! - **Artifacts**: confidentiality + integrity via AES-256-GCM (the AEAD tag
+//!   covers the ciphertext, so tampering is detected on decrypt).
+//! - **Manifest**: authenticity via HMAC-SHA256 ([`sign_manifest`] /
+//!   [`verify_manifest_mac`]), keyed from the same E2E password with a
+//!   *separate* derivation domain. This closes the "attacker who controls the
+//!   remote recomputes a self-consistent manifest + artifacts" hole: without a
+//!   key derived from a secret the attacker does not have, they cannot produce a
+//!   manifest that verifies.
+//!
+//! Remaining gap: **replay**. A valid, correctly signed *older* manifest still
+//! verifies. Preventing that needs a monotonic counter or timestamp freshness
+//! window, which requires server-side state this client does not have. Signing
+//! at least makes downgrade require the attacker to hold a captured signed
+//! manifest, and it makes silent tampering impossible.
+//!
+//! The manifest MAC is only possible when end-to-end encryption is enabled (it
+//! is keyed from that password). Snapshots synced without E2E keep the previous
+//! transport-only trust model — no signature is written, and verification skips
+//! rather than silently accepting an unsigned manifest as if it were signed.
 
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::error::AppError;
 
@@ -87,6 +99,46 @@ fn derive_key(password: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], AppError> {
             )
         })?;
     Ok(key)
+}
+
+/// Domain separator for the manifest MAC key derivation.
+///
+/// The manifest MAC key must be **independent** of the per-artifact encryption
+/// keys, otherwise it would need the artifact's random salt to re-derive — and
+/// the manifest is verified *before* any artifact is decrypted, so that salt is
+/// not available yet. A fixed, distinct salt gives both properties at once: the
+/// same password always yields the same MAC key on every device (so one device
+/// can verify a snapshot another device uploaded), and the MAC key shares no
+/// bytes with any encryption key.
+const MANIFEST_MAC_SALT: &[u8] = b"cc-switch:manifest-mac:v1";
+
+/// Compute the HMAC-SHA256 tag (hex) authenticating a manifest's canonical bytes.
+///
+/// `payload` must be the exact bytes that were signed — for a manifest, the
+/// canonical serialization with the `mac` field excluded (see
+/// [`super::sync_protocol::manifest_signing_bytes`]).
+pub(crate) fn manifest_mac(payload: &[u8], password: &str) -> Result<String, AppError> {
+    let key = derive_key(password, MANIFEST_MAC_SALT)?;
+    // `Hmac` 同时实现 `Mac` 与 `KeyInit`，两者都有 `new_from_slice`，必须完全
+    // 限定。`Mac::new_from_slice` 对任意长度密钥都成功（HMAC 会自行规范化到
+    // block size），故这里的长度检查是 `Mac` trait 的固定要求，不是真实失败点。
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).map_err(|e| {
+        localized(
+            "sync.manifest.mac_init_failed",
+            format!("清单签名器初始化失败: {e}"),
+            format!("Failed to initialize the manifest authenticator: {e}"),
+        )
+    })?;
+    mac.update(payload);
+    Ok(mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        }))
 }
 
 /// Encrypt `plaintext` into a self-describing blob (magic + salt + nonce + AEAD

@@ -191,6 +191,13 @@ pub(crate) struct SyncManifest {
     pub created_at: String,
     pub artifacts: BTreeMap<String, ArtifactMeta>,
     pub snapshot_id: String,
+    /// HMAC-SHA256 over [`manifest_signing_bytes`], keyed from the E2E password.
+    ///
+    /// `None` for snapshots synced without end-to-end encryption — the MAC is
+    /// keyed from that password, so without it there is no key to sign with.
+    /// Consumers must treat `None` as "unsigned", not as "verified".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +285,7 @@ pub(crate) fn build_local_snapshot_with_crypto(
         Utc::now().to_rfc3339(),
         db_sql,
         skills_zip,
+        encryption_password,
     )
 }
 
@@ -290,6 +298,7 @@ fn finalize_snapshot(
     created_at: String,
     db_sql: Vec<u8>,
     skills_zip: Vec<u8>,
+    encryption_password: Option<&str>,
 ) -> Result<LocalSnapshot, AppError> {
     let mut artifacts = BTreeMap::new();
     artifacts.insert(
@@ -308,7 +317,7 @@ fn finalize_snapshot(
     );
 
     let snapshot_id = compute_snapshot_id(&artifacts);
-    let manifest = SyncManifest {
+    let mut manifest = SyncManifest {
         format: PROTOCOL_FORMAT.to_string(),
         version: PROTOCOL_VERSION,
         db_compat_version: Some(DB_COMPAT_VERSION),
@@ -316,7 +325,17 @@ fn finalize_snapshot(
         created_at,
         artifacts,
         snapshot_id,
+        mac: None,
     };
+    // 有 E2E 口令才签得起名（MAC 密钥由该口令派生）。无口令时保持 manifest
+    // 不带 mac 字段，而不是写一个空签名字符串——空签名会让验签方误以为
+    // "有签名但校验失败"，把"未启用加密"和"签名被剥掉"两种情况混为一谈。
+    if let Some(password) = encryption_password {
+        manifest.mac = Some(sync_crypto::manifest_mac(
+            &manifest_signing_bytes(&manifest)?,
+            password,
+        )?);
+    }
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).map_err(|e| AppError::JsonSerialize { source: e })?;
     let manifest_hash = sha256_hex(&manifest_bytes);
@@ -527,6 +546,82 @@ pub(crate) fn apply_snapshot(
 /// rollback. Authenticity currently relies on transport-layer security; a
 /// future iteration plans to derive a MAC key from the E2E password and HMAC
 /// the manifest (explicitly deferred for now).
+/// Canonical bytes covered by the manifest MAC: the manifest serialized with
+/// `mac` itself excluded.
+///
+/// Excluding `mac` is what makes the signature verifiable — otherwise signing
+/// would have to include the signature. Serializing a clone with `mac = None`
+/// and `skip_serializing_if` guarantees the field is absent from the payload, so
+/// a verifier re-serializing the received manifest reproduces the exact bytes
+/// that were signed. Any change to any other field (artifact hashes, sizes,
+/// device name, timestamps) alters the MAC.
+pub(crate) fn manifest_signing_bytes(manifest: &SyncManifest) -> Result<Vec<u8>, AppError> {
+    let mut unsigned = manifest.clone();
+    unsigned.mac = None;
+    serde_json::to_vec(&unsigned).map_err(|e| {
+        localized(
+            "sync.manifest.serialize_failed",
+            format!("清单序列化失败: {e}"),
+            format!("Failed to serialize the manifest: {e}"),
+        )
+    })
+}
+
+/// Verify the manifest MAC when one is present and a password is available.
+///
+/// Policy, and the reasoning behind it:
+/// - signed + password present -> must verify. Any mismatch is fatal: this is
+///   exactly the "attacker controls the remote and recomputed a consistent
+///   manifest" case the MAC exists to catch.
+/// - unsigned + password present -> fatal as well. A snapshot that *should* be
+///   signed (the local side has E2E on) arriving unsigned means someone stripped
+///   the signature to fall back to the weaker path; that must not pass silently.
+/// - no password -> skip. E2E is off, so there is no key and no signature to
+///   expect; this preserves the existing transport-only trust model.
+///
+/// Comparing in constant time via `subtle`-style equality inside `Mac::verify`
+/// is not applicable here because the MAC is compared as a hex string, so
+/// constant-time comparison is done explicitly.
+pub(crate) fn verify_manifest_authenticity(
+    manifest: &SyncManifest,
+    password: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(password) = password else {
+        return Ok(());
+    };
+    let expected = sync_crypto::manifest_mac(&manifest_signing_bytes(manifest)?, password)?;
+    let Some(actual) = manifest.mac.as_deref() else {
+        return Err(localized(
+            "sync.manifest.mac_missing",
+            "远端清单缺少签名（已启用端到端加密的快照必须签名），已拒绝应用。",
+            "Remote manifest is unsigned, but end-to-end encryption is enabled; refusing to apply.",
+        ));
+    };
+    if !constant_time_eq(expected.as_bytes(), actual.as_bytes()) {
+        return Err(localized(
+            "sync.manifest.mac_mismatch",
+            "远端清单签名校验失败（内容已被篡改或口令不符），已拒绝应用。",
+            "Remote manifest signature verification failed (content was tampered with, or the password is wrong); refusing to apply.",
+        ));
+    }
+    Ok(())
+}
+
+/// Length-checked, content-constant-time byte comparison.
+///
+/// Length is not secret (the MAC is a fixed 64 hex chars), so an early return
+/// on mismatch leaks nothing an attacker could use.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 pub(crate) fn verify_manifest_integrity(manifest: &SyncManifest) -> Result<(), AppError> {
     let expected = compute_snapshot_id(&manifest.artifacts);
     if expected != manifest.snapshot_id {
@@ -617,7 +712,12 @@ pub(crate) fn apply_remote_snapshot(
     stored_skills_zip: &[u8],
     password: Option<&str>,
 ) -> Result<(), AppError> {
+    // 自洽校验在前（只验自洽，快），真实性校验紧随（要跑 Argon2，慢且只有
+    // 开了 E2E 才跑）。顺序有讲究：先花几十毫秒证明"这文件内部没矛盾"，
+    // 再花几百毫秒证明"这确实是我上传的那份"。反过来会让明显损坏的快照
+    // 白白消耗一次 KDF。
     verify_manifest_integrity(manifest)?;
+    verify_manifest_authenticity(manifest, password)?;
     verify_manifest_artifact(manifest, REMOTE_DB_SQL, stored_db_sql)?;
     verify_manifest_artifact(manifest, REMOTE_SKILLS_ZIP, stored_skills_zip)?;
 
@@ -965,6 +1065,7 @@ mod tests {
             created_at: "2026-02-12T00:00:00Z".to_string(),
             artifacts,
             snapshot_id: "snap-1".to_string(),
+            mac: None,
         }
     }
 
@@ -1299,7 +1400,157 @@ mod security_tests {
             created_at: "2026-02-12T00:00:00Z".to_string(),
             snapshot_id: compute_snapshot_id(&artifacts),
             artifacts,
+            mac: None,
         }
+    }
+
+    // ─── manifest 签名（B9）──────────────────────────────────────
+
+    /// 给测试 manifest 签名，用与生产同一条路径。
+    fn sign(manifest: &mut SyncManifest, password: &str) {
+        manifest.mac = Some(
+            sync_crypto::manifest_mac(
+                &manifest_signing_bytes(manifest).expect("signing bytes"),
+                password,
+            )
+            .expect("mac"),
+        );
+    }
+
+    #[test]
+    fn manifest_mac_verifies_for_correct_password() {
+        let mut manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        sign(&mut manifest, "correct horse");
+
+        assert!(
+            verify_manifest_authenticity(&manifest, Some("correct horse")).is_ok(),
+            "正确口令必须验签通过"
+        );
+    }
+
+    #[test]
+    fn manifest_mac_rejects_wrong_password() {
+        let mut manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        sign(&mut manifest, "correct horse");
+
+        assert!(
+            verify_manifest_authenticity(&manifest, Some("wrong horse")).is_err(),
+            "错误口令必须被拒——否则攻击者可用任何口令伪造"
+        );
+    }
+
+    /// 核心验收：篡改任意受保护字段 1 bit，必须拒绝。
+    ///
+    /// 这条测试直接对应清单 B9 的触发场景——攻击者控制 WebDAV 目录后，
+    /// 构造自洽的假 manifest + 假 artifact（旧校验完全挡不住，因为
+    /// snapshot_id 可以自己重算）。签名后他算不出合法 MAC。
+    #[test]
+    fn manifest_mac_rejects_every_single_bit_flip_in_protected_fields() {
+        let original_db = b"CREATE TABLE providers(id TEXT);";
+        let original_zip = b"PKskills";
+        let password = "pw-for-flip-test";
+
+        for field in ["db_sql", "skills_zip"] {
+            let mut manifest = manifest_with(&[
+                (REMOTE_DB_SQL, original_db),
+                (REMOTE_SKILLS_ZIP, original_zip),
+            ]);
+            sign(&mut manifest, password);
+            assert!(verify_manifest_authenticity(&manifest, Some(password)).is_ok());
+
+            // 翻转 artifact 内容 1 bit，然后**重算** snapshot_id 与哈希，
+            // 让旧的自洽校验完全通过——只有 MAC 能拦住它。
+            let (db, zip) = if field == "db_sql" {
+                let mut b = original_db.to_vec();
+                b[0] ^= 0x01;
+                (b, original_zip.to_vec())
+            } else {
+                let mut b = original_zip.to_vec();
+                b[0] ^= 0x01;
+                (original_db.to_vec(), b)
+            };
+            let mut artifacts = BTreeMap::new();
+            artifacts.insert(
+                REMOTE_DB_SQL.to_string(),
+                ArtifactMeta {
+                    sha256: sha256_hex(&db),
+                    size: db.len() as u64,
+                },
+            );
+            artifacts.insert(
+                REMOTE_SKILLS_ZIP.to_string(),
+                ArtifactMeta {
+                    sha256: sha256_hex(&zip),
+                    size: zip.len() as u64,
+                },
+            );
+            manifest.artifacts = artifacts;
+            manifest.snapshot_id = compute_snapshot_id(&manifest.artifacts);
+
+            // 旧的自洽校验此刻是通过的（这正是原缺陷）
+            assert!(
+                verify_manifest_integrity(&manifest).is_ok(),
+                "自洽校验理应通过（它只查内部一致），否则本测试没测到点子上"
+            );
+            // 签名校验必须拒绝
+            assert!(
+                verify_manifest_authenticity(&manifest, Some(password)).is_err(),
+                "{field} 篡改 1 bit 且重算全部哈希后仍被接受——MAC 没起作用"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_mac_covers_metadata_not_only_artifact_hashes() {
+        // 端点被替换是本项目最严重的攻击面：配置里所有 API Key 都会发往
+        // 攻击者服务器。device_name / created_at 同样在 MAC 覆盖范围内。
+        let password = "pw";
+        let mut manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        sign(&mut manifest, password);
+
+        manifest.device_name = "attacker-payload".to_string();
+        assert!(verify_manifest_authenticity(&manifest, Some(password)).is_err());
+    }
+
+    #[test]
+    fn manifest_mac_survives_json_roundtrip() {
+        // 签名前后必然经历一次序列化/反序列化（落盘再读回）。若签名字节
+        // 无法从反序列化后的对象重现，跨设备同步会全线失败。
+        let mut manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        sign(&mut manifest, "pw");
+
+        let json = serde_json::to_vec(&manifest).expect("serialize");
+        let restored: SyncManifest = serde_json::from_slice(&json).expect("deserialize");
+
+        assert_eq!(restored.mac, manifest.mac);
+        assert!(verify_manifest_authenticity(&restored, Some("pw")).is_ok());
+    }
+
+    #[test]
+    fn unsigned_manifest_is_rejected_when_e2e_is_enabled() {
+        // 攻击者剥掉签名以退回"仅传输层信任"的弱路径——必须失败，
+        // 不能把"没签名"当"验签通过"。
+        let manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        assert!(manifest.mac.is_none());
+        assert!(
+            verify_manifest_authenticity(&manifest, Some("pw")).is_err(),
+            "有口令但 manifest 无签名，必须拒绝（防签名剥离）"
+        );
+    }
+
+    #[test]
+    fn unsigned_manifest_is_allowed_when_e2e_is_disabled() {
+        // 未启用 E2E 的用户保持原有信任模型，不因新字段被拒。
+        let manifest = manifest_with(&[(REMOTE_DB_SQL, b"SELECT 1;")]);
+        assert!(verify_manifest_authenticity(&manifest, None).is_ok());
+    }
+
+    #[test]
+    fn constant_time_eq_matches_slice_equality() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(constant_time_eq(b"", b""));
     }
 
     #[test]
@@ -1497,8 +1748,15 @@ mod security_tests {
             Some("correct horse"),
         )
         .expect_err("plaintext remote must be rejected once E2E is enabled");
+        // 签名校验排在 artifact 解密之前，所以这里报的是"清单缺少签名"而非
+        // "数据未加密"。两者都拒绝了这个快照，且前者更早、更强：攻击者连
+        // artifact 都不用伪造，一个未签名的 manifest 就过不去。旧断言写的是
+        // 解密阶段的错误，改成接受"缺少签名"这个更早的拒绝点。
         assert!(
-            err.to_string().contains("未加密") || err.to_string().contains("not encrypted"),
+            err.to_string().contains("缺少签名")
+                || err.to_string().contains("must be signed")
+                || err.to_string().contains("缺少")
+                || err.to_string().contains("unsigned"),
             "unexpected error: {err}"
         );
 
