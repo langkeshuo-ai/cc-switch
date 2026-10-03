@@ -82,19 +82,29 @@ pub fn test_mutex() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// 创建测试用的 AppState，包含一个空的数据库
+/// 创建测试用的 AppState，包含一个空的数据库。
+///
+/// 使用内存库而非 `Database::init()` 的共享文件库：
+/// 12 个集成测试二进制此前共享同一个 `~/.cc-switch/cc-switch.db`，
+/// 进程内 `test_mutex` 只能在单个二进制内串行，跨进程/在锁语义较弱的
+/// 文件系统（WSL2 9P）上仍会互相争锁，WSL2 Nightly 出现过 9 个用例
+/// `database is locked` 失败。内存库天然按连接隔离，从根因消除争锁。
+/// "数据写入 DB（而非 config.json）"的语义由各用例对 `state.db` 的
+/// 查询断言覆盖；文件库 `Database::init()` 路径由 lib 层 backup/settings
+/// 单测覆盖（见 `database/backup.rs`、`settings.rs`）。
 #[allow(dead_code)]
 pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
-    let db = Arc::new(Database::init()?);
+    let db = Arc::new(Database::memory()?);
     Ok(AppState::new(db))
 }
 
-/// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据
+/// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据。
+/// 与 [`create_test_state`] 同理使用内存库，避免跨测试争用文件锁。
 #[allow(dead_code)]
 pub fn create_test_state_with_config(
     config: &MultiAppConfig,
 ) -> Result<AppState, Box<dyn std::error::Error>> {
-    let db = Arc::new(Database::init()?);
+    let db = Arc::new(Database::memory()?);
     db.migrate_from_json(config)?;
     Ok(AppState::new(db))
 }

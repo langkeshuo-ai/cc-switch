@@ -514,16 +514,9 @@ fn switch_provider_updates_claude_live_and_state() {
         "new provider snapshot should retain fresh auth"
     );
 
-    // v3.7.0+ 使用 SQLite 数据库而非 config.json
-    // 验证数据已持久化到数据库
-    let home_dir = std::env::var("HOME").expect("HOME should be set by ensure_test_home");
-    let db_path = std::path::Path::new(&home_dir)
-        .join(".cc-switch")
-        .join("cc-switch.db");
-    assert!(
-        db_path.exists(),
-        "switching provider should persist to cc-switch.db"
-    );
+    // v3.7.0+ 数据写入 DB 而非 config.json：上述 get_current_provider /
+    // get_all_providers 断言已覆盖"数据进入 DB"；测试状态现用内存库
+    // （见 support.rs），不再落盘 cc-switch.db，文件库路径由 lib 层单测覆盖。
 
     // 验证当前供应商已更新
     let current_id = app_state
