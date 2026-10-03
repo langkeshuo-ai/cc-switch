@@ -660,7 +660,7 @@ fn test_build_claude_provider_without_config_unchanged() {
 // Integration-style unit test: prompt import reaches PromptService and resolves
 // live config file paths, so HOME must be isolated before it runs.
 #[test]
-#[serial_test::serial]
+#[serial_test::serial(global_env)]
 fn test_import_prompt_allows_space_in_base64_content() {
     let _test_home = TestHomeGuard::new();
     let url = "ccswitch://v1/import?resource=prompt&app=codex&name=PromptPlus&content=Pj4+";

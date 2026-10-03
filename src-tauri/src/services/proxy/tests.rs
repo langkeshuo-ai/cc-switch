@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::provider::{AuthBinding, AuthBindingSource, ProviderMeta};
-use serial_test::serial;
 use std::env;
 use tempfile::TempDir;
 
@@ -94,7 +93,7 @@ async fn assert_app_proxy_configs_unchanged(db: &Database, configs: &[Value]) {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn shutdown_preserves_app_proxy_configs() {
     let _home = TempHome::new();
     crate::settings::reload_settings().unwrap();
@@ -722,7 +721,7 @@ fn normal_claude_takeover_without_token_keeps_auth_token_fallback() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn start_with_takeover_ephemeral_port_writes_actual_live_url() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -788,7 +787,7 @@ async fn start_with_takeover_ephemeral_port_writes_actual_live_url() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_config_reprojection_waits_for_codex_switch_lock_before_rebuilding_live_auth() {
     use tokio::time::{sleep, timeout, Duration};
 
@@ -926,7 +925,7 @@ async fn update_config_reprojection_waits_for_codex_switch_lock_before_rebuildin
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_custom_provider_live_write_preserves_oauth_auth_json() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1016,7 +1015,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_preserves_oauth_auth_json_when_preserve_enabled() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1102,7 +1101,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_preserves_oauth_auth_json_even_when_provider_category_is_official() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1184,7 +1183,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_hot_switches_between_builtin_official_and_third_party() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1297,7 +1296,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_hot_switch_adopts_and_clears_outgoing_managed_auth() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1409,7 +1408,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_active_takeover_hot_switches_between_managed_accounts() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1557,7 +1556,7 @@ async fn codex_active_takeover_hot_switches_between_managed_accounts() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_half_takeover_hot_switch_to_managed_records_marker() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1637,7 +1636,7 @@ fn codex_takeover_backup_preserves_api_key_login_material() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_official_backup_rebuild_keeps_live_auth_out_of_backup() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1673,7 +1672,7 @@ async fn codex_official_backup_rebuild_keeps_live_auth_out_of_backup() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_empty_restore_snapshot_does_not_delete_existing_auth_json() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1697,7 +1696,7 @@ fn codex_empty_restore_snapshot_does_not_delete_existing_auth_json() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_sync_live_does_not_store_credentials_in_builtin_official_row() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1737,7 +1736,7 @@ async fn codex_sync_live_does_not_store_credentials_in_builtin_official_row() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_set_takeover_for_app_preserves_oauth_auth_json_when_preserve_enabled() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1817,7 +1816,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_enabled_commit_failure_restores_native_live_bundle() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -1915,7 +1914,7 @@ async fn codex_takeover_enabled_commit_failure_restores_native_live_bundle() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_sync_current_to_live_during_takeover_preserves_oauth_auth_json() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2027,7 +2026,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_sync_current_to_live_during_takeover_activation_keeps_proxy_live_config() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2135,7 +2134,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_set_takeover_rebuilds_stale_enabled_state_without_overwriting_backup() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2282,7 +2281,7 @@ wire_api = "responses"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_preserves_native_auth_even_when_legacy_toggle_is_disabled() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2363,7 +2362,7 @@ wire_api = "responses"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_cleanup_removes_config_placeholder_without_touching_oauth_auth() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2423,7 +2422,7 @@ experimental_bearer_token = "PROXY_MANAGED"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_stamps_requires_openai_auth_false_when_auth_json_absent() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2495,7 +2494,7 @@ requires_openai_auth = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_stamps_requires_openai_auth_true_when_login_present() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2574,7 +2573,7 @@ wire_api = "responses"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_does_not_stamp_true_over_bedrock_only_auth_json() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2639,7 +2638,7 @@ wire_api = "responses"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_keeps_stored_flag_when_auth_store_is_keyring_backed() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2701,7 +2700,7 @@ requires_openai_auth = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_stamps_false_when_bedrock_outranks_stale_openai_key() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2770,7 +2769,7 @@ requires_openai_auth = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_keeps_stored_flag_under_auto_even_when_file_holds_login() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2844,7 +2843,7 @@ requires_openai_auth = false
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_tolerates_corrupt_auth_json_for_every_store_mode() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -2924,7 +2923,7 @@ requires_openai_auth = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_takeover_never_raises_flag_on_proxy_injected_oauth_card_with_login_on_disk() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3014,7 +3013,7 @@ requires_openai_auth = true
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_custom_provider_live_write_removes_auth_when_preserve_disabled() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3398,7 +3397,7 @@ model = "gpt-5.1-codex"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn sync_claude_token_does_not_add_anthropic_api_key() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3454,7 +3453,7 @@ async fn sync_claude_token_does_not_add_anthropic_api_key() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn sync_claude_token_respects_existing_api_key_field() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3510,7 +3509,7 @@ async fn sync_claude_token_respects_existing_api_key_field() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn switch_proxy_target_updates_live_backup_when_taken_over() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3572,7 +3571,7 @@ async fn switch_proxy_target_updates_live_backup_when_taken_over() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn hot_switch_provider_updates_claude_live_while_preserving_takeover_fields() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3735,7 +3734,7 @@ async fn hot_switch_provider_updates_claude_live_while_preserving_takeover_field
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn hot_switch_provider_serializes_same_app_switches() {
     use tokio::time::{sleep, Duration};
 
@@ -3828,7 +3827,7 @@ async fn hot_switch_provider_serializes_same_app_switches() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_waits_for_hot_switch_and_restores_latest_backup() {
     use tokio::time::{sleep, Duration};
 
@@ -3914,7 +3913,7 @@ async fn restore_waits_for_hot_switch_and_restores_latest_backup() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_from_provider_applies_claude_common_config() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -3969,7 +3968,7 @@ async fn update_live_backup_from_provider_applies_claude_common_config() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_from_provider_applies_codex_common_config() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4027,7 +4026,7 @@ base_url = "https://codex.example/v1"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_from_managed_official_does_not_freeze_oauth_tokens() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4101,7 +4100,7 @@ async fn update_live_backup_from_managed_official_does_not_freeze_oauth_tokens()
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_switch_to_managed_official_replaces_native_account() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4178,7 +4177,7 @@ async fn codex_takeover_switch_to_managed_official_replaces_native_account() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_takeover_unbound_official_preserves_native_account() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4225,7 +4224,7 @@ async fn codex_takeover_unbound_official_preserves_native_account() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restoring_official_codex_takeover_preserves_rotated_live_auth() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4313,7 +4312,7 @@ wire_api = "responses"
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_snapshot_rollback_preserves_newer_native_login_without_marker() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4366,7 +4365,7 @@ fn codex_snapshot_rollback_preserves_newer_native_login_without_marker() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn codex_snapshot_rollback_restores_previous_local_account_in_same_workspace() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4426,7 +4425,7 @@ fn codex_snapshot_rollback_restores_previous_local_account_in_same_workspace() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_clearing_managed_codex_auth_keeps_official_auth_live_only() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4488,7 +4487,7 @@ async fn update_live_backup_clearing_managed_codex_auth_keeps_official_auth_live
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_from_provider_preserves_codex_mcp_servers() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4562,7 +4561,7 @@ base_url = "https://new.example/v1"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn hot_switch_codex_provider_preserves_provider_model_provider_in_backup_and_restore() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4731,7 +4730,7 @@ requires_openai_auth = true
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn hot_switch_codex_chat_provider_updates_live_provider_display() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4858,7 +4857,7 @@ requires_openai_auth = true
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn update_live_backup_from_provider_keeps_new_codex_mcp_entries_on_conflict() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -4948,7 +4947,7 @@ command = "latest-command"
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn provider_switch_with_restored_codex_backup_refreshes_catalog_and_common_config() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5099,7 +5098,7 @@ requires_openai_auth = true
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn provider_switch_with_restored_codex_backup_propagates_catalog_write_errors() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5209,7 +5208,7 @@ requires_openai_auth = true
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_direct_live_write_rolls_back_when_provider_commit_fails() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5310,7 +5309,7 @@ async fn codex_direct_live_write_rolls_back_when_provider_commit_fails() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_active_takeover_hot_switch_failure_restores_native_official_auth() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5423,7 +5422,7 @@ async fn codex_active_takeover_hot_switch_failure_restores_native_official_auth(
 /// `model_catalog_json` pointer — silently dropping the user's Codex model
 /// mapping from Live even though the DB SSOT still holds it.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_restore_from_backup_preserves_model_catalog_pointer() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5487,7 +5486,7 @@ async fn codex_restore_from_backup_preserves_model_catalog_pointer() {
 /// inline catalog — (re)generating both the catalog file and the pointer —
 /// or the Codex model mapping vanishes from Live after takeover-off.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_restore_from_backup_projects_inline_model_catalog() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5565,7 +5564,7 @@ async fn codex_restore_from_backup_projects_inline_model_catalog() {
 /// must still project the inline catalog (decision is orthogonal to auth), or
 /// the model mapping vanishes on takeover-off for this provider shape.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn codex_restore_empty_auth_backup_still_projects_inline_catalog() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5622,7 +5621,7 @@ async fn codex_restore_empty_auth_backup_still_projects_inline_catalog() {
 /// It should fall through to the SSOT (current provider) path and rebuild
 /// Live from the provider DB instead.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_falls_through_to_ssot_when_backup_is_proxy_placeholder() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5723,7 +5722,7 @@ async fn restore_falls_through_to_ssot_when_backup_is_proxy_placeholder() {
 /// login every restart. Restore must keep the live OAuth login and demote
 /// the backup's API key into config.toml instead.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_keeps_codex_oauth_login_when_backup_has_api_key_only() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5802,7 +5801,7 @@ base_url = "https://third.example/v1"
 /// only carries the takeover placeholder, so the backup must be restored
 /// verbatim including its auth.json.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_writes_codex_backup_auth_verbatim_when_live_has_no_oauth_login() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5843,7 +5842,7 @@ async fn restore_writes_codex_backup_auth_verbatim_when_live_has_no_oauth_login(
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_preserves_logged_out_official_codex_state() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5904,7 +5903,7 @@ async fn restore_preserves_logged_out_official_codex_state() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_preserves_missing_codex_auth_when_current_provider_is_unknown() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5939,7 +5938,7 @@ async fn restore_preserves_missing_codex_auth_when_current_provider_is_unknown()
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn guarded_codex_restore_rejects_a_changed_auth_file() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -5983,7 +5982,7 @@ fn guarded_codex_restore_rejects_a_changed_auth_file() {
 }
 
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_empty_auth_without_config_keeps_auth_file_absent() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6026,7 +6025,7 @@ async fn restore_empty_auth_without_config_keeps_auth_file_absent() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn changed_auth_after_catalog_prepare_rolls_catalog_back() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6071,7 +6070,7 @@ fn changed_auth_after_catalog_prepare_rolls_catalog_back() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn guarded_restore_delete_preserves_login_created_after_auth_claim() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6107,7 +6106,7 @@ fn guarded_restore_delete_preserves_login_created_after_auth_claim() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn guarded_restore_write_rejects_login_created_after_auth_claim() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6144,7 +6143,7 @@ fn guarded_restore_write_rejects_login_created_after_auth_claim() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn guarded_restore_final_config_failure_rolls_back_auth_and_catalog() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6187,7 +6186,7 @@ fn guarded_restore_final_config_failure_rolls_back_auth_and_catalog() {
 /// even an official-shape backup must not roll live tokens back. The auth
 /// check must not depend on config.toml parsing.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_prefers_live_codex_oauth_tokens_over_backup_snapshot() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6245,7 +6244,7 @@ async fn restore_prefers_live_codex_oauth_tokens_over_backup_snapshot() {
 /// `OPENAI_API_KEY` accompanied by `last_refresh` / `tokens.account_id`
 /// is NOT a login and must not be restored over a real live login.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_keeps_codex_oauth_login_when_backup_key_carries_metadata_residue() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6304,7 +6303,7 @@ async fn restore_keeps_codex_oauth_login_when_backup_key_carries_metadata_residu
 /// still write the backup auth verbatim instead of protecting stale
 /// `last_refresh` / `tokens.account_id` leftovers.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn restore_writes_codex_backup_auth_when_live_has_only_metadata_residue() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6352,7 +6351,7 @@ async fn restore_writes_codex_backup_auth_when_live_has_only_metadata_residue() 
 /// takeover rebuild and takeover-failure rollback) must apply the same
 /// OAuth-login protection as the with_fallback path.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn simple_restore_path_keeps_codex_oauth_login() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6408,7 +6407,7 @@ async fn simple_restore_path_keeps_codex_oauth_login() {
 /// previously-good backup with the proxy config. This prevents the bug
 /// where stop-then-start cycles permanently corrupt the backup.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn backup_skips_when_live_is_already_proxy_placeholder() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");
@@ -6516,7 +6515,7 @@ fn snapshot_pi_archives(db: &Database) -> indexmap::IndexMap<String, Provider> {
 
 // ---- 1. settings+models 有 key、DB 无档案 → 接管成功并自愈补建档案 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_self_heals_missing_archive_from_models_json() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6548,7 +6547,7 @@ fn pi_takeover_self_heals_missing_archive_from_models_json() {
 
 // ---- 2. 档案有、models.json 节点缺 → 回填节点 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_backfills_models_json_from_archive() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6577,7 +6576,7 @@ fn pi_takeover_backfills_models_json_from_archive() {
 
 // ---- 3. defaultProvider 指向三源皆无的幽灵 key → 退回 DB current ----
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn pi_takeover_falls_back_to_db_current_when_settings_key_is_dangling() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6611,7 +6610,7 @@ async fn pi_takeover_falls_back_to_db_current_when_settings_key_is_dangling() {
 
 // ---- 4. 三源皆无 → Err 文本含四段可操作诊断 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_diagnostic_error_lists_all_three_sources() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6632,7 +6631,7 @@ fn pi_takeover_diagnostic_error_lists_all_three_sources() {
 
 // ---- 5. 两侧都有 → 幂等，零改动 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_is_idempotent_when_archive_already_exists() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6664,7 +6663,7 @@ fn pi_takeover_is_idempotent_when_archive_already_exists() {
 
 // ---- 6. api 漂移 → 以 DB 为准 + warn（行为由 B1 决策，此处锁"不失败"）----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_warns_on_api_dialect_divergence() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6691,7 +6690,7 @@ fn pi_takeover_warns_on_api_dialect_divergence() {
 
 // ---- 7. 无任何档案也能接管成功，且解析器对 DB 零副作用 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_takeover_succeeds_without_any_archive() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6729,7 +6728,7 @@ fn pi_takeover_succeeds_without_any_archive() {
 
 // ---- 8. 首次 enable 补建档案；再次 enable 幂等 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_reconcile_adopts_native_provider_once() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6761,7 +6760,7 @@ fn pi_reconcile_adopts_native_provider_once() {
 
 // ---- 9. 两侧都有且 api 漂移 → 两侧数据零改动 ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_reconcile_does_not_touch_user_edits() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6809,7 +6808,7 @@ fn pi_reconcile_does_not_touch_user_edits() {
 
 // ---- 10. 接管态 + 档案被删 → 停止接管不得静默 Ok(false) ----
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn pi_restore_does_not_silently_skip_when_archive_missing() {
     let _agent = crate::pi_config::test_support::TestAgentDir::new();
     let db = Arc::new(Database::memory().expect("init db"));
@@ -6852,7 +6851,7 @@ fn pi_restore_does_not_silently_skip_when_archive_missing() {
 /// `start_with_takeover` must skip every save — instead of overwriting
 /// good backups with the proxy config.
 #[tokio::test]
-#[serial]
+#[serial_test::serial(global_env)]
 async fn bulk_backup_skips_all_when_live_is_proxy_placeholder() {
     let _home = TempHome::new();
     crate::settings::reload_settings().expect("reload settings");

@@ -292,7 +292,6 @@ mod tests {
     use crate::pi_config::test_support::TestAgentDir;
     use crate::provider::ProviderMeta;
     use serde_json::json;
-    use serial_test::serial;
     use std::fs;
     use std::sync::Arc;
 
@@ -354,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn membership_is_derived_only_from_models_json() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -390,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn default_selection_does_not_block_membership_changes() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -426,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn provider_membership_never_changes_pi_auth_or_defaults() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -470,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn failed_duplicate_create_rolls_back_native_insertion() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -482,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn native_edits_sync_to_the_saved_provider_and_survive_removal() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -515,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn refreshed_native_config_can_be_edited_without_snapshot_state() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -546,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn enabled_provider_edit_needs_no_special_snapshot_parameter() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -566,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn native_sync_imports_every_explicit_provider_node() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -627,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn removal_preserves_and_can_restore_a_minimal_native_node() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -671,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn usage_metadata_update_does_not_rewrite_native_provider_settings() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -711,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn copied_provider_keeps_its_display_name_after_enable_and_sync() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -732,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn database_only_create_does_not_overwrite_an_unsynced_native_key() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -774,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn malformed_native_file_keeps_the_saved_catalog_visible() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -789,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn numeric_json_representation_does_not_block_removal() {
         let _agent = TestAgentDir::new();
         let state = state();
@@ -831,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn unreadable_selection_does_not_block_membership_changes() {
         let _agent = TestAgentDir::new();
         let state = state();

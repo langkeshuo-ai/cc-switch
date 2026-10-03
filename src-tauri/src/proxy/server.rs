@@ -455,7 +455,7 @@ mod tests {
     /// must derive the sibling standalone endpoint instead of having the
     /// standalone path appended to it.
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     async fn codex_standalone_endpoints_derive_from_pasted_full_base_url() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let capture_handler = {
@@ -616,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     async fn codex_images_generation_aliases_forward_and_record_usage() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(
@@ -822,7 +822,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     async fn codex_images_edit_aliases_forward_and_record_usage() {
         // Real Images API responses carry `input_tokens_details` with text/image
         // splits; the shared Codex usage parser must tolerate them.
@@ -1044,7 +1044,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     async fn alpha_search_routes_forward_to_canonical_upstream() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(

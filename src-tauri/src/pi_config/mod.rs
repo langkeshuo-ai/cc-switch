@@ -859,7 +859,6 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use serde_json::json;
-    use serial_test::serial;
 
     fn provider() -> Value {
         json!({
@@ -920,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn duplicate_provider_key_is_validation_not_a_write_conflict() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider("duplicate", &provider()).expect("insert provider");
@@ -934,7 +933,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn newly_created_models_file_and_agent_directory_are_private() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -958,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn stale_models_revision_does_not_overwrite_an_external_edit() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_models_path().expect("models path");
@@ -1011,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn takeover_rewrites_base_url_and_preserves_other_fields_and_nodes() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
@@ -1057,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn openai_dialect_maps_to_openai_gateway_prefix() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
@@ -1076,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn unsupported_dialect_is_rejected_and_models_file_untouched() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
@@ -1102,7 +1101,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn raw_restore_recovers_pre_takeover_models_document() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
@@ -1139,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn set_base_url_restores_original_upstream_without_dialect_validation() {
         let _agent = test_support::TestAgentDir::new();
         insert_pi_provider(
@@ -1166,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn takeover_base_url_rewrite_preserves_json5_comments() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_models_path().expect("models path");
@@ -1213,7 +1212,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn base_url_rewrite_falls_back_when_surgical_replace_is_ambiguous() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_models_path().expect("models path");
@@ -1243,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn set_default_provider_replaces_value_and_preserves_comments() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_settings_path().expect("settings path");
@@ -1282,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn set_default_provider_inserts_when_missing_and_creates_missing_file() {
         let _agent = test_support::TestAgentDir::new();
         let path = get_pi_settings_path().expect("settings path");

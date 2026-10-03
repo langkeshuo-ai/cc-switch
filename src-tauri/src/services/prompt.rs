@@ -590,7 +590,6 @@ mod pi_prompt_tests {
     use super::*;
     use crate::database::Database;
     use crate::pi_config::test_support::TestAgentDir;
-    use serial_test::serial;
     use std::sync::Arc;
 
     fn prompt(enabled: bool) -> Prompt {
@@ -606,7 +605,7 @@ mod pi_prompt_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn pi_active_prompt_is_derived_from_agents_file() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -644,7 +643,7 @@ mod pi_prompt_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn generic_prompt_projection_does_not_rewrite_pi_agents_file() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -667,7 +666,7 @@ mod pi_prompt_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn editing_an_inactive_duplicate_pi_prompt_preserves_agents_file() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -707,7 +706,7 @@ mod pi_prompt_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn failed_pi_native_update_restores_the_previous_database_prompt() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(

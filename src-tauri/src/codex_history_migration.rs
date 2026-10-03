@@ -1282,7 +1282,6 @@ mod tests {
     use super::*;
     use crate::codex_state_db::CODEX_STATE_DB_FILENAME;
     use crate::provider::Provider;
-    use serial_test::serial;
     use std::ffi::OsString;
     use tempfile::tempdir;
 
@@ -2111,7 +2110,7 @@ base_url = "https://proxy.example/v1"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn state_db_paths_include_codex_sqlite_home_env() {
         let dir = tempdir().expect("tempdir");
         let codex_dir = dir.path().join(".codex");
@@ -2130,7 +2129,7 @@ base_url = "https://proxy.example/v1"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn config_sqlite_home_takes_precedence_over_codex_sqlite_home_env() {
         let dir = tempdir().expect("tempdir");
         let codex_dir = dir.path().join(".codex");

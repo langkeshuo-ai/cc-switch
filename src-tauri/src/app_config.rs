@@ -781,7 +781,6 @@ impl MultiAppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
     use std::env;
     use std::fs;
     use tempfile::TempDir;
@@ -956,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn auto_imports_existing_prompt_when_config_missing() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "# hello");
@@ -982,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn skips_empty_prompt_files_during_import() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "   \n  ");
@@ -995,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn auto_import_happens_only_once() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "first version");
@@ -1032,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn auto_imports_all_apps_prompts() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "# Claude prompt");

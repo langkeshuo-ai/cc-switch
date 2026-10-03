@@ -397,7 +397,6 @@ fn validate_template_slug(slug: &str) -> Result<(), AppError> {
 mod tests {
     use super::*;
     use crate::pi_config::test_support::TestAgentDir;
-    use serial_test::serial;
 
     #[test]
     fn template_names_are_single_portable_tokens() {
@@ -420,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn empty_prompt_template_round_trips() {
         let _agent = TestAgentDir::new();
         PiPromptTemplateService::upsert("empty", None, MISSING_REVISION, "")
@@ -436,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn prompt_template_can_be_renamed_and_updated_together() {
         let _agent = TestAgentDir::new();
         let created = PiPromptTemplateService::upsert("draft", None, MISSING_REVISION, "before")
@@ -460,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn oversized_prompt_template_is_rejected_before_it_is_loaded() {
         let _agent = TestAgentDir::new();
         let path = get_pi_agent_dir()
@@ -477,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn agents_file_revision_rejects_an_external_edit() {
         let _agent = TestAgentDir::new();
         let guard = PiAgentsFileGuard::acquire().expect("lock AGENTS.md");
@@ -501,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn oversized_agents_file_is_rejected_before_it_is_loaded() {
         let _agent = TestAgentDir::new();
         let path = get_pi_agent_dir()

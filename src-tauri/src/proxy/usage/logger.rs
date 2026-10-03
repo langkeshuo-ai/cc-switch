@@ -333,42 +333,10 @@ impl<'a> UsageLogger<'a> {
 
     /// 记录失败的请求（带更多上下文信息）
     ///
-    /// 相比 log_error，这个方法接受更多参数以提供完整的请求上下文。
-    /// 同步内联版本：仅同步上下文/测试使用；async 上下文请用
-    /// [`UsageLogger::log_error_with_context_async`]（H4）。
-    #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
-    pub fn log_error_with_context(
-        &self,
-        request_id: String,
-        provider_id: String,
-        app_type: String,
-        model: String,
-        status_code: u16,
-        error_message: String,
-        latency_ms: u64,
-        is_streaming: bool,
-        session_id: Option<String>,
-        provider_type: Option<String>,
-    ) -> Result<(), AppError> {
-        let log = Self::error_request_log(
-            request_id,
-            provider_id,
-            app_type,
-            model,
-            status_code,
-            error_message,
-            latency_ms,
-            is_streaming,
-            session_id,
-            provider_type,
-        );
-
-        self.log_request(&log)
-    }
-
     /// H4：异步上下文专用——错误日志写入移入 blocking 线程池执行，
     /// 避免阻塞 tokio worker。只能在 tokio runtime 上下文中调用。
+    ///
+    /// 相比 [`UsageLogger::log_error`]，本方法接受更多参数以提供完整的请求上下文。
     #[allow(clippy::too_many_arguments)]
     pub async fn log_error_with_context_async(
         &self,
@@ -400,16 +368,6 @@ impl<'a> UsageLogger<'a> {
                 Self::log_request_on_conn(conn, &log)
             })
             .await
-    }
-
-    /// 获取模型定价
-    ///
-    /// 同步内联版本：仅同步上下文/测试使用（H4 后 async 路径走
-    /// `log_with_calculation_async` → `_on_conn` 核心）。
-    #[allow(dead_code)]
-    pub fn get_model_pricing(&self, model_id: &str) -> Result<Option<ModelPricing>, AppError> {
-        let conn = crate::database::lock_conn!(self.db.conn);
-        Self::get_model_pricing_on_conn(&conn, model_id)
     }
 
     /// 查询模型定价的同步核心（H4：供 `db_blocking` 闭包复用）
@@ -523,12 +481,16 @@ impl<'a> UsageLogger<'a> {
         (cost_multiplier, pricing_model_source)
     }
 
-    /// 计算并记录请求
+    /// 计算并记录请求（同步内联版本）
     ///
-    /// 同步内联版本：仅同步上下文/测试使用；async 上下文请用
-    /// [`UsageLogger::log_with_calculation_async`]（H4）。
+    /// 生产路径请用 [`UsageLogger::log_with_calculation_async`]（H4：把同步 DB
+    /// 工作移入 blocking 线程池）。本同步版**仅供单元测试**——它需要在无 tokio
+    /// runtime 的测试线程里跑。
+    ///
+    /// 用 `#[cfg(test)]` 而非 `#[allow(dead_code)]`：测试支撑代码不该编进生产
+    /// 二进制（`allow` 只是让编译器闭嘴，函数照样进产物）。
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
-    #[allow(dead_code)]
     pub fn log_with_calculation(
         &self,
         request_id: String,

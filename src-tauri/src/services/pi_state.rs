@@ -40,12 +40,11 @@ mod tests {
     use super::*;
     use crate::database::Database;
     use crate::pi_config::test_support::TestAgentDir;
-    use serial_test::serial;
     use std::fs;
     use std::sync::Arc;
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn state_exposes_every_explicit_provider_node() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -102,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn invalid_global_settings_do_not_hide_provider_membership() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(

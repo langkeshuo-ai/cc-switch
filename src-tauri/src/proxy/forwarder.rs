@@ -22,8 +22,8 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
+use crate::proxy::providers::oauth_state::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
 use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
 use crate::{
     app_config::AppType,

@@ -407,7 +407,6 @@ mod tests {
     use crate::database::Database;
     use crate::provider::{AuthBinding, AuthBindingSource, ProviderMeta};
     use serde_json::json;
-    use serial_test::serial;
     use std::env;
     use tempfile::TempDir;
 
@@ -480,7 +479,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_provider_router_creation() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -491,7 +490,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_failover_disabled_uses_current_provider() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -514,7 +513,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_failover_enabled_uses_queue_order_ignoring_current() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -549,7 +548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_failover_enabled_uses_queue_only_even_if_current_not_in_queue() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -579,7 +578,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn codex_official_current_stays_single_route_when_failover_is_stale() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -608,7 +607,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn stale_codex_official_queue_entries_are_not_retry_targets() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -650,7 +649,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_select_providers_does_not_consume_half_open_permit() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -693,7 +692,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_release_permit_neutral_frees_half_open_slot() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -767,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_session_affinity_moves_sticky_provider_to_front() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -787,7 +786,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_session_affinity_falls_back_when_sticky_provider_circuit_open() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -818,7 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_session_affinity_miss_keeps_queue_order() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -835,7 +834,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn test_session_affinity_ignored_when_failover_disabled() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -870,7 +869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn pi_valid_default_provider_overrides_db_current() {
         let _home = TempHome::new();
         let _agent = crate::pi_config::test_support::TestAgentDir::new();
@@ -893,7 +892,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn pi_dangling_default_provider_falls_back_to_db_current() {
         let _home = TempHome::new();
         let _agent = crate::pi_config::test_support::TestAgentDir::new();
@@ -913,7 +912,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn pi_missing_default_provider_and_no_db_fallback_is_a_clear_error() {
         let _home = TempHome::new();
         let _agent = crate::pi_config::test_support::TestAgentDir::new();

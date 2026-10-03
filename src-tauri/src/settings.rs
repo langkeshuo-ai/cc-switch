@@ -1372,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn effective_current_provider_for_pi_prefers_injected_authoritative_source() {
         // 回归护栏（T06 根因）：Pi 的权威源是 settings.json 的 defaultProvider。
         // 旧实现对 Pi 一律 fallback 到 db.is_current —— 两者可以不同，于是静默
@@ -1409,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn effective_current_provider_for_pi_falls_back_when_authoritative_unreadable() {
         // 权威源读不到（settings.json 缺失/不可读）时必须允许 fallback 到
         // db.is_current，而不是伪造值或 panic —— 与 provider_router 既有兜底一致。

@@ -3,7 +3,6 @@
 
 use super::*;
 use serde_json::json;
-use serial_test::serial;
 use std::ffi::OsString;
 
 #[test]
@@ -128,7 +127,7 @@ fn seed_rotated_managed_codex_live_state() -> CodexLiveTestState {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn ensure_live_auth_guard_rejects_rotated_refresh_without_mutating_live_bundle() {
     let _home = CodexLiveTestHome::new();
     let before = seed_rotated_managed_codex_live_state();
@@ -140,7 +139,7 @@ fn ensure_live_auth_guard_rejects_rotated_refresh_without_mutating_live_bundle()
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn clear_live_auth_guard_rejects_rotated_refresh_without_mutating_live_bundle() {
     let _home = CodexLiveTestHome::new();
     let before = seed_rotated_managed_codex_live_state();
@@ -458,7 +457,7 @@ fn prepare_provider_live_config_rejects_key_without_config() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn managed_chatgpt_login_matches_local_marker_and_workspace() {
     let _home = CodexLiveTestHome::new();
     let shared_chatgpt_user_token = |subject: &str| {
@@ -569,7 +568,7 @@ fn managed_chatgpt_login_matches_local_marker_and_workspace() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn legacy_managed_marker_migrates_by_user_without_breaking_refresh_rollback() {
     let _home = CodexLiveTestHome::new();
     let id_token = test_codex_id_token("legacy-user");
@@ -625,7 +624,7 @@ fn legacy_managed_marker_migrates_by_user_without_breaking_refresh_rollback() {
 }
 
 #[test]
-#[serial]
+#[serial_test::serial(global_env)]
 fn legacy_managed_marker_removal_requires_manager_identity() {
     let _home = CodexLiveTestHome::new();
     let id_token = test_codex_id_token("legacy-user");

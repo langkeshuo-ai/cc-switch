@@ -364,7 +364,6 @@ mod tests {
     use crate::pi_config::test_support::TestAgentDir;
     use crate::provider::Provider;
     use serde_json::json;
-    use serial_test::serial;
     use std::fs;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -518,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn multi_app_snapshot_apply_restores_all_three_apps() {
         let _home = TestHomeGuard::new();
         let _agent = TestAgentDir::new();
@@ -575,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn apply_reports_missing_provider_per_app_and_restores_the_rest() {
         let _home = TestHomeGuard::new();
         let _agent = TestAgentDir::new();
@@ -618,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn apply_is_serialized_behind_the_config_sequence_lock() {
         let state = AppState::new(Arc::new(
             Database::memory().expect("create in-memory database"),
@@ -650,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn pi_snapshot_apply_result_is_what_provider_router_selects() {
         let _home = TestHomeGuard::new();
         let _agent = TestAgentDir::new();
@@ -679,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn pi_snapshot_roundtrip_preserves_settings_default_provider() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -721,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn pi_snapshot_capture_falls_back_to_db_when_settings_unreadable() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(

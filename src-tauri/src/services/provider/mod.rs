@@ -117,7 +117,6 @@ mod tests {
     use crate::proxy::types::ProxyConfig;
     use crate::store::AppState;
     use serde_json::json;
-    use serial_test::serial;
     use std::env;
     use std::fs;
     use std::path::Path;
@@ -322,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_clears_usage_credentials_that_match_provider_config() {
         with_test_home(|state, _| {
             let provider = codex_provider_with_usage(
@@ -353,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn update_preserves_usage_credentials_that_only_match_previous_config() {
         with_test_home(|state, _| {
             let provider = codex_provider_with_usage(
@@ -399,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn copied_provider_uses_edited_credentials_after_add_clears_mirrored_usage_credentials() {
         with_test_home(|state, _| {
             let copied_provider = codex_provider_with_usage(
@@ -454,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn update_clears_usage_credentials_that_match_current_config() {
         with_test_home(|state, _| {
             let provider = codex_provider_with_usage(
@@ -501,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_preserves_distinct_usage_credentials() {
         with_test_home(|state, _| {
             let provider = codex_provider_with_usage(
@@ -535,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_does_not_clear_token_plan_credentials() {
         with_test_home(|state, _| {
             let provider = codex_provider_with_usage(
@@ -587,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_accepts_multiple_unbound_codex_official_cards() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -625,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn update_keeps_official_provider_id_when_binding_and_unbinding() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -759,7 +758,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn update_current_claude_provider_writes_live_when_proxy_never_enabled() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
@@ -801,7 +800,7 @@ mod tests {
 
     /// A stale backup row must be refreshed but must not divert the live write.
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn update_current_claude_provider_writes_live_when_backup_row_is_stale() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
@@ -857,7 +856,7 @@ mod tests {
     /// An enabled flag left behind by an interrupted teardown is not enough to
     /// suppress a live write when neither placeholder nor backup evidence exists.
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn update_current_claude_provider_ignores_enabled_flag_without_evidence() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
@@ -1188,7 +1187,7 @@ command = "legacy-cmd"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn update_current_claude_provider_syncs_live_when_proxy_takeover_detected_without_backup()
     {
         let _home = TempHome::new();
@@ -1312,7 +1311,7 @@ command = "legacy-cmd"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn update_current_codex_provider_refreshes_and_clears_catalog_during_takeover() {
         let _home = TempHome::new();
         crate::settings::reload_settings().expect("reload settings");
@@ -1441,7 +1440,7 @@ requires_openai_auth = true
 
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn add_first_managed_codex_with_missing_account_leaves_no_provider_or_live_state() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1477,7 +1476,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_first_managed_codex_with_reauth_required_account_is_rejected() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1506,7 +1505,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn add_first_managed_codex_current_failure_rolls_back_provider_and_live_state() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1573,7 +1572,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn switch_from_managed_codex_official_to_unbound_clears_live_without_backfilling_token() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1689,7 +1688,7 @@ requires_openai_auth = true
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn managed_codex_switch_adopts_outgoing_cli_rotation_before_account_or_key_overwrite() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1803,7 +1802,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn managed_codex_direct_update_adopts_outgoing_cli_rotation_and_commits_target_binding() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1905,7 +1904,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn same_account_managed_codex_update_rejects_equal_timestamp_refresh_conflict() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -1990,7 +1989,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn switch_away_rejects_legacy_refresh_conflict_on_every_retry() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2082,7 +2081,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn codex_auth_center_remove_and_logout_clear_live_credentials_and_marker() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2158,7 +2157,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn deleted_codex_account_can_rebind_or_switch_in_every_takeover_state() {
         for mode in ["direct", "active", "backup-only", "backup-only-enable"] {
             for rebind in [true, false] {
@@ -2343,7 +2342,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn missing_codex_account_preserves_native_login_but_corrupt_store_blocks_recovery() {
         for takeover in [false, true] {
             for corrupt in [false, true] {
@@ -2438,7 +2437,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn codex_auth_center_removal_waits_for_provider_switch_lock() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2493,7 +2492,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn codex_auth_center_logout_waits_for_provider_switch_lock() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2563,7 +2562,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn managed_codex_switch_db_current_failure_restores_live_bundle_and_current() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2695,7 +2694,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn managed_codex_takeover_update_db_failure_restores_backup_live_and_binding() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2845,7 +2844,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn managed_codex_update_rechecks_current_after_waiting_for_switch_lock() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -2990,7 +2989,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn switch_to_managed_codex_official_with_unresolvable_account_keeps_current_unchanged() {
         with_test_home(|state, _| {
             crate::settings::reload_settings().expect("reload settings");
@@ -3059,7 +3058,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sync_universal_to_apps_reprojects_current_child_to_live() {
         with_test_home(|state, _home| {
             let mut universal = UniversalProvider::new(

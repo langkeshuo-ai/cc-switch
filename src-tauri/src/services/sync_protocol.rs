@@ -801,7 +801,6 @@ where
 mod tests {
     use super::*;
     use crate::provider::Provider;
-    use serial_test::serial;
 
     /// Isolate the Skills SSOT (and app config dir) under a temp home so
     /// snapshot build/apply tests never touch the real user directory.
@@ -1120,7 +1119,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn build_local_snapshot_produces_self_verifying_manifest() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
@@ -1155,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn build_local_snapshot_changes_identity_when_providers_change() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
@@ -1181,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn apply_snapshot_restores_database_and_skills() {
         let _home = TestHomeGuard::new();
         let source = crate::database::Database::memory().expect("create source db");
@@ -1212,7 +1211,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn apply_snapshot_rejects_foreign_sql_and_rolls_back_skills() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
@@ -1254,7 +1253,6 @@ mod tests {
 mod security_tests {
     use super::*;
     use crate::provider::Provider;
-    use serial_test::serial;
 
     struct TestHomeGuard {
         previous: Option<std::ffi::OsString>,
@@ -1357,7 +1355,7 @@ mod security_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn apply_remote_snapshot_rejects_hash_mismatch_before_applying() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
@@ -1377,7 +1375,7 @@ mod security_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn encrypted_snapshot_round_trips_through_protocol_layer() {
         let _home = TestHomeGuard::new();
         let source = crate::database::Database::memory().expect("create source db");
@@ -1437,7 +1435,7 @@ mod security_tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn encrypted_snapshot_without_password_is_rejected() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
@@ -1468,7 +1466,7 @@ mod security_tests {
     /// [`apply_remote_snapshot_rejects_hash_mismatch_before_applying`], which
     /// applies an intact plaintext snapshot successfully.
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn plaintext_remote_snapshot_is_rejected_when_encryption_enabled() {
         let _home = TestHomeGuard::new();
         let source = crate::database::Database::memory().expect("create source db");
