@@ -1188,7 +1188,6 @@ mod tests {
     use crate::settings::{get_settings, update_settings, AppSettings};
     use crate::test_support::TestHomeGuard;
     use rusqlite::Connection;
-    use serial_test::serial;
 
     struct SettingsGuard {
         previous: AppSettings,
@@ -1211,7 +1210,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_rejects_cross_file_statements_and_leaves_no_file_behind() -> Result<(), AppError> {
         let test_home = TestHomeGuard::new();
         // `VACUUM INTO` 是关键字扫描方案最容易漏的一条：它不含 "ATTACH" 字样，
@@ -1254,7 +1253,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_still_accepts_a_genuine_export() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         // 白名单收得紧，必须有一条回归防线证明它没误伤自家导出格式——
@@ -1284,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_accepts_genuine_export_without_provider_or_mcp_rows() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
@@ -1335,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_rejects_header_only_sql_and_keeps_existing_database() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let target = Database::memory()?;
@@ -1372,7 +1371,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sql_import_preserves_incremental_auto_vacuum() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
@@ -1404,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sql_file_api_round_trips_existing_export_behavior() -> Result<(), AppError> {
         let test_home = TestHomeGuard::new();
         let source = Database::memory()?;
@@ -1451,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn failed_sql_import_keeps_the_existing_database_unchanged() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let target = Database::memory()?;
@@ -1487,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_rejects_truncated_open_transaction_and_keeps_live_database() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
@@ -1534,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn import_still_accepts_legacy_single_row_insert_exports() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         // This schema is copied from the v3.8.3 tag. Its data statements use
@@ -1591,7 +1590,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn dump_sql_batches_rows_into_multi_row_inserts() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         // 每行一条 INSERT 是导入慢的根源（恢复侧逐条解析，2 万行实测 21s）。
@@ -2011,7 +2010,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn multi_row_dump_round_trips_special_values() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         // 多行 VALUES 的转义面比单行宽：单引号、换行、英文逗号（列分隔符）、
@@ -2077,7 +2076,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn full_sql_backup_still_round_trips_session_cursors() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let source = Database::memory()?;
@@ -2121,7 +2120,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sync_import_preserves_local_only_tables() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let remote_db = Database::memory()?;
@@ -2307,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn failed_backup_publish_leaves_no_visible_or_temporary_file() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let db = Database::init()?;
@@ -2369,7 +2368,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn backup_publish_retries_a_noclobber_name_collision() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _settings = SettingsGuard::with_backup_retain_count(10);
@@ -2424,7 +2423,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn concurrent_backup_renames_never_overwrite_the_shared_target() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _settings = SettingsGuard::with_backup_retain_count(10);
@@ -2499,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sync_import_keeps_local_writes_that_arrive_after_staging() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let remote_db = Database::memory()?;
@@ -2584,7 +2583,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn sync_import_safety_backup_captures_late_local_writes() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let remote_db = Database::memory()?;
@@ -2664,7 +2663,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn restore_with_retain_one_keeps_source_and_exact_safety_snapshot() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _settings = SettingsGuard::with_backup_retain_count(1);
@@ -2745,7 +2744,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn restore_protects_case_variant_source_path_from_retention() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _settings = SettingsGuard::with_backup_retain_count(1);
@@ -2775,7 +2774,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn restore_blocks_backup_deletion_until_live_replacement_finishes() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let db = Database::init()?;
@@ -2863,7 +2862,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn restore_rejects_corrupt_db_before_touching_live_database() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let db = Database::init()?;
@@ -2909,7 +2908,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn restore_rejects_future_schema_before_touching_live_database() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let db = Database::init()?;
@@ -2988,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn periodic_maintenance_runs_even_when_auto_backup_disabled() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
 
@@ -3060,7 +3059,7 @@ mod tests {
     /// 手动运行：`cargo test --lib perf_backup -- --ignored --nocapture`
     #[test]
     #[ignore = "perf harness, run explicitly"]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn perf_backup_export_import_paths() -> Result<(), AppError> {
         use std::time::Instant;
 

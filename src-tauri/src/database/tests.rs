@@ -1491,3 +1491,57 @@ fn incremental_vacuum_reclaims_entire_freelist() {
     Database::incremental_vacuum_on_conn(&conn).expect("incremental vacuum");
     assert_eq!(freelist(&conn), 0, "all free pages should be reclaimed");
 }
+
+#[test]
+fn rollback_savepoint_restores_pre_savepoint_state() {
+    let conn = Connection::open_in_memory().expect("open in-memory db");
+    conn.execute_batch("CREATE TABLE t (v INTEGER);")
+        .expect("create table");
+    conn.execute("SAVEPOINT sp;", []).expect("open savepoint");
+    conn.execute("INSERT INTO t VALUES (1);", [])
+        .expect("insert");
+    conn.execute("RELEASE sp;", []).expect("release");
+
+    conn.execute("SAVEPOINT sp2;", [])
+        .expect("open savepoint 2");
+    conn.execute("INSERT INTO t VALUES (2);", [])
+        .expect("insert 2");
+
+    rollback_savepoint(&conn, "sp2");
+
+    let rows: Vec<i64> = conn
+        .prepare("SELECT v FROM t ORDER BY v")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("collect");
+    assert_eq!(rows, vec![1], "rolled-back row must be gone");
+}
+
+#[test]
+fn rollback_savepoint_on_missing_savepoint_is_not_silent() {
+    // 回归防护：旧实现对不存在的 savepoint 直接 `.ok()` 静默吞掉。
+    // 现在走日志分支——关键是**不得 panic**，且调用方的原始错误不被覆盖。
+    let conn = Connection::open_in_memory().expect("open in-memory db");
+    rollback_savepoint(&conn, "never_opened");
+    // 失败后连接仍可用（未被破坏），后续语句可正常执行
+    conn.execute_batch("CREATE TABLE t (v INTEGER);")
+        .expect("connection must stay usable after a failed rollback");
+}
+
+#[test]
+fn schema_migration_rejects_newer_db_and_reports_version() {
+    // 版本过新时必须回滚并返回明确错误，而不是静默。
+    let conn = Connection::open_in_memory().expect("open in-memory db");
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .expect("bump user_version");
+
+    let err = Database::apply_schema_migrations_on_conn(&conn)
+        .expect_err("newer schema must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&SCHEMA_VERSION.to_string()) || msg.contains("版本过新"),
+        "error must name the schema version, got: {msg}"
+    );
+}

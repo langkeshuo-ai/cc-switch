@@ -213,7 +213,6 @@ mod tests {
     };
     use crate::error::AppError;
     use crate::settings::{AppSettings, S3SyncSettings};
-    use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -226,7 +225,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn s3_sync_mutex_serializes_concurrent_access() {
         let guard = s3_sync_mutex().lock().await;
         let acquired = Arc::new(AtomicBool::new(false));
@@ -250,7 +249,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn download_suppression_starts_after_s3_lock_acquisition() {
         assert!(!crate::services::s3_auto_sync::is_auto_sync_suppressed());
         let guard = s3_sync_mutex().lock().await;
@@ -295,7 +294,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     async fn map_sync_result_runs_error_handler_after_lock_release() {
         let result =
             run_with_s3_lock(async { Err::<(), AppError>(AppError::Config("boom".to_string())) })
@@ -345,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn persist_sync_error_updates_status_without_overwriting_credentials() {
         let test_home = std::env::temp_dir().join("cc-switch-s3-sync-error-status-test");
         let _ = std::fs::remove_dir_all(&test_home);
@@ -391,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn require_enabled_s3_settings_rejects_disabled_config() {
         let test_home = std::env::temp_dir().join("cc-switch-s3-sync-enabled-disabled-test");
         let _ = std::fs::remove_dir_all(&test_home);
@@ -417,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial_test::serial(global_env)]
     fn require_enabled_s3_settings_returns_settings_when_enabled() {
         let test_home = std::env::temp_dir().join("cc-switch-s3-sync-enabled-ok-test");
         let _ = std::fs::remove_dir_all(&test_home);

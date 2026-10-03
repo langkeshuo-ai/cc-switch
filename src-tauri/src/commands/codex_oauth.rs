@@ -8,15 +8,11 @@
 use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
 use crate::services::model_fetch::FetchedModel;
 use crate::services::subscription::{query_codex_quota, CredentialStatus, SubscriptionQuota};
-use std::sync::Arc;
 use tauri::State;
 
-/// Codex OAuth 认证状态
-///
-/// `CodexOAuthManager` 内部已使用细粒度锁且所有方法均为 `&self`，因此这里
-/// 直接持有 `Arc`，不再包一层 `RwLock`——避免任一命令持有粗粒度锁跨网络刷新
-/// 时阻塞其他命令（切换 / 认证中心操作 / token 读取）。
-pub struct CodexOAuthState(pub Arc<CodexOAuthManager>);
+// State 定义已移至 `proxy::providers::oauth_state`（与Manager 同层，
+// 解除 proxy → commands 的反向依赖）；此处转发保持既有调用路径不变。
+pub use crate::proxy::providers::oauth_state::CodexOAuthState;
 
 /// 查询 Codex OAuth (ChatGPT Plus/Pro) 订阅额度
 ///

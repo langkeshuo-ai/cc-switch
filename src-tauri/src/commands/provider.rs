@@ -105,7 +105,9 @@ fn switch_provider_internal(
     ProviderService::switch(state, app_type, id)
 }
 
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
+/// 仅供集成测试调用：`internal` 版本不做 Tauri 参数反序列化，故测试无法直接触达。
+/// 门控用真`#[cfg]`（`cfg_attr(doc)` 只影响 rustdoc，**不阻止编译进生产二进制**）。
+#[cfg(feature = "test-hooks")]
 pub fn switch_provider_test_hook(
     state: &AppState,
     app_type: AppType,
@@ -159,7 +161,9 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
     Ok(imported)
 }
 
-#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
+/// 仅供集成测试调用：`internal` 版本不做 Tauri 参数反序列化，故测试无法直接触达。
+/// 门控用真`#[cfg]`（`cfg_attr(doc)` 只影响 rustdoc，**不阻止编译进生产二进制**）。
+#[cfg(feature = "test-hooks")]
 pub fn import_default_config_test_hook(
     state: &AppState,
     app_type: AppType,

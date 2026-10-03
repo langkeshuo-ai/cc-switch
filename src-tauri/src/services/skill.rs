@@ -2684,10 +2684,21 @@ impl SkillService {
         }
 
         let front_matter = parts[1].trim();
-        let meta: SkillMetadata = serde_yaml::from_str(front_matter).unwrap_or(SkillMetadata {
-            name: None,
-            description: None,
-        });
+        // YAML 语法错误时**必须留痕**：静默降级会让用户看到 skill 名字/描述
+        // 凭空消失，却完全无从排查（下游 `read_skill_name_desc` 只是回退到目录名）。
+        let meta: SkillMetadata = match serde_yaml::from_str(front_matter) {
+            Ok(meta) => meta,
+            Err(err) => {
+                log::warn!(
+                    "技能 {} 的 front matter YAML 解析失败，回退为默认元数据: {err}",
+                    path.display()
+                );
+                SkillMetadata {
+                    name: None,
+                    description: None,
+                }
+            }
+        };
 
         Ok(meta)
     }
@@ -4900,7 +4911,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn pi_skill_state_follows_native_directory_presence() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -4926,7 +4937,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn pi_skill_toggle_preserves_a_same_name_external_directory() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -4959,7 +4970,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn pi_install_conflict_is_rejected_before_persisting() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5049,7 +5060,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn importing_a_native_pi_skill_returns_its_derived_active_state() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5075,7 +5086,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_preserves_an_external_pi_skill_and_removes_the_managed_record() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5108,7 +5119,7 @@ mod tests {
             .contains("name: external"));
     }
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_does_not_remove_a_preserved_pi_skill_through_another_app() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5150,7 +5161,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_preserves_a_dangling_pi_link_through_an_aliased_app_root() {
         use std::os::unix::fs::symlink;
 
@@ -5204,7 +5215,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_keeps_ssot_when_it_contains_a_preserved_pi_skill() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5237,7 +5248,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_with_a_missing_source_does_not_backup_or_delete_the_pi_directory() {
         let temp = tempdir().expect("tempdir");
         let _home = TestHomeGuard::set(temp.path());
@@ -5267,7 +5278,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_treats_an_aliased_pi_root_as_the_ssot() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::Unified);
         let temp = tempdir().expect("tempdir");
@@ -5293,7 +5304,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_warns_when_the_pi_root_cannot_be_resolved() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
         let temp = tempdir().expect("tempdir");
@@ -5506,7 +5517,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn restore_from_backup_rejects_traversal_directory_in_metadata() {
         let temp = tempdir().expect("tempdir");
         let _guard = TestHomeGuard::set(temp.path());
@@ -5543,7 +5554,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn remove_from_app_rejects_traversal_directory() {
         let temp = tempdir().expect("tempdir");
         let _guard = TestHomeGuard::set(temp.path());
@@ -5561,7 +5572,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn aliased_skill_roots_reject_sync_and_remove_without_deleting_the_source() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::Unified);
         let temp = tempdir().expect("tempdir");
@@ -5590,7 +5601,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn migrate_storage_rejects_an_aliased_destination_before_moving_skills() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
         let temp = tempdir().expect("tempdir");
@@ -5623,7 +5634,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn migrate_storage_safely_leaves_an_existing_pi_ssot_alias() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::Unified);
         let temp = tempdir().expect("tempdir");
@@ -5662,7 +5673,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_rejects_traversal_directory_from_db_row() {
         let temp = tempdir().expect("tempdir");
         let _guard = TestHomeGuard::set(temp.path());
@@ -5697,7 +5708,7 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn migrate_storage_retargets_an_equivalent_relative_pi_symlink() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
         let temp = tempdir().expect("tempdir");
@@ -5736,7 +5747,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn migrate_storage_skips_bad_rows_without_moving_foreign_dirs() {
         let _location = StorageLocationGuard::set(SkillStorageLocation::CcSwitch);
 
@@ -5768,7 +5779,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn uninstall_backup_source_rejects_traversal_directory() {
         let temp = tempdir().expect("tempdir");
         let _guard = TestHomeGuard::set(temp.path());
@@ -5788,7 +5799,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn sync_to_app_skips_bad_rows_instead_of_aborting_the_whole_app() {
         let temp = tempdir().expect("tempdir");
         let _guard = TestHomeGuard::set(temp.path());
@@ -5824,7 +5835,7 @@ mod tests {
     #[test]
     // serial：与 backup/s3_sync/deeplink 等同样读写进程级 CC_SWITCH_TEST_HOME 的测试互斥，
     // EnvGuard 只负责恢复不提供互斥。
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn get_app_skills_dir_honors_test_home_override() {
         // 回归：曾直呼 dirs::home_dir() 绕过 CC_SWITCH_TEST_HOME——Unix 上碰巧跟 $HOME
         // 一致所以测试能过，Windows 上 dirs 走 Known Folder API，测试隔离整体失效
@@ -5996,7 +6007,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     async fn update_skill_persists_relocated_source_before_metadata_rename() {
         for location in [
             SkillStorageLocation::CcSwitch,

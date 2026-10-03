@@ -144,3 +144,18 @@ strip = "symbols"
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
+
+# 需要 `commands::*_test_hook` 的集成测试。这些 hook 用真 `#[cfg(feature)]` 门控
+# （原先的 `#[cfg_attr(..., doc(hidden))]` **不阻止编译进生产二进制**，形同虚设），
+# 故必须显式声明 required-features，避免 release/普通构建因缺符号而失败。
+[[test]]
+name = "mcp_commands"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "provider_commands"
+required-features = ["test-hooks"]
+
+[[test]]
+name = "proxy_commands"
+required-features = ["test-hooks"]

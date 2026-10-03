@@ -382,8 +382,7 @@ impl Database {
                 Ok(())
             }
             Err(error) => {
-                conn.execute("ROLLBACK TO reset_codex_usage", []).ok();
-                conn.execute("RELEASE reset_codex_usage", []).ok();
+                crate::database::rollback_savepoint(&conn, "reset_codex_usage");
                 Err(error)
             }
         }
@@ -2568,7 +2567,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_thread_spawn_parent_strips_replay_and_keeps_live_usage() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2611,7 +2610,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_filtered_parent_events_use_subsequence_prefix_alignment() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2644,7 +2643,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_parent_rollout_is_cached_once_across_fork_cutoffs() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let temp = tempdir().unwrap();
@@ -2676,7 +2675,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_parent_rollout_cache_invalidates_after_append() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let temp = tempdir().unwrap();
@@ -2709,7 +2708,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_parent_rollout_content_error_cache_preserves_open_errors() {
         clear_codex_replay_caches();
         let temp = tempdir().unwrap();
@@ -2740,7 +2739,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_parent_rollout_nanosecond_cutoffs_are_exact() {
         clear_codex_replay_caches();
         let temp = tempdir().unwrap();
@@ -2795,7 +2794,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_empty_fork_imports_no_parent_usage() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2841,7 +2840,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_conflicting_explicit_parents_are_deferred() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2867,7 +2866,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_parent_future_signature_cannot_extend_replay_prefix() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2899,7 +2898,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_missing_parent_is_deferred_and_recovered_without_child_change() -> Result<(), AppError>
     {
         clear_codex_replay_caches();
@@ -2933,7 +2932,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_billable_file_without_meta_is_deferred_without_cursor() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2960,7 +2959,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_non_billable_file_without_meta_advances_cursor() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;
@@ -2981,7 +2980,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial]
+    #[serial_test::serial(global_env)]
     fn test_subagents_use_filename_thread_ids() -> Result<(), AppError> {
         clear_codex_replay_caches();
         let db = Database::memory()?;

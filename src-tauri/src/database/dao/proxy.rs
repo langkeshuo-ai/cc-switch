@@ -1,6 +1,22 @@
 //! 代理功能数据访问层
 //!
 //! 处理代理配置、Provider健康状态和使用统计的数据库操作
+//!
+//! # 关于本模块的 `async fn`
+//!
+//! 本模块多数 `async fn` **函数体内没有 `await`** —— 它们首行就抢
+//! `std::sync::Mutex` 阻塞锁并跑同步 SQLite。签名是 `async` 属**刻意保留**，
+//! 不是疏忽：
+//!
+//! - 这些方法会被 `futures::executor::block_on` 在**没有 tokio runtime** 的上下文
+//!   调用（`services/proxy.rs`、`services/provider/live.rs`、`tray.rs`）。改成
+//!   `spawn_blocking` 会在 runtime 外 panic。
+//! - tokio 热路径（axum handler、failover、每请求转发）另有`*_blocking` 变体，
+//!   走 [`Database::db_blocking`] 把同步工作移出 worker线程。
+//!
+//! **新增 DAO 方法时的规则**：先判断调用方是否在 tokio runtime 内。
+//! 在 → 用 `db_blocking`；不在 → 保持内联同步（本文件现状）。
+//! 不要"顺手"把内联方法改成 `spawn_blocking`。
 
 use std::str::FromStr;
 

@@ -2,7 +2,7 @@
 //!
 //! 负责数据库表结构的创建和版本迁移。
 
-use super::{lock_conn, Database, SCHEMA_VERSION};
+use super::{lock_conn, rollback_savepoint, Database, SCHEMA_VERSION};
 use crate::error::AppError;
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -445,8 +445,7 @@ impl Database {
         let mut version = Self::get_user_version(conn)?;
 
         if version > SCHEMA_VERSION {
-            conn.execute("ROLLBACK TO schema_migration;", []).ok();
-            conn.execute("RELEASE schema_migration;", []).ok();
+            rollback_savepoint(conn, "schema_migration");
             return Err(AppError::Database(format!(
                 "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
             )));
@@ -595,8 +594,7 @@ impl Database {
                 Ok(())
             }
             Err(e) => {
-                conn.execute("ROLLBACK TO schema_migration;", []).ok();
-                conn.execute("RELEASE schema_migration;", []).ok();
+                rollback_savepoint(conn, "schema_migration");
                 Err(e)
             }
         }

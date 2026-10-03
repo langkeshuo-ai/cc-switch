@@ -106,8 +106,7 @@ impl Database {
                 Ok(deleted)
             }
             Err(e) => {
-                conn.execute("ROLLBACK TO rollup_prune;", []).ok();
-                conn.execute("RELEASE rollup_prune;", []).ok();
+                crate::database::rollback_savepoint(&conn, "rollup_prune");
                 Err(e)
             }
         }
