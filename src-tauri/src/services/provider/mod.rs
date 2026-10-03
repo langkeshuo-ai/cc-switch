@@ -43,6 +43,71 @@ pub(crate) use live::{
 
 use usage::validate_usage_script;
 
+// Claude 通用配置片段的**供应商专属 env 键**（协议选择器 + 模型 + 端点 +
+// 云厂商区域/凭据档案）。凭据/机密不在此列举，由 `is_sensitive_config_key`
+// 模式匹配统一剥离。提取端、应用端、剥离端与回填归属检查共用本表，
+// 保证四处语义一致（见 `ProviderService::strip_claude_provider_specific_fields`）。
+const CLAUDE_ENV_PROVIDER_SPECIFIC_EXCLUDES: &[&str] = &[
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_REASONING_MODEL", // legacy: 已废弃，但旧配置可能残留
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    // Fable 是 v3.16.3 新增的第四档模型映射，与 haiku/sonnet/opus 同属供应商专属，
+    // 不得进入通用配置片段，否则会污染其它供应商（issue #4272）。
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    // Context limits follow the actual upstream model. Sharing these
+    // across providers can cap GPT/Kimi to the wrong window and make
+    // Claude Code compact too early or miss the upstream limit.
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "ANTHROPIC_BASE_URL",
+    // 协议选择器（Bedrock/Vertex 路由开关）：决定 Claude Code 走哪条计费
+    // 渠道，属供应商路由语义。进片段会被注入其它供应商的 live settings
+    // （官方供应商被置 CLAUDE_CODE_USE_BEDROCK → 走错计费渠道）。
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    // 云厂商区域/凭据档案：随 Bedrock/Vertex 供应商走，且命名不落
+    // `is_sensitive_config_key` 的模式（AWS_PROFILE 引用凭据档案），
+    // 必须显式排除。
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+];
+
+/// Claude settings 顶层的**供应商专属字段**（legacy 模型字段 + 模型/密钥来源）。
+const CLAUDE_TOP_LEVEL_PROVIDER_SPECIFIC_EXCLUDES: &[&str] = &[
+    "apiBaseUrl",
+    // Legacy model fields
+    "primaryModel",
+    "smallFastModel",
+    // 顶层模型与密钥来源：随供应商走，进片段会改写其它供应商的模型
+    // 与认证方式（fallbackModel / apiKeyHelper 为 Claude 同类字段）。
+    "model",
+    "fallbackModel",
+    "apiKeyHelper",
+];
+
+// 回填归属检查只针对**本次新加入排除表**的键。旧版片段注入过的正是这些键
+// （升级前的 live 残留也只可能来自它们）；而旧版排除表里的键
+// （ANTHROPIC_MODEL / CLAUDE_CODE_AUTO_COMPACT_WINDOW 等）从未进过片段，
+// live 里是行内值或用户手改值，回填必须原样保留
+// （见测试 codex_oauth_backfill_keeps_user_context_values）。
+const CLAUDE_BACKFILL_STRIPPED_ENV_KEYS: &[&str] = &[
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+];
+const CLAUDE_BACKFILL_STRIPPED_TOP_LEVEL_KEYS: &[&str] =
+    &["model", "fallbackModel", "apiKeyHelper"];
+
 /// Codex official providers are safe to select during takeover: Codex keeps
 /// ownership of the active ChatGPT login and the proxy only forwards the
 /// authenticated request. Other apps' official providers retain the block.
@@ -992,6 +1057,56 @@ mod tests {
         );
         assert_eq!(value.get("theme").and_then(|v| v.as_str()), Some("dark"));
         assert_eq!(value.get("includeCoAuthoredBy"), Some(&json!(false)));
+    }
+
+    /// B2 回归：协议选择器（Bedrock/Vertex 路由开关）、云厂商区域/凭据档案与
+    /// 顶层模型/密钥来源属供应商专属，不得进入共享片段（否则会注入其它
+    /// 供应商的 live settings 走错计费渠道/污染认证方式）。
+    #[test]
+    fn extract_claude_common_config_strips_protocol_selectors_and_routing_keys() {
+        let settings = json!({
+            "env": {
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "CLAUDE_CODE_USE_VERTEX": "1",
+                "AWS_REGION": "us-east-1",
+                "AWS_DEFAULT_REGION": "us-east-1",
+                "AWS_PROFILE": "bedrock-admin",
+                "ENABLE_TOOL_SEARCH": "true"
+            },
+            "model": "opus",
+            "fallbackModel": "sonnet",
+            "apiKeyHelper": "/usr/local/bin/key-helper.sh",
+            "theme": "dark"
+        });
+
+        let snippet = ProviderService::extract_claude_common_config(&settings)
+            .expect("extract should succeed");
+        let value: Value = serde_json::from_str(&snippet).expect("snippet is valid JSON");
+        let env = value.get("env");
+
+        for stripped in [
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+        ] {
+            assert!(
+                env.and_then(|e| e.get(stripped)).is_none(),
+                "{stripped} must not leak into common config"
+            );
+        }
+        assert!(value.get("model").is_none());
+        assert!(value.get("fallbackModel").is_none());
+        assert!(value.get("apiKeyHelper").is_none());
+
+        // 可共享配置与手改偏好保留
+        assert_eq!(
+            env.and_then(|e| e.get("ENABLE_TOOL_SEARCH"))
+                .and_then(|v| v.as_str()),
+            Some("true")
+        );
+        assert_eq!(value.get("theme").and_then(|v| v.as_str()), Some("dark"));
     }
 
     /// Regression for issue #4272: Fable tier env keys must not enter the shared
@@ -4600,50 +4715,28 @@ impl ProviderService {
             || SENSITIVE_CONTAINS.iter().any(|c| upper.contains(c))
     }
 
-    /// Extract common config for Claude (JSON format)
-    fn extract_claude_common_config(settings: &Value) -> Result<String, AppError> {
-        let mut config = settings.clone();
+    /// 从 Claude settings 快照中剥离**供应商专属**字段（协议选择器、模型、端点、
+    /// 云厂商区域/凭据档案）与全部凭据键，得到可跨供应商共享的内容。
+    ///
+    /// 提取端、应用端、剥离端三处共用本实现，保证 apply/remove 语义互逆：
+    /// - 提取端：生成通用配置片段前先剥离（`extract_claude_common_config`）；
+    /// - 应用端：注入片段前再次剥离——治 DB 中已落盘的**存量污染片段**
+    ///   （历史版本曾把 `CLAUDE_CODE_USE_BEDROCK` 等协议选择器写进片段，
+    ///   注入后会让官方供应商的 live settings 走错计费渠道）；
+    /// - 剥离端：回填前按**过滤后**片段移除共享键，避免把 Bedrock provider
+    ///   行内自有的 `CLAUDE_CODE_USE_BEDROCK` 当片段键误删。
+    pub(crate) fn strip_claude_provider_specific_fields(config: &mut Value) {
+        // 供应商专属字段见模块级常量 CLAUDE_ENV_/CLAUDE_TOP_LEVEL_PROVIDER_SPECIFIC_EXCLUDES；
+        // 凭据/机密不在此列举，改由 `is_sensitive_config_key`（模式匹配）统一剥离。
 
-        // 供应商专属的**非机密**字段（模型 + 端点），不应共享。凭据/机密不在此列举，
-        // 改由 `is_sensitive_config_key`（模式匹配）统一剥离，新供应商的 `*_API_KEY`
-        // 等无需再手工补名单即可被覆盖。
-        const ENV_PROVIDER_SPECIFIC_EXCLUDES: &[&str] = &[
-            "ANTHROPIC_MODEL",
-            "ANTHROPIC_REASONING_MODEL", // legacy: 已废弃，但旧配置可能残留
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
-            // Fable 是 v3.16.3 新增的第四档模型映射，与 haiku/sonnet/opus 同属供应商专属，
-            // 不得进入通用配置片段，否则会污染其它供应商（issue #4272）。
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-            "CLAUDE_CODE_SUBAGENT_MODEL",
-            // Context limits follow the actual upstream model. Sharing these
-            // across providers can cap GPT/Kimi to the wrong window and make
-            // Claude Code compact too early or miss the upstream limit.
-            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-            "ANTHROPIC_BASE_URL",
-        ];
-
-        const TOP_LEVEL_EXCLUDES: &[&str] = &[
-            "apiBaseUrl",
-            // Legacy model fields
-            "primaryModel",
-            "smallFastModel",
-        ];
-
-        // Remove env fields: provider-specific (models/endpoint) + 任何凭据键。
+        // Remove env fields: provider-specific (protocol selector/model/endpoint/region) + 任何凭据键。
         if let Some(env) = config.get_mut("env").and_then(|v| v.as_object_mut()) {
             let sensitive: Vec<String> = env
                 .keys()
                 .filter(|k| Self::is_sensitive_config_key(k))
                 .cloned()
                 .collect();
-            for key in ENV_PROVIDER_SPECIFIC_EXCLUDES {
+            for key in CLAUDE_ENV_PROVIDER_SPECIFIC_EXCLUDES {
                 env.remove(*key);
             }
             for key in &sensitive {
@@ -4663,13 +4756,73 @@ impl ProviderService {
                 .filter(|k| Self::is_sensitive_config_key(k))
                 .cloned()
                 .collect();
-            for key in TOP_LEVEL_EXCLUDES {
+            for key in CLAUDE_TOP_LEVEL_PROVIDER_SPECIFIC_EXCLUDES {
                 obj.remove(*key);
             }
             for key in &sensitive {
                 obj.remove(key);
             }
         }
+    }
+
+    /// 回填归属检查（仅 Claude）：live 里**行未持有**的历史注入残留键
+    /// （`CLAUDE_BACKFILL_STRIPPED_*`——旧版片段曾把 CLAUDE_CODE_USE_BEDROCK /
+    /// AWS_REGION / 顶层 model 等注入 live）不得回填进行，否则行被污染后每次
+    /// 写 live 都会重新注入，过滤修复形同失效。行已持有的键视为供应商自有
+    /// （Bedrock 行内的 USE_BEDROCK），保留 live 的现值。旧版排除表里的键
+    /// 从未被片段注入，不在此检查内（用户手改 live 的回填语义不受影响）。
+    pub(crate) fn strip_unowned_claude_provider_specific_fields(
+        live: &mut Value,
+        provider: &Provider,
+    ) {
+        let provider_env_has = |key: &str| {
+            provider
+                .settings_config
+                .get("env")
+                .and_then(Value::as_object)
+                .is_some_and(|env| env.contains_key(key))
+        };
+        if let Some(env) = live.get_mut("env").and_then(|v| v.as_object_mut()) {
+            let unowned: Vec<String> = env
+                .keys()
+                .filter(|k| {
+                    CLAUDE_BACKFILL_STRIPPED_ENV_KEYS.contains(&k.as_str()) && !provider_env_has(k)
+                })
+                .cloned()
+                .collect();
+            for key in &unowned {
+                env.remove(key);
+            }
+            // If env is empty after removal, remove the env object itself
+            if env.is_empty() {
+                live.as_object_mut().map(|obj| obj.remove("env"));
+            }
+        }
+        if let Some(obj) = live.as_object_mut() {
+            let provider_owns = |key: &str| {
+                provider
+                    .settings_config
+                    .as_object()
+                    .is_some_and(|row| row.contains_key(key))
+            };
+            let unowned: Vec<String> = obj
+                .keys()
+                .filter(|k| {
+                    CLAUDE_BACKFILL_STRIPPED_TOP_LEVEL_KEYS.contains(&k.as_str())
+                        && !provider_owns(k)
+                })
+                .cloned()
+                .collect();
+            for key in &unowned {
+                obj.remove(key);
+            }
+        }
+    }
+
+    /// Extract common config for Claude (JSON format)
+    fn extract_claude_common_config(settings: &Value) -> Result<String, AppError> {
+        let mut config = settings.clone();
+        Self::strip_claude_provider_specific_fields(&mut config);
 
         // Check if result is empty
         if config.as_object().is_none_or(|obj| obj.is_empty()) {

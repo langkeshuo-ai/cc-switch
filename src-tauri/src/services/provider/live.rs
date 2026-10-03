@@ -19,7 +19,7 @@ use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexO
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 
-use super::normalize_claude_models_in_value;
+use super::{normalize_claude_models_in_value, ProviderService};
 
 /// ChatGPT Codex catalogs gpt-5.6 at a 372K context window with a ~353K
 /// effective budget (openai/codex#31860), far below the 1.05M API spec.
@@ -538,8 +538,14 @@ pub(crate) fn remove_common_config_from_settings(
 
     match app_type {
         AppType::Claude => {
-            let source = serde_json::from_str::<Value>(trimmed)
+            let mut source = serde_json::from_str::<Value>(trimmed)
                 .map_err(|e| AppError::Message(format!("Invalid Claude common config: {e}")))?;
+            // 与提取端共用同一剥离规则：DB 里可能存有历史污染片段（曾把
+            // CLAUDE_CODE_USE_BEDROCK 等协议选择器写进片段），仅改提取端治不住
+            // 存量；应用/剥离两端都过滤，apply 与 remove 才互逆。
+            if source.is_object() {
+                ProviderService::strip_claude_provider_specific_fields(&mut source);
+            }
             let mut result = settings.clone();
             json_deep_remove(&mut result, &source);
             Ok(result)
@@ -582,8 +588,13 @@ fn apply_common_config_to_settings(
 
     match app_type {
         AppType::Claude => {
-            let source = serde_json::from_str::<Value>(trimmed)
+            let mut source = serde_json::from_str::<Value>(trimmed)
                 .map_err(|e| AppError::Message(format!("Invalid Claude common config: {e}")))?;
+            // 注入前按提取端同一规则剥离供应商专属字段（协议选择器/模型/凭据档案），
+            // 治存量污染片段——否则官方供应商的 live 会被注入 CLAUDE_CODE_USE_BEDROCK。
+            if source.is_object() {
+                ProviderService::strip_claude_provider_specific_fields(&mut source);
+            }
             let mut result = settings.clone();
             json_deep_merge(&mut result, &source);
             Ok(result)
@@ -992,6 +1003,9 @@ fn restore_live_settings_for_provider_backfill(
         let mut settings = live_settings;
         strip_injected_codex_oauth_context_defaults(&mut settings, provider);
         strip_injected_kimi_for_coding_context_defaults(&mut settings, provider);
+        // 行未持有的供应商专属字段（协议选择器/模型/凭据档案）=历史片段注入残留，
+        // 不得回填进行，否则升级前污染的 live 会把残留固化进 provider 行。
+        ProviderService::strip_unowned_claude_provider_specific_fields(&mut settings, provider);
         return settings;
     }
     if !matches!(app_type, AppType::Codex) {
@@ -2118,21 +2132,139 @@ base_url = "https://a.example/v1"
                 "ANTHROPIC_API_KEY": "sk-test"
             }
         });
+        // 共享键用中性配置：B2 判定 CLAUDE_CODE_USE_BEDROCK 属供应商路由语义，
+        // 不得再作共享片段键的示例（协议选择器注入官方供应商会走错计费渠道）。
         let snippet = r#"{
   "includeCoAuthoredBy": false,
   "env": {
-    "CLAUDE_CODE_USE_BEDROCK": "1"
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"
   }
 }"#;
 
         let applied =
             apply_common_config_to_settings(&AppType::Claude, &settings, snippet).unwrap();
         assert_eq!(applied["includeCoAuthoredBy"], json!(false));
-        assert_eq!(applied["env"]["CLAUDE_CODE_USE_BEDROCK"], json!("1"));
+        assert_eq!(
+            applied["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"],
+            json!("8192")
+        );
 
         let stripped =
             remove_common_config_from_settings(&AppType::Claude, &applied, snippet).unwrap();
         assert_eq!(stripped, settings);
+    }
+
+    /// B2 回归：DB 里存量污染片段（含协议选择器/云厂商区域/凭据）注入前必须剥离，
+    /// 否则官方供应商的 live settings 会被注入 CLAUDE_CODE_USE_BEDROCK 走错计费渠道；
+    /// 剥离端用同一过滤规则，apply/remove 互逆。
+    #[test]
+    fn claude_common_config_filters_polluted_snippet_on_apply_and_remove() {
+        let settings = json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "tok-official"
+            }
+        });
+        let polluted_snippet = r#"{
+  "includeCoAuthoredBy": false,
+  "env": {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "CLAUDE_CODE_USE_VERTEX": "1",
+    "AWS_REGION": "us-east-1",
+    "AWS_ACCESS_KEY_ID": "AKIA",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"
+  },
+  "model": "opus"
+}"#;
+
+        let applied =
+            apply_common_config_to_settings(&AppType::Claude, &settings, polluted_snippet).unwrap();
+        // 可共享键保留
+        assert_eq!(applied["includeCoAuthoredBy"], json!(false));
+        assert_eq!(
+            applied["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"],
+            json!("8192")
+        );
+        // 供应商专属与凭据残留一律不注入
+        assert!(applied["env"].get("CLAUDE_CODE_USE_BEDROCK").is_none());
+        assert!(applied["env"].get("CLAUDE_CODE_USE_VERTEX").is_none());
+        assert!(applied["env"].get("AWS_REGION").is_none());
+        assert!(applied["env"].get("AWS_ACCESS_KEY_ID").is_none());
+        assert!(applied.get("model").is_none());
+        // 供应商自身配置不受影响
+        assert_eq!(
+            applied["env"]["ANTHROPIC_AUTH_TOKEN"],
+            json!("tok-official")
+        );
+
+        // apply/remove 互逆：过滤后同一源，反演回原 settings
+        let stripped =
+            remove_common_config_from_settings(&AppType::Claude, &applied, polluted_snippet)
+                .unwrap();
+        assert_eq!(stripped, settings);
+
+        // Bedrock provider 行内自有的协议选择器不得被当片段键误删
+        let bedrock_owned = json!({
+            "env": {
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_PROFILE": "bedrock-admin"
+            }
+        });
+        let kept =
+            remove_common_config_from_settings(&AppType::Claude, &bedrock_owned, polluted_snippet)
+                .unwrap();
+        assert_eq!(kept, bedrock_owned);
+    }
+
+    /// B2 回归（回填归属）：live 中**行未持有**的供应商专属字段=历史片段注入残留，
+    /// 回填时剥掉，防止残留固化进 provider 行；行已持有的键保留。
+    #[test]
+    fn claude_backfill_strips_unowned_provider_specific_fields() {
+        let official = Provider::with_id(
+            "official".into(),
+            "Official".into(),
+            json!({
+                "env": { "ANTHROPIC_AUTH_TOKEN": "tok" }
+            }),
+            None,
+        );
+        let mut polluted_live = json!({
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "tok",
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_REGION": "us-east-1"
+            },
+            "model": "opus",
+            "theme": "dark"
+        });
+        ProviderService::strip_unowned_claude_provider_specific_fields(
+            &mut polluted_live,
+            &official,
+        );
+        let env = polluted_live.get("env").and_then(Value::as_object).unwrap();
+        assert!(env.get("CLAUDE_CODE_USE_BEDROCK").is_none());
+        assert!(env.get("AWS_REGION").is_none());
+        assert!(polluted_live.get("model").is_none());
+        // 非供应商专属的手改键与行内键保留
+        assert_eq!(polluted_live["theme"], json!("dark"));
+        assert_eq!(
+            env.get("ANTHROPIC_AUTH_TOKEN").and_then(Value::as_str),
+            Some("tok")
+        );
+
+        let bedrock = Provider::with_id(
+            "bedrock".into(),
+            "Bedrock".into(),
+            json!({
+                "env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "AWS_PROFILE": "bedrock-admin"
+                }
+            }),
+            None,
+        );
+        let mut bedrock_live = bedrock.settings_config.clone();
+        ProviderService::strip_unowned_claude_provider_specific_fields(&mut bedrock_live, &bedrock);
+        assert_eq!(bedrock_live, bedrock.settings_config);
     }
 
     #[test]
