@@ -1,6 +1,8 @@
 # CC Switch ユーザーマニュアル
 
 > Claude Code / Codex / Pi オールインワンアシスタント
+>
+> このフォークが管理するのは **Claude Code / Codex / Pi** だけです。Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes、MiniMax Code を現行の管理対象として書く箇所は上流版の名残で、本ビルドでは動きません。Gemini という語が残る場合はプロトコル変換（`gemini_native`）かモデル料金表であり、管理対象アプリではありません。
 
 ## 目次構成
 

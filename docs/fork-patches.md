@@ -185,3 +185,17 @@
 
 - `46fa2e0e` 删成本倍率（-866）：功能移除非修复；与 H4 DAO/schema 列/计价链路交织，7 文件冲突，需连带决定 proxy_config.default_cost_multiplier 列去留——单独会话做
 - `46fa2e0e`/`6064fc1c` 同类上游删除面继续积累时重估
+
+## 2026-10-04 复核（P1-6 / P2-12）
+
+- `src-tauri/src/services/skill.rs` · `extract_repo_archive` / `extract_local_zip_in`：
+  Zip Slip 已有拒绝路径（`extract_repo_archive_rejects_path_traversal_entries`、
+  `extract_local_zip_rejects_dot_dot_entries`）与条目数上限。不新增第二套校验。
+- `src-tauri/src/services/webdav_sync/archive.rs` · `restore_skills_zip`：用
+  `ZipFile::enclosed_name()` 丢掉 `..` 与绝对路径，并有条目数与总字节上限。
+- `src-tauri/src/commands/import_export.rs` · `validate_transfer_path`：导入导出
+  必须是绝对路径、禁止 `.`/`..`、只接受 `.sql`。
+- `src-tauri/src/pi_config/mod.rs` · `write_models_document`（节点级 insert/replace/
+  remove）：**整文档重写会丢掉 JSON5 注释**。只改 `providers.<key>.baseUrl` 的
+  手术式替换（`replace_json_string_field_raw`）保留注释。这是 M1 已知限制，
+  不在本轮改 JSON5 写回器。接管停止仍走 `restore_models_document_raw` 字节级恢复。
