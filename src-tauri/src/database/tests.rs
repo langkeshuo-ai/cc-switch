@@ -240,7 +240,7 @@ fn schema_migration_adds_missing_columns_for_providers() {
         );
     }
 
-    // v21 -> v22 之后，已裁剪应用的启用标志必须不复存在
+    // schema 回到上游 v19：已裁剪应用的启用标志列按上游形状保留（DEFAULT 0）
     for column in [
         "enabled_gemini",
         "enabled_grokbuild",
@@ -249,12 +249,12 @@ fn schema_migration_adds_missing_columns_for_providers() {
         "enabled_hermes",
     ] {
         assert!(
-            !Database::has_column(&conn, "mcp_servers", column).expect("check column"),
-            "mcp_servers.{column} should be dropped by v21 -> v22"
+            Database::has_column(&conn, "mcp_servers", column).expect("check column"),
+            "mcp_servers.{column} should exist (upstream v19 shape)"
         );
         assert!(
-            !Database::has_column(&conn, "skills", column).expect("check column"),
-            "skills.{column} should be dropped by v21 -> v22"
+            Database::has_column(&conn, "skills", column).expect("check column"),
+            "skills.{column} should exist (upstream v19 shape)"
         );
     }
 

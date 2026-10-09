@@ -84,13 +84,18 @@ impl Database {
 
         // 3. MCP Servers 表
         //
-        // v21 -> v22 起只保留 claude/codex 两个启用标志：本 fork 仅管理
-        // claude/codex/pi 三个应用，而 Pi 没有原生 MCP 注册表（见 McpApps）。
+        // 形状与基线上游 v3.20.4 完全一致（含 5 个已裁剪应用的 enabled_* 列，
+        // DEFAULT 0，本 fork 不再写入但保留列以对齐上游 schema）。
+        // Pi 没有原生 MCP 注册表（见 McpApps），无 enabled_pi 列。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mcp_servers (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
             description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
-            enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0
+            enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
         )
@@ -116,6 +121,11 @@ impl Database {
             readme_url TEXT,
             enabled_claude BOOLEAN NOT NULL DEFAULT 0,
             enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+            enabled_gemini BOOLEAN NOT NULL DEFAULT 0,
+            enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
+            enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
             installed_at INTEGER NOT NULL DEFAULT 0,
             content_hash TEXT,
             updated_at INTEGER NOT NULL DEFAULT 0
@@ -143,10 +153,10 @@ impl Database {
 
         // 8. Proxy Config 表（三行结构，app_type 主键）
         //
-        // CHECK 只放行本 fork 保留的三个应用；v21 -> v22 会把历史库的
-        // gemini/grokbuild 行删掉并按同一约束重建。
+        // CHECK 与基线上游 v3.20.4 完全一致（四值，不含 'pi'）。
+        // 本 fork 的 schema 不变量：绝不偏离上游（见 BASELINE.md 第 2 节）。
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','pi')),
+            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
             listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
             enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
@@ -185,11 +195,8 @@ impl Database {
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        // 注意：这里刻意不 seed Pi。
-        // 历史迁移 v13 -> v14 会把 proxy_config 重建成不含 'pi' 的旧约束并整行搬数据，
-        // 若此刻已存在 'pi' 行，那条迁移会撞 CHECK 约束直接失败。Pi 的行改由
-        // v20 -> v21 迁移补齐，全新库则在首次写入时由
-        // ensure_proxy_config_row_exists_on_conn 惰性创建。
+        // 注意：刻意不 seed Pi——CHECK 约束（与上游一致）本就不放行 'pi'，
+        // Pi 无本地代理，不需要 proxy_config 行。
 
         // 9. Provider Health 表
         conn.execute("CREATE TABLE IF NOT EXISTS provider_health (
@@ -355,18 +362,6 @@ impl Database {
                 sort_order INTEGER,
                 created_at INTEGER,
                 updated_at INTEGER
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 20. 应用配置快照表（一键整体恢复：每条快照记录三个应用的
-        //     当前供应商 id 与代理接管状态，JSON 细节在 services/snapshots.rs）
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_snapshots (
-                name TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                created_at INTEGER NOT NULL
             )",
             [],
         )
@@ -581,23 +576,6 @@ impl Database {
                             }
                         }
                         Self::set_user_version(conn, 19)?;
-                    }
-                    19 => {
-                        log::info!("迁移数据库从 v19 到 v20（添加应用配置快照表）");
-                        Self::migrate_v19_to_v20(conn)?;
-                        Self::set_user_version(conn, 20)?;
-                    }
-                    20 => {
-                        log::info!("迁移数据库从 v20 到 v21（放行 Pi 的代理配置行）");
-                        Self::migrate_v20_to_v21(conn)?;
-                        Self::set_user_version(conn, 21)?;
-                    }
-                    21 => {
-                        log::info!(
-                            "迁移数据库从 v21 到 v22（移除已裁剪应用的运行时数据与 schema 残留）"
-                        );
-                        Self::migrate_v21_to_v22(conn)?;
-                        Self::set_user_version(conn, 22)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1457,469 +1435,111 @@ impl Database {
         Ok(())
     }
 
-    /// v19 -> v20：添加应用配置快照表（一键整体恢复当前供应商 + 接管状态）。
-    fn migrate_v19_to_v20(conn: &Connection) -> Result<(), AppError> {
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS app_snapshots (
-                name TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("v19 -> v20 创建 app_snapshots 表失败: {e}")))?;
-        Ok(())
-    }
-
-    /// v20 -> v21: 放行 Pi 的 proxy_config 行。
+    /// 把旧版 fork 自造 schema（v20/v21/v22）降级归一到基线上游 v19 形状。
     ///
-    /// v13 -> v14 那次重建补的是 Grok Build，漏掉了 Pi，于是 `proxy_config`
-    /// 的 `app_type` CHECK 约束一直把 'pi' 拒之门外，Pi 永远没有自己的行。
-    /// 后果：`update_proxy_config_for_app` 是裸 UPDATE，匹配 0 行也不报错；
-    /// `get_takeover_status()` 读 `proxy_config.enabled` 恒为 false，所以 Pi 的
-    /// 路由开关打开后界面永远显示未开启，尽管接管本身已经成功。
+    /// 背景（BASELINE.md 第 2 节）：fork 曾把 `SCHEMA_VERSION` 顶到 22——
+    /// - v19→v20：创建 `app_snapshots` 表（快照功能，fork 自造迁移）；
+    /// - v20→v21：放行 `proxy_config` 的 `'pi'` 行（fork 自造迁移）；
+    /// - v21→v22：清理被裁应用数据并把 CHECK 收紧到 claude/codex/pi。
     ///
-    /// 这里重建表以放宽 CHECK，逐列照搬既有数据，并补上 Pi 的默认行。
-    fn migrate_v20_to_v21(conn: &Connection) -> Result<(), AppError> {
-        if !Self::table_exists(conn, "proxy_config")? {
-            return Ok(());
-        }
+    /// 三条迁移已删除；本函数把存量库**归一**回上游 v19 形状，使应用无需
+    /// 手工改库即可打开。只做形状归一，不恢复数据（v22 清理掉的行不复活）：
+    /// 1. `app_snapshots` 整表搬到 `settings`（键前缀 `app_snapshot:`，快照
+    ///    功能保留，存储改挂既有表），随后 DROP；
+    /// 2. `mcp_servers` / `skills` 补回上游 v19 的 5 个 `enabled_*` 列；
+    /// 3. `proxy_config` 按 sqlite_master 存的建表语句原样重建，仅把 CHECK
+    ///    收回上游四值（自然删除 `'pi'` 行——Pi 无本地代理，该行已无消费方）；
+    /// 4. `user_version` 置 19。
+    ///
+    /// 幂等：每步检测到目标形状即跳过。失败即返回 `Err`（调用方是 init）：
+    /// 宁可启动失败，也不带着偏离上游的 schema 静默运行。
+    pub(crate) fn normalize_legacy_trim_schema_on_conn(
+        conn: &Connection,
+        from_version: i32,
+    ) -> Result<(), AppError> {
+        log::info!("Normalizing legacy trim schema v{from_version} → upstream v19");
 
-        // 幂等：建表语句里已经出现 'pi' 说明约束已放宽，无需重建
-        let existing_sql: Option<String> = match conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
-            [],
-            |row| row.get(0),
-        ) {
-            Ok(sql) => Some(sql),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => return Err(AppError::Database(e.to_string())),
-        };
-        if existing_sql
-            .as_deref()
-            .is_some_and(|sql| sql.contains("'pi'"))
-        {
-            return Ok(());
-        }
-
-        // 逐列取现有列名，避免历史迁移造成的列差异导致 COPY 失败或丢列
-        let old_columns = {
+        // 1) app_snapshots → settings（搬移幂等：INSERT OR REPLACE）
+        if Self::table_exists(conn, "app_snapshots")? {
             let mut stmt = conn
-                .prepare("PRAGMA table_info(proxy_config)")
+                .prepare("SELECT name, data FROM app_snapshots")
                 .map_err(|e| AppError::Database(e.to_string()))?;
             let rows = stmt
-                .query_map([], |row| row.get::<_, String>(1))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| AppError::Database(e.to_string()))?
-        };
-
-        conn.execute("DROP TABLE IF EXISTS proxy_config_v21", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE TABLE proxy_config_v21 (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
-                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-                pricing_model_source TEXT NOT NULL DEFAULT 'response',
-                live_takeover_active INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("v20 -> v21 重建 proxy_config 表失败: {e}")))?;
-
-        let target_columns = [
-            "app_type",
-            "proxy_enabled",
-            "listen_address",
-            "listen_port",
-            "enable_logging",
-            "enabled",
-            "auto_failover_enabled",
-            "max_retries",
-            "streaming_first_byte_timeout",
-            "streaming_idle_timeout",
-            "non_streaming_timeout",
-            "circuit_failure_threshold",
-            "circuit_success_threshold",
-            "circuit_timeout_seconds",
-            "circuit_error_rate_threshold",
-            "circuit_min_requests",
-            "default_cost_multiplier",
-            "pricing_model_source",
-            "live_takeover_active",
-            "created_at",
-            "updated_at",
-        ];
-        let shared_columns = target_columns
-            .into_iter()
-            .filter(|column| old_columns.iter().any(|old| old == column))
-            .collect::<Vec<_>>()
-            .join(", ");
-        conn.execute(
-            &format!("INSERT INTO proxy_config_v21 ({shared_columns}) SELECT {shared_columns} FROM proxy_config"),
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("v20 -> v21 迁移 proxy_config 数据失败: {e}")))?;
-
-        conn.execute("DROP TABLE proxy_config", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute("ALTER TABLE proxy_config_v21 RENAME TO proxy_config", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (app_type) VALUES ('pi')",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// v21 -> v22：彻底移除已裁剪应用的运行时数据与 schema 残留。
-    ///
-    /// 本 fork 只保留 claude / codex / pi（ADR-001 永久 fork）。此前几轮裁剪
-    /// 刻意保留了 schema 层的 CHECK 约束与种子行，用来服务旧库的迁移链；
-    /// v21 -> v22 把这份技术债还清：
-    ///
-    /// - 删除 `providers` / `provider_endpoints` / `provider_health` / `prompts`
-    ///   中的非三应用行；
-    /// - 删除 `proxy_config` 中的非三应用行；
-    /// - 删除已无代码引用的 `settings` 键（`common_config_<app>` 及其 `_cleared`
-    ///   变体、Desktop 网关 token 等）；
-    /// - 删除 `proxy_request_logs` / `usage_daily_rollups` 中已裁剪应用的用量行；
-    /// - 清理 `universal_providers` JSON 里已裁剪应用在 `apps` / `models` 下的键；
-    /// - 重建 `mcp_servers` / `skills`，各去掉 5 个已裁剪应用的 `enabled_*` 列；
-    /// - 重建 `proxy_config`，把 `app_type` CHECK 收紧为 claude/codex/pi。
-    ///
-    /// 历史迁移 v0..v21 一行未动：处于任意旧版本的库仍能沿链升到 v22。
-    /// `official_providers_seeded` 不删——它是"只播种一次"的幂等 flag，且播种源
-    /// [`crate::database::dao::providers_seed::OFFICIAL_SEEDS`] 只剩 claude/codex。
-    ///
-    /// 用量表里 **不删** `claude-desktop`：桌面网关流量在展示口径按
-    /// `folded_app_type_sql` 折进 `claude`（`get_usage_summary_by_app` 会返回
-    /// 库中所有有数据的 app_type），删掉等于抹掉真实 Claude 用量史。
-    fn migrate_v21_to_v22(conn: &Connection) -> Result<(), AppError> {
-        // 保留的三应用。反向过滤（NOT IN）而非正向列举，天然覆盖将来新增的
-        // 被裁剪应用。
-        const KEPT_APPS: &str = "'claude','codex','pi'";
-        // 用量表里需要清理的已裁剪应用标识符。故意不含 `claude-desktop`，
-        // 理由见函数文档：它是 `claude` 的展示别名。
-        const TRIMMED_USAGE_APPS: &str =
-            "'gemini','grokbuild','grok','opencode','openclaw','hermes','mcode'";
-
-        // 1) 应用实体表及其关联行。provider_endpoints / provider_health 虽有
-        //    ON DELETE CASCADE，仍显式删除以兼容历史库中可能缺失的外键定义。
-        //    `prompts` 的行由 app_type 参数寻址（UI 只暴露 claude/codex/pi 三个
-        //    tab），被裁剪应用的行永远读不到，属不可达残留，一并清掉。
-        for table in [
-            "provider_endpoints",
-            "provider_health",
-            "providers",
-            "prompts",
-        ] {
-            // 老库可能还没有 app_type 列（该列由各自后续迁移补齐）——没有列就
-            // 意味着行不按应用寻址，无从残留，直接跳过。
-            if Self::table_exists(conn, table)? && Self::has_column(conn, table, "app_type")? {
+            let mut moved = 0usize;
+            for row in rows {
+                let (name, data) = row.map_err(|e| AppError::Database(e.to_string()))?;
                 conn.execute(
-                    &format!("DELETE FROM \"{table}\" WHERE app_type NOT IN ({KEPT_APPS})"),
-                    [],
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![format!("app_snapshot:{name}"), data],
                 )
-                .map_err(|e| {
-                    AppError::Database(format!("v21 -> v22 清理 {table} 残留行失败: {e}"))
-                })?;
+                .map_err(|e| AppError::Database(e.to_string()))?;
+                moved += 1;
             }
+            drop(stmt);
+            conn.execute("DROP TABLE app_snapshots", [])
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            log::info!("Migrated {moved} app snapshot(s) from app_snapshots table to settings");
         }
 
-        // 2) 用量表：不删 claude-desktop（见函数文档）。这两个表是
-        //    `get_usage_summary_by_app` 的数据源，它按 GROUP BY app_type 返回
-        //    "库中所有有数据的应用"，残留行会以已删除应用的身份出现在用量看板，
-        //    并让"全部"聚合对不上三个可筛选应用之和。
-        for table in ["proxy_request_logs", "usage_daily_rollups"] {
-            // 同上：v10 时代的 proxy_request_logs 还没有 app_type 列，直接
-            // DELETE 会报 no such column，整条迁移链失败（遗留库无法升级）。
-            if Self::table_exists(conn, table)? && Self::has_column(conn, table, "app_type")? {
-                conn.execute(
-                    &format!("DELETE FROM \"{table}\" WHERE app_type IN ({TRIMMED_USAGE_APPS})"),
-                    [],
-                )
-                .map_err(|e| {
-                    AppError::Database(format!("v21 -> v22 清理 {table} 用量残留失败: {e}"))
-                })?;
-            }
-        }
-
-        if Self::table_exists(conn, "settings")? {
-            // `LIKE` 里的 `_` 是单字符通配符，必须 ESCAPE 才是字面下划线，
-            // 否则 `common_config_claude%` 这类模式会误伤保留键。
-            conn.execute(
-                "DELETE FROM settings
-                  WHERE key IN (
-                        'gemini_common_config_credentials_scrubbed_v1',
-                        'claude_desktop_gateway_token'
-                        )
-                     OR key LIKE 'common\\_config\\_gemini%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_grok%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_opencode%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_openclaw%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_hermes%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_mcode%' ESCAPE '\\'
-                     OR key LIKE 'common\\_config\\_claude\\_desktop%' ESCAPE '\\'",
-                [],
-            )
-            .map_err(|e| AppError::Database(format!("v21 -> v22 清理 settings 残留键失败: {e}")))?;
-        }
-
-        // 3) `universal_providers` 是一个 JSON blob。三应用结构体反序列化时会
-        //    静默忽略未知字段，所以残留的 `"gemini": true` 不会崩，但会一直躺在
-        //    库里、被原样写回。这里主动剥掉，避免"删完又出现"。
-        if Self::table_exists(conn, "settings")? {
-            Self::strip_trimmed_apps_from_universal_providers(conn)?;
-        }
-
-        // 4) mcp_servers：只保留 claude/codex 两个启用标志
-        Self::rebuild_table_keeping_columns(
-            conn,
-            "mcp_servers",
-            "id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
-             description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
-             enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0",
-            &[
-                ("id", "''"),
-                ("name", "''"),
-                ("server_config", "'{}'"),
-                ("description", "NULL"),
-                ("homepage", "NULL"),
-                ("docs", "NULL"),
-                ("tags", "'[]'"),
-                ("enabled_claude", "0"),
-                ("enabled_codex", "0"),
-            ],
-        )?;
-
-        // 5) skills：同样只保留 claude/codex
-        Self::rebuild_table_keeping_columns(
-            conn,
-            "skills",
-            "id TEXT PRIMARY KEY,
-             name TEXT NOT NULL,
-             description TEXT,
-             directory TEXT NOT NULL,
-             repo_owner TEXT,
-             repo_name TEXT,
-             repo_branch TEXT DEFAULT 'main',
-             readme_url TEXT,
-             enabled_claude BOOLEAN NOT NULL DEFAULT 0,
-             enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-             installed_at INTEGER NOT NULL DEFAULT 0,
-             content_hash TEXT,
-             updated_at INTEGER NOT NULL DEFAULT 0",
-            &[
-                ("id", "''"),
-                ("name", "''"),
-                ("description", "NULL"),
-                ("directory", "''"),
-                ("repo_owner", "NULL"),
-                ("repo_name", "NULL"),
-                ("repo_branch", "'main'"),
-                ("readme_url", "NULL"),
-                ("enabled_claude", "0"),
-                ("enabled_codex", "0"),
-                ("installed_at", "0"),
-                ("content_hash", "NULL"),
-                ("updated_at", "0"),
-            ],
-        )?;
-
-        // 6) proxy_config：先删非三应用行（此刻 CHECK 仍放行它们），再按收紧后的
-        //    CHECK 重建。`live_takeover_active` 是 v13 -> v14 引入的列，必须一并保留。
-        if Self::table_exists(conn, "proxy_config")? {
-            conn.execute(
-                &format!("DELETE FROM proxy_config WHERE app_type NOT IN ({KEPT_APPS})"),
-                [],
-            )
-            .map_err(|e| {
-                AppError::Database(format!("v21 -> v22 清理 proxy_config 残留行失败: {e}"))
-            })?;
-
-            Self::rebuild_table_keeping_columns(
-                conn,
-                "proxy_config",
-                "app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','pi')),
-                 proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-                 listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-                 enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                 max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-                 streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-                 circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-                 circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-                 circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-                 default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-                 pricing_model_source TEXT NOT NULL DEFAULT 'response',
-                 live_takeover_active INTEGER NOT NULL DEFAULT 0,
-                 created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))",
-                &[
-                    ("app_type", "'claude'"),
-                    ("proxy_enabled", "0"),
-                    ("listen_address", "'127.0.0.1'"),
-                    ("listen_port", "15721"),
-                    ("enable_logging", "1"),
-                    ("enabled", "0"),
-                    ("auto_failover_enabled", "0"),
-                    ("max_retries", "3"),
-                    ("streaming_first_byte_timeout", "60"),
-                    ("streaming_idle_timeout", "120"),
-                    ("non_streaming_timeout", "600"),
-                    ("circuit_failure_threshold", "4"),
-                    ("circuit_success_threshold", "2"),
-                    ("circuit_timeout_seconds", "60"),
-                    ("circuit_error_rate_threshold", "0.6"),
-                    ("circuit_min_requests", "10"),
-                    ("default_cost_multiplier", "'1'"),
-                    ("pricing_model_source", "'response'"),
-                    ("live_takeover_active", "0"),
-                    ("created_at", "datetime('now')"),
-                    ("updated_at", "datetime('now')"),
-                ],
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// 剥掉 `settings.universal_providers` JSON 中每个条目在 `apps` / `models`
-    /// 下属于已裁剪应用的键。
-    ///
-    /// 只在能解析且确实发生删除时写回；JSON 解析失败、结构不是对象、或没有
-    /// 任何键可删时一律保持原值——迁移不能因为历史脏数据而失败。
-    fn strip_trimmed_apps_from_universal_providers(conn: &Connection) -> Result<(), AppError> {
-        use rusqlite::OptionalExtension;
-
-        // JSON 里可能出现的已裁剪应用键。camelCase 形式一并覆盖，因为该 blob
-        // 的历史写入方使用过 camelCase。
-        const TRIMMED_JSON_KEYS: &[&str] = &[
-            "gemini",
-            "grokbuild",
-            "grok",
-            "opencode",
-            "openclaw",
-            "hermes",
-            "mcode",
-            "claudeDesktop",
-            "claude-desktop",
+        // 2) mcp_servers / skills：补回上游 v19 的列（DEFAULT 0，本 fork 不写但保留列）
+        const UPSTREAM_FLAG_COLUMNS: [&str; 5] = [
+            "enabled_gemini",
+            "enabled_grokbuild",
+            "enabled_opencode",
+            "enabled_mcode",
+            "enabled_hermes",
         ];
-
-        let raw: Option<String> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'universal_providers'",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| {
-                AppError::Database(format!("v21 -> v22 读取 universal_providers 失败: {e}"))
-            })?;
-
-        let Some(raw) = raw else { return Ok(()) };
-        let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&raw) else {
-            return Ok(());
-        };
-        let Some(entries) = root.as_object_mut() else {
-            return Ok(());
-        };
-
-        let mut changed = false;
-        for entry in entries.values_mut() {
-            let Some(fields) = entry.as_object_mut() else {
+        for table in ["mcp_servers", "skills"] {
+            if !Self::table_exists(conn, table)? {
                 continue;
-            };
-            for holder in ["apps", "models"] {
-                let Some(bucket) = fields.get_mut(holder).and_then(|v| v.as_object_mut()) else {
-                    continue;
-                };
-                for key in TRIMMED_JSON_KEYS {
-                    if bucket.remove(*key).is_some() {
-                        changed = true;
+            }
+            for column in UPSTREAM_FLAG_COLUMNS {
+                Self::add_column_if_missing(conn, table, column, "BOOLEAN NOT NULL DEFAULT 0")?;
+            }
+        }
+
+        // 3) proxy_config：按存储的建表语句重建，CHECK 收回上游四值
+        if Self::table_exists(conn, "proxy_config")? {
+            let create_sql: Option<String> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            if let Some(create_sql) = create_sql {
+                if create_sql.contains("'pi'") {
+                    conn.execute("DROP TABLE IF EXISTS proxy_config_norm", [])
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    let norm_sql = create_sql
+                        .replace("proxy_config", "proxy_config_norm")
+                        .replace("('claude','codex','pi')", "('claude','codex','gemini','grokbuild')");
+                    if norm_sql == create_sql {
+                        return Err(AppError::Database(
+                            "proxy_config 含 'pi' 但未能改写 CHECK 约束（未知建表语句形态）".into(),
+                        ));
                     }
+                    conn.execute(&norm_sql, [])
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    conn.execute(
+                        "INSERT INTO proxy_config_norm SELECT * FROM proxy_config WHERE app_type != 'pi'",
+                        [],
+                    )
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                    conn.execute("DROP TABLE proxy_config", [])
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    conn.execute("ALTER TABLE proxy_config_norm RENAME TO proxy_config", [])
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                    log::info!("proxy_config CHECK restored to upstream 4-value constraint");
                 }
             }
         }
 
-        if changed {
-            let next = serde_json::to_string(&root).map_err(|e| {
-                AppError::Database(format!("v21 -> v22 序列化 universal_providers 失败: {e}"))
-            })?;
-            conn.execute(
-                "UPDATE settings SET value = ?1 WHERE key = 'universal_providers'",
-                [next],
-            )
-            .map_err(|e| {
-                AppError::Database(format!("v21 -> v22 回写 universal_providers 失败: {e}"))
-            })?;
-        }
-
-        Ok(())
-    }
-
-    /// 按 `kept` 声明的列重建 `table`（先建 `<table>_v22` 再改名）。
-    ///
-    /// 逐列取现有列名做交集：`kept` 里的列在旧表中缺失时用 fallback 表达式补齐，
-    /// 避免历史迁移造成的列差异让 COPY 失败或丢列。表不存在时是 no-op。
-    fn rebuild_table_keeping_columns(
-        conn: &Connection,
-        table: &str,
-        columns_ddl: &str,
-        kept: &[(&str, &str)],
-    ) -> Result<(), AppError> {
-        if !Self::table_exists(conn, table)? {
-            return Ok(());
-        }
-        let tmp = format!("{table}_v22");
-        Self::validate_identifier(&tmp, "表名")?;
-
-        conn.execute(&format!("DROP TABLE IF EXISTS \"{tmp}\""), [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(&format!("CREATE TABLE \"{tmp}\" ({columns_ddl})"), [])
-            .map_err(|e| AppError::Database(format!("v21 -> v22 重建 {table} 表失败: {e}")))?;
-
-        let select_exprs = kept
-            .iter()
-            .map(|(column, fallback)| {
-                Self::has_column(conn, table, column).map(|exists| {
-                    if exists {
-                        format!("\"{column}\"")
-                    } else {
-                        (*fallback).to_string()
-                    }
-                })
-            })
-            .collect::<Result<Vec<_>, AppError>>()?
-            .join(", ");
-        let column_list = kept
-            .iter()
-            .map(|(column, _)| format!("\"{column}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        conn.execute(
-            &format!(
-                "INSERT INTO \"{tmp}\" ({column_list}) SELECT {select_exprs} FROM \"{table}\""
-            ),
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("v21 -> v22 迁移 {table} 数据失败: {e}")))?;
-
-        conn.execute(&format!("DROP TABLE \"{table}\""), [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(&format!("ALTER TABLE \"{tmp}\" RENAME TO \"{table}\""), [])
-            .map_err(|e| AppError::Database(format!("v21 -> v22 重命名 {tmp} 失败: {e}")))?;
+        Self::set_user_version(conn, 19)?;
         Ok(())
     }
 
@@ -3092,7 +2712,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v13_to_v14_legacy_grokbuild_row_is_purged_by_final_chain() -> Result<(), AppError> {
+    fn migrate_v13_to_v14_restores_grokbuild_row_per_upstream() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::create_tables_on_conn(&conn)?;
         conn.execute("DELETE FROM proxy_config WHERE app_type = 'grokbuild'", [])?;
@@ -3105,13 +2725,13 @@ mod tests {
         Database::apply_schema_migrations_on_conn(&conn)?;
 
         assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        // 历史 v13 -> v14 曾补过 grokbuild 行，但 v22 裁剪清退后不再保留
+        // schema 回到上游 v19：v13 -> v14 恢复 grokbuild 行（上游语义，fork 不消费但保留）
         let grok_rows: i64 = conn.query_row(
             "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'grokbuild'",
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(grok_rows, 0);
+        assert_eq!(grok_rows, 1);
         let codex_values: (i64, i64) = conn.query_row(
             "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'codex'",
             [],
@@ -3148,13 +2768,13 @@ mod tests {
         Database::apply_schema_migrations_on_conn(&conn)?;
 
         assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        // 历史 v14 -> v15 曾加过 enabled_grokbuild 列，v22 裁剪时已删除该列
-        assert!(!Database::has_column(
+        // 上游 v19 形状：enabled_grokbuild 列保留
+        assert!(Database::has_column(
             &conn,
             "mcp_servers",
             "enabled_grokbuild"
         )?);
-        assert!(!Database::has_column(&conn, "skills", "enabled_grokbuild")?);
+        assert!(Database::has_column(&conn, "skills", "enabled_grokbuild")?);
         let mcp_codex: i64 = conn.query_row(
             "SELECT enabled_codex FROM mcp_servers WHERE id = 'mcp-1'",
             [],
@@ -3208,8 +2828,8 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-        // v15 -> v16 只重置 codex 的会话用量；gemini 行随后被 v22 裁剪清退
-        assert_eq!(counts, (0, 0, 0, 1));
+        // v15 -> v16 只重置 codex 的会话用量；gemini 行按上游语义保留
+        assert_eq!(counts, (0, 1, 0, 1));
         Ok(())
     }
 
@@ -3271,312 +2891,64 @@ mod tests {
         Ok(())
     }
 
+    /// 用**真实存量库副本**验证归一（可选，手动运行）：
+    /// `CCSW_LEGACY_DB_PATH=<旧库路径> cargo test --lib normalize_real_legacy_database -- --ignored`
+    ///
+    /// 测试只读副本，不触碰原库。用于每次 schema 相关改动后的端到端复核。
     #[test]
-    fn migrate_v20_to_v21_adds_pi_proxy_row_and_preserves_values() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        // 复刻 v20 时代的表结构：CHECK 只放行四个 app，Pi 根本建不出行
-        conn.execute(
-            "CREATE TABLE proxy_config (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
-                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-                pricing_model_source TEXT NOT NULL DEFAULT 'response',
-                live_takeover_active INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-            [],
-        )?;
-        conn.execute(
-            "INSERT INTO proxy_config (app_type, enabled, max_retries) VALUES ('claude', 1, 9)",
-            [],
-        )?;
-        Database::set_user_version(&conn, 20)?;
+    #[ignore = "requires CCSW_LEGACY_DB_PATH pointing at a copy of a legacy v20-v22 database"]
+    fn normalize_real_legacy_database() -> Result<(), AppError> {
+        let path = std::env::var("CCSW_LEGACY_DB_PATH")
+            .expect("set CCSW_LEGACY_DB_PATH to a legacy database copy");
+        let conn = Connection::open(&path).map_err(|e| AppError::Database(e.to_string()))?;
+        let before = Database::get_user_version(&conn)?;
+        assert!(
+            (20..=22).contains(&before),
+            "fixture must be a legacy trim database, got v{before}"
+        );
+        let providers_before: i64 =
+            conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
+        let usage_before: i64 =
+            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))?;
 
-        Database::apply_schema_migrations_on_conn(&conn)?;
+        Database::normalize_legacy_trim_schema_on_conn(&conn, before)?;
 
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-
-        let pi_rows: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'pi'",
+        assert_eq!(Database::get_user_version(&conn)?, 19);
+        let create_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(pi_rows, 1, "v20 -> v21 必须为 Pi 建出 proxy_config 行");
-
-        let (enabled, retries): (i64, i64) = conn.query_row(
-            "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!((enabled, retries), (1, 9), "重建表不能丢已有取值");
-
-        // 放宽后的约束必须真的接受 Pi（否则接管状态依旧写不进去）
-        conn.execute(
-            "UPDATE proxy_config SET enabled = 1 WHERE app_type = 'pi'",
-            [],
-        )?;
-        let pi_enabled: i64 = conn.query_row(
-            "SELECT enabled FROM proxy_config WHERE app_type = 'pi'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(pi_enabled, 1);
+        assert!(!create_sql.contains("'pi'"));
+        let providers_after: i64 =
+            conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
+        let usage_after: i64 =
+            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))?;
+        assert_eq!(providers_before, providers_after, "供应商数据零丢失");
+        assert_eq!(usage_before, usage_after, "用量数据零丢失");
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        assert_eq!(integrity, "ok");
         Ok(())
     }
 
     #[test]
-    fn migrate_v21_to_v22_purges_trimmed_apps_and_narrows_schema() -> Result<(), AppError> {
-        const TRIMMED_APPS: [&str; 7] = [
-            "claude-desktop",
-            "gemini",
-            "grokbuild",
-            "opencode",
-            "openclaw",
-            "hermes",
-            "mcode",
-        ];
-
+    fn fresh_database_matches_upstream_v19_invariants() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
-        // 复刻 v21 形状：proxy_config 的 CHECK 仍放行已裁剪应用，
-        // mcp_servers / skills 仍带 5 个已裁剪应用的 enabled_* 列。
-        conn.execute_batch(
-            "CREATE TABLE proxy_config (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild','pi')),
-                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-                pricing_model_source TEXT NOT NULL DEFAULT 'response',
-                live_takeover_active INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE TABLE providers (
-                id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL,
-                settings_config TEXT NOT NULL DEFAULT '{}', PRIMARY KEY (id, app_type)
-            );
-            CREATE TABLE provider_endpoints (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL,
-                app_type TEXT NOT NULL, url TEXT NOT NULL
-            );
-            CREATE TABLE provider_health (
-                provider_id TEXT NOT NULL, app_type TEXT NOT NULL,
-                is_healthy INTEGER NOT NULL DEFAULT 1, consecutive_failures INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL, PRIMARY KEY (provider_id, app_type)
-            );
-            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-            CREATE TABLE mcp_servers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
-                description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
-                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-                enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
-                enabled_opencode BOOLEAN NOT NULL DEFAULT 0, enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-                enabled_hermes BOOLEAN NOT NULL DEFAULT 0
-            );
-            CREATE TABLE skills (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, directory TEXT NOT NULL,
-                repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT,
-                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-                enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
-                enabled_opencode BOOLEAN NOT NULL DEFAULT 0, enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-                enabled_hermes BOOLEAN NOT NULL DEFAULT 0, installed_at INTEGER NOT NULL DEFAULT 0,
-                content_hash TEXT, updated_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE prompts (
-                id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL
-            );
-            CREATE TABLE proxy_request_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, app_type TEXT NOT NULL,
-                data_source TEXT, input_tokens INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE usage_daily_rollups (
-                app_type TEXT NOT NULL, rollup_date TEXT NOT NULL,
-                request_count INTEGER NOT NULL DEFAULT 0
-            );",
-        )?;
-        conn.execute_batch(
-            "INSERT INTO providers (id, app_type, name) VALUES
-                ('doulor-claude','claude','Doulor Claude'), ('doulor-codex','codex','Doulor Codex'),
-                ('doulor-pi','pi','Doulor Pi'), ('legacy-gemini','gemini','Legacy Gemini'),
-                ('legacy-desktop','claude-desktop','Legacy Desktop');
-             INSERT INTO provider_endpoints (provider_id, app_type, url) VALUES
-                ('legacy-gemini','gemini','https://legacy.example'), ('doulor-claude','claude','https://api.example');
-             INSERT INTO provider_health (provider_id, app_type, updated_at) VALUES
-                ('legacy-gemini','gemini','2026-01-01'), ('doulor-claude','claude','2026-01-01');
-             INSERT INTO settings (key, value) VALUES
-                ('common_config_opencode','{}'), ('gemini_common_config_credentials_scrubbed_v1','true'),
-                ('common_config_gemini','{}'), ('common_config_gemini_cleared','true'),
-                ('common_config_openclaw','{}'), ('claude_desktop_gateway_token','tok'),
-                ('common_config_claude','{}'), ('common_config_claude_cleared','true'),
-                ('common_config_legacy_migrated_v1','true'),
-                ('official_providers_seeded','true');
-             INSERT INTO proxy_config (app_type, enabled, max_retries) VALUES
-                ('claude', 1, 9), ('codex', 0, 3), ('pi', 0, 3), ('gemini', 0, 5), ('grokbuild', 0, 3);
-             INSERT INTO mcp_servers (id, name, server_config) VALUES ('m1','Server 1','{}');
-             INSERT INTO skills (id, name, directory) VALUES ('s1','Skill 1','/tmp/s1');
-             INSERT INTO prompts (id, app_type, name) VALUES
-                ('p-claude','claude','Claude Prompt'), ('p-grok','grokbuild','Grok Prompt'),
-                ('p-mcode','mcode','Mcode Prompt');
-             INSERT INTO proxy_request_logs (app_type, data_source) VALUES
-                ('claude','proxy'), ('claude-desktop','proxy'), ('codex','proxy'),
-                ('pi','proxy'), ('opencode','opencode_session'), ('gemini','gemini_session');
-             INSERT INTO usage_daily_rollups (app_type, rollup_date, request_count) VALUES
-                ('claude','2026-01-01',10), ('claude-desktop','2026-01-01',2),
-                ('codex','2026-01-01',5), ('grokbuild','2026-01-01',1),
-                ('opencode','2026-01-01',3), ('mcode','2026-01-01',1);",
-        )?;
-        // `universal_providers` 用参数化插入，避免 JSON 里的双引号与 Rust
-        // 字符串字面量冲突。
-        let universal_providers = serde_json::json!({
-            "u1": {
-                "id": "u1", "name": "NewAPI", "providerType": "newapi",
-                "apps": {"claude": true, "codex": true, "gemini": true},
-                "baseUrl": "https://x/v1", "apiKey": "sk-x",
-                "models": {
-                    "claude": {"model": "m1"},
-                    "codex": {"model": "m2"},
-                    "gemini": {"model": "g1"}
-                }
-            },
-            "u2": {
-                "id": "u2", "name": "Only Gemini", "providerType": "custom",
-                "apps": {"claude": false, "codex": false, "gemini": true},
-                "baseUrl": "https://y/v1", "apiKey": "sk-y",
-                "models": {}
-            }
-        })
-        .to_string();
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES ('universal_providers', ?1)",
-            [&universal_providers],
-        )?;
-        Database::set_user_version(&conn, 21)?;
+        Database::create_tables_on_conn(&conn)?;
+        assert_eq!(Database::get_user_version(&conn)?, 0);
 
-        Database::apply_schema_migrations_on_conn(&conn)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-
-        // 1) 已裁剪应用的数据被清空，三应用数据完好
-        let providers: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
-        assert_eq!(providers, 3, "只应剩下 claude/codex/pi 的供应商");
-        let endpoints: i64 =
-            conn.query_row("SELECT COUNT(*) FROM provider_endpoints", [], |r| r.get(0))?;
-        assert_eq!(endpoints, 1);
-        let health: i64 =
-            conn.query_row("SELECT COUNT(*) FROM provider_health", [], |r| r.get(0))?;
-        assert_eq!(health, 1);
-
-        // 2) settings：陈旧键（含 `_cleared` 变体与 Desktop token）删除
-        let stale_settings: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM settings WHERE key IN
-                ('common_config_opencode','common_config_gemini','common_config_gemini_cleared',
-                 'common_config_openclaw','claude_desktop_gateway_token',
-                 'gemini_common_config_credentials_scrubbed_v1')",
+        // schema 不变量：proxy_config 的 CHECK 与上游 v3.20.4 一致，不含 'pi'
+        let create_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
             [],
-            |r| r.get(0),
+            |row| row.get(0),
         )?;
-        assert_eq!(stale_settings, 0, "已裁剪应用的 settings 键必须清空");
+        assert!(create_sql.contains("'claude','codex','gemini','grokbuild'"));
+        assert!(!create_sql.contains("'pi'"), "CHECK 不得放行 'pi'");
 
-        // 保留键必须原样存活：三应用自己的配置、跨应用迁移 flag、幂等播种 flag。
-        let kept_settings: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM settings WHERE key IN
-                ('common_config_claude','common_config_claude_cleared',
-                 'common_config_legacy_migrated_v1','official_providers_seeded')",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(kept_settings, 4, "保留键不能被 LIKE 模式误伤");
-
-        // 3) prompts：不可达的已裁剪应用提示词清空，三应用保留
-        let prompts: i64 = conn.query_row("SELECT COUNT(*) FROM prompts", [], |r| r.get(0))?;
-        assert_eq!(prompts, 1, "只应剩下 claude 的提示词");
-
-        // 4) 用量表：已裁剪应用清空，`claude-desktop` 必须保留（claude 的展示别名）
-        let logs: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))?;
-        assert_eq!(logs, 4, "claude/claude-desktop/codex/pi 的日志应保留");
-        let desktop_logs: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM proxy_request_logs WHERE app_type = 'claude-desktop'",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(
-            desktop_logs, 1,
-            "claude-desktop 是 claude 的展示别名，日志不能删"
-        );
-        let rollups: i64 =
-            conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |r| r.get(0))?;
-        assert_eq!(rollups, 3, "claude/claude-desktop/codex 的日汇总应保留");
-        let desktop_rollups: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM usage_daily_rollups WHERE app_type = 'claude-desktop'",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(
-            desktop_rollups, 1,
-            "claude-desktop 的日汇总不能删，否则会抹掉 Claude 用量史"
-        );
-
-        // 5) universal_providers：已裁剪应用的 apps / models 键被剥掉，其余原样
-        let raw: String = conn.query_row(
-            "SELECT value FROM settings WHERE key = 'universal_providers'",
-            [],
-            |r| r.get(0),
-        )?;
-        let parsed: serde_json::Value =
-            serde_json::from_str(&raw).expect("universal_providers 应是合法 JSON");
-        let u1 = &parsed["u1"];
-        assert!(u1["apps"].get("gemini").is_none(), "apps.gemini 应已剥掉");
-        assert!(
-            u1["models"].get("gemini").is_none(),
-            "models.gemini 应已剥掉"
-        );
-        assert_eq!(u1["apps"]["claude"], serde_json::json!(true));
-        assert_eq!(u1["models"]["codex"]["model"], serde_json::json!("m2"));
-        assert!(parsed["u2"]["apps"].get("gemini").is_none());
-        assert_eq!(parsed["u2"]["apiKey"], serde_json::json!("sk-y"));
-
-        let seeded: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM settings WHERE key = 'official_providers_seeded'",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(seeded, 1, "official_providers_seeded 是幂等 flag，必须保留");
-
-        // 6) proxy_config：只剩三行、取值保留、CHECK 收紧
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))?;
-        assert_eq!(rows, 3);
-        let (enabled, retries): (i64, i64) = conn.query_row(
-            "SELECT enabled, max_retries FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!((enabled, retries), (1, 9), "重建表不能丢已有取值");
-        assert!(Database::has_column(
-            &conn,
-            "proxy_config",
-            "live_takeover_active"
-        )?);
-        for app in TRIMMED_APPS {
-            assert!(
-                conn.execute("INSERT INTO proxy_config (app_type) VALUES (?1)", [app])
-                    .is_err(),
-                "CHECK 必须已拒绝 {app}"
-            );
-        }
-
-        // 7) mcp_servers / skills：5 列已删、两列保留、数据未丢
+        // 上游 v19 的 mcp_servers / skills 形状：5 个已裁剪应用列保留（DEFAULT 0）
         for table in ["mcp_servers", "skills"] {
             for column in [
                 "enabled_gemini",
@@ -3586,17 +2958,117 @@ mod tests {
                 "enabled_hermes",
             ] {
                 assert!(
-                    !Database::has_column(&conn, table, column)?,
-                    "{table}.{column} 应已删除"
+                    Database::has_column(&conn, table, column)?,
+                    "{table}.{column} 必须存在（上游 v19 形状）"
                 );
             }
-            assert!(Database::has_column(&conn, table, "enabled_claude")?);
-            assert!(Database::has_column(&conn, table, "enabled_codex")?);
-            let count: i64 =
-                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
-            assert_eq!(count, 1, "{table} 的行不能丢");
         }
 
+        // 不变量测试：写入 'pi' 行必须被 CHECK 拒绝
+        assert!(
+            conn.execute("INSERT INTO proxy_config (app_type) VALUES ('pi')", [])
+                .is_err(),
+            "proxy_config CHECK 必须拒绝 'pi' 行"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_legacy_v22_database_restores_upstream_shapes() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        // 复刻旧 fork v22 库：3 值 CHECK + pi 行、缺 5 列的 mcp_servers/skills、
+        // app_snapshots 独立表
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
+                description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
+                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0);
+             CREATE TABLE skills (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, directory TEXT NOT NULL,
+                repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT,
+                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                installed_at INTEGER NOT NULL DEFAULT 0, content_hash TEXT,
+                updated_at INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE proxy_config (
+                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','pi')),
+                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
+                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
+                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
+                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
+                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
+                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
+                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
+                pricing_model_source TEXT NOT NULL DEFAULT 'response',
+                live_takeover_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE app_snapshots (
+                name TEXT PRIMARY KEY, data TEXT NOT NULL, created_at INTEGER NOT NULL);
+             INSERT INTO proxy_config (app_type, enabled) VALUES ('claude', 1), ('codex', 0), ('pi', 0);
+             INSERT INTO mcp_servers (id, name, server_config) VALUES ('m1', 'M', '{}');
+             INSERT INTO app_snapshots (name, data, created_at)
+                VALUES ('work', '{\"name\":\"work\",\"created_at\":1000,\"apps\":{}}', 1000);",
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Database::set_user_version(&conn, 22)?;
+
+        Database::normalize_legacy_trim_schema_on_conn(&conn, 22)?;
+
+        // 归一后：v19 版本 + 上游形状
+        assert_eq!(Database::get_user_version(&conn)?, 19);
+        let create_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(create_sql.contains("'claude','codex','gemini','grokbuild'"));
+        assert!(!create_sql.contains("'pi'"));
+
+        // pi 行删除，claude/codex 数据完好
+        let claude_enabled: i64 = conn.query_row(
+            "SELECT enabled FROM proxy_config WHERE app_type = 'claude'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(claude_enabled, 1, "归一不能丢 claude 配置");
+        assert!(
+            conn.query_row("SELECT 1 FROM proxy_config WHERE app_type = 'pi'", [], |r| r.get::<_, i64>(0))
+                .is_err(),
+            "pi 行必须被删除"
+        );
+        assert!(Database::has_column(&conn, "proxy_config", "live_takeover_active")?);
+
+        // mcp_servers / skills 补回 5 列，数据未丢
+        for table in ["mcp_servers", "skills"] {
+            for column in [
+                "enabled_gemini",
+                "enabled_grokbuild",
+                "enabled_opencode",
+                "enabled_mcode",
+                "enabled_hermes",
+            ] {
+                assert!(Database::has_column(&conn, table, column)?);
+            }
+        }
+        let mcp: i64 = conn.query_row("SELECT COUNT(*) FROM mcp_servers", [], |r| r.get(0))?;
+        assert_eq!(mcp, 1, "归一不能丢 mcp_servers 数据");
+
+        // app_snapshots → settings 搬移 + DROP
+        let snapshot: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'app_snapshot:work'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        assert!(snapshot.is_some(), "快照必须搬到 settings");
+        assert!(!Database::table_exists(&conn, "app_snapshots")?);
+
+        // 幂等：再跑一次不报错、版本不变
+        Database::normalize_legacy_trim_schema_on_conn(&conn, 22)?;
+        assert_eq!(Database::get_user_version(&conn)?, 19);
         Ok(())
     }
 }

@@ -50,8 +50,13 @@ use std::sync::{Arc, Mutex};
 // DAO 方法通过 impl Database 提供，无需额外导出
 
 /// 当前 Schema 版本号
-/// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 22;
+///
+/// **schema 不变量（BASELINE.md 第 2 节）**：本值必须等于基线上游
+/// （farion1231/cc-switch v3.20.4）的 `SCHEMA_VERSION`（=19）。
+/// fork 不得自造迁移、不得让本值高于同版本上游——否则每次跟上游都要
+/// 手改数据库，且与官方构建互不兼容。旧版 fork 曾顶到 22，存量库由
+/// `schema::normalize_legacy_trim_schema` 在打开时自动降级归一。
+pub(crate) const SCHEMA_VERSION: i32 = 19;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -150,6 +155,30 @@ impl Database {
             conn: Arc::new(Mutex::new(conn)),
         };
         db.create_tables()?;
+
+        // 存量 fork 数据库（曾被顶到 v20/v21/v22）先降级归一到上游 v19 形状，
+        // 否则下方的迁移链会把它当「版本过新」拒绝。必须在备份与迁移之前执行。
+        {
+            let version = {
+                let conn = lock_conn!(db.conn);
+                Self::get_user_version(&conn)?
+            };
+            if (20..=22).contains(&version) {
+                log::info!(
+                    "Detected legacy trim schema v{version}; normalizing down to upstream v{SCHEMA_VERSION}"
+                );
+                // 归一是破坏性操作（DROP app_snapshots、删 'pi' 行），
+                // 先落一份文件级备份，失败可回滚。
+                if let Err(e) = db.backup_database_file() {
+                    log::warn!("Pre-normalization backup failed, aborting normalize: {e}");
+                    return Err(AppError::Database(format!(
+                        "归一旧版数据库前的备份失败，已中止（错误: {e}）。请手动备份数据库后重试"
+                    )));
+                }
+                let conn = lock_conn!(db.conn);
+                Self::normalize_legacy_trim_schema_on_conn(&conn, version)?;
+            }
+        }
 
         // Pre-migration backup: only when upgrading from an existing database
         {
