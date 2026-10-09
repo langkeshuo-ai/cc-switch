@@ -199,3 +199,8 @@
   remove）：**整文档重写会丢掉 JSON5 注释**。只改 `providers.<key>.baseUrl` 的
   手术式替换（`replace_json_string_field_raw`）保留注释。这是 M1 已知限制，
   不在本轮改 JSON5 写回器。接管停止仍走 `restore_models_document_raw` 字节级恢复。
+
+> **2026-10-10 批注**：上文「Pi 接管是本 fork 核心能力」为 T3 之前的表述。
+> 当日已移除 fork 自建的 Pi 本地代理层（见 `docs/pi-proxy-removal-20261010.md`），
+> Pi 现仅保留纯配置管理；`supportsProxy` 门控语义随之失效，Pi 不再出现在任何
+> 接管/路由 UI 中。后续 cherry-pick 涉及 ProviderList 门控时按此新边界判定。
