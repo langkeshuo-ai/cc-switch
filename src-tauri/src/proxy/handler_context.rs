@@ -119,15 +119,8 @@ impl RequestContext {
             .await
             .unwrap_or_default();
 
-        let current_provider_id = if app_type == AppType::Pi {
-            // Pi：以 settings.json defaultProvider 为准（Pi CLI 唯一跟随的源），
-            // 与 provider_router.select_providers 的解析保持一致
-            crate::pi_config::pi_proxy_current_provider_key().unwrap_or_else(|| {
-                crate::settings::get_current_provider(&app_type).unwrap_or_default()
-            })
-        } else {
-            crate::settings::get_current_provider(&app_type).unwrap_or_default()
-        };
+        let current_provider_id =
+            crate::settings::get_current_provider(&app_type).unwrap_or_default();
 
         // 从请求体提取模型名称
         let request_model = body

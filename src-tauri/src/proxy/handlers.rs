@@ -131,58 +131,6 @@ pub async fn handle_messages(
     handle_messages_for_app(state, request, AppType::Claude, "Claude", "claude", None).await
 }
 
-// ============================================================================
-// Pi API 处理器（透明转发：方言由供应商 `api` 字段决定，与上游一致）
-// ============================================================================
-
-/// Pi anthropic-messages 方言入口：`/pi/anthropic/v1/messages` 等
-pub async fn handle_pi_messages(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_messages_for_app(
-        state,
-        request,
-        AppType::Pi,
-        "Pi",
-        "pi",
-        Some("/pi/anthropic"),
-    )
-    .await
-}
-
-/// Pi openai-completions 方言入口：`/pi/openai/v1/chat/completions` 等
-///
-/// 透传客户端原始路径（`strip_prefix` 剥掉 `/pi/openai`），使上游收到
-/// `/v1/chat/completions` 而不是 `/chat/completions`——多数 OpenAI 兼容
-/// 网关（New API 等）只把 `/v1/*` 路由到 API，缺 `/v1` 会返回 HTML 首页。
-pub async fn handle_pi_chat_completions(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_chat_completions_for_app(state, request, AppType::Pi, "Pi", "pi", Some("/pi/openai"))
-        .await
-}
-
-/// Pi openai-responses 方言入口：`/pi/openai/v1/responses` 等
-///
-/// 与 [`handle_pi_chat_completions`] 同理：透传 `/v1` 前缀。
-pub async fn handle_pi_responses(
-    State(state): State<ProxyState>,
-    request: axum::extract::Request,
-) -> Result<axum::response::Response, ProxyError> {
-    handle_responses_for_app(
-        state,
-        request,
-        AppType::Pi,
-        "Pi",
-        "pi",
-        "/responses",
-        Some("/pi/openai"),
-    )
-    .await
-}
-
 async fn handle_messages_for_app(
     state: ProxyState,
     request: axum::extract::Request,
@@ -759,11 +707,10 @@ pub async fn handle_chat_completions(
     handle_chat_completions_for_app(state, request, AppType::Codex, "Codex", "codex", None).await
 }
 
-/// OpenAI Chat Completions 请求的应用参数化版本（Codex CLI / Pi 等共用）
+/// OpenAI Chat Completions 请求的应用参数化版本（Codex CLI 共用）
 /// 解析上游 endpoint。
 ///
-/// - 给了 `strip_prefix`（Pi 透明转发）→ **保留客户端原始路径**，仅剥掉网关前缀，
-///   使 `/pi/openai/v1/chat/completions` 透传为 `/v1/chat/completions`；
+/// - 给了 `strip_prefix`（带前缀路由）→ **保留客户端原始路径**，仅剥掉网关前缀；
 /// - 未给（Claude/Codex 固定方言）→ 沿用 `canonical_endpoint` + 原 query。
 fn endpoint_for_upstream(
     uri: &axum::http::Uri,
@@ -778,7 +725,7 @@ fn endpoint_for_upstream(
         .map(|path_and_query| path_and_query.as_str())
         .unwrap_or_else(|| uri.path());
     let stripped = raw.strip_prefix(prefix).unwrap_or(raw);
-    // 剥完可能为空（客户端正好打 `/pi/openai`），退回 canonical 保证上游有合法路径
+    // 剥完可能为空（客户端正好打前缀本身），退回 canonical 保证上游有合法路径
     let mut path = if stripped.is_empty() {
         canonical_endpoint.to_string()
     } else {
@@ -3454,75 +3401,8 @@ data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}\n
         assert_eq!(body["error"]["endpoint"], "/responses");
     }
 
-    // ---- B4: Pi openai 方言必须保留客户端原始 /v1 前缀 ----
-    //
-    // 回归背景：PiAdapter::build_url 是纯拼接 `{base}/{endpoint}`，而 handler 曾把
-    // endpoint 硬编码为 `/chat/completions`，导致上游收到 `{base}/chat/completions`。
-    // 对 New API 一类兼容网关这会命中网页路由返回 HTML（实测 200 + text/html），
-    // 而 `{base}/v1/chat/completions` 才返回 JSON。
-
     fn uri(s: &str) -> axum::http::Uri {
         s.parse().expect("valid uri")
-    }
-
-    #[test]
-    fn pi_openai_preserves_client_v1_prefix() {
-        // Pi CLI 拼出的真实路径 → 上游必须拿到 /v1/chat/completions
-        assert_eq!(
-            endpoint_for_upstream(
-                &uri("/pi/openai/v1/chat/completions"),
-                "/chat/completions",
-                Some("/pi/openai"),
-            ),
-            "/v1/chat/completions"
-        );
-    }
-
-    #[test]
-    fn pi_openai_base_with_v1_does_not_duplicate_prefix() {
-        // base 自带 /v1 时，客户端路径里不会再有第二个 /v1；透传后仍是单份
-        let endpoint = endpoint_for_upstream(
-            &uri("/pi/openai/v1/chat/completions"),
-            "/chat/completions",
-            Some("/pi/openai"),
-        );
-        assert_eq!(endpoint.matches("/v1").count(), 1, "不能重复拼接 /v1");
-        assert_eq!(endpoint, "/v1/chat/completions");
-    }
-
-    #[test]
-    fn pi_openai_keeps_legacy_route_without_v1() {
-        // 兼容老客户端：/pi/openai/chat/completions（无 /v1）原样透传，
-        // 不能再被强行加上 /v1（那是客户端的语义，网关不该替它决定）
-        assert_eq!(
-            endpoint_for_upstream(
-                &uri("/pi/openai/chat/completions"),
-                "/chat/completions",
-                Some("/pi/openai"),
-            ),
-            "/chat/completions"
-        );
-    }
-
-    #[test]
-    fn pi_openai_preserves_query_string() {
-        assert_eq!(
-            endpoint_for_upstream(
-                &uri("/pi/openai/v1/responses?beta=true"),
-                "/responses",
-                Some("/pi/openai"),
-            ),
-            "/v1/responses?beta=true"
-        );
-    }
-
-    #[test]
-    fn pi_openai_bare_prefix_falls_back_to_canonical() {
-        // 客户端正好打 /pi/openai（剥完为空）→ 退回 canonical，不能产出空路径
-        assert_eq!(
-            endpoint_for_upstream(&uri("/pi/openai"), "/chat/completions", Some("/pi/openai"),),
-            "/chat/completions"
-        );
     }
 
     #[test]

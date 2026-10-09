@@ -260,9 +260,8 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 注意：这里刻意不 seed Pi（理由同 schema.rs：v13 -> v14 的历史迁移会把
-        // proxy_config 重建成不含 'pi' 的旧约束并整行搬数据，提前存在的 'pi' 行会让
-        // 那条迁移撞 CHECK 失败）。Pi 的行由 v20 -> v21 迁移补齐，全新库在首次写入时
+        // 注意：刻意不 seed Pi（理由同 schema.rs：CHECK 与上游一致，本就不放行
+        // 'pi'；Pi 无本地代理，不需要 proxy_config 行）。
         // 由 ensure_proxy_config_row_exists_on_conn 惰性创建。
 
         Ok(())

@@ -1307,7 +1307,7 @@ pub(crate) fn sync_current_provider_for_app_to_live(
         let current_id = match crate::settings::get_effective_current_provider_with(
             &state.db,
             app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )? {
             Some(id) => id,
             None => return Ok(()),
@@ -1460,7 +1460,7 @@ fn sync_current_provider_for_app_respecting_takeover(
     let current_id = match crate::settings::get_effective_current_provider_with(
         &state.db,
         app_type,
-        crate::pi_config::pi_proxy_current_provider_key,
+        crate::pi_config::pi_native_current_provider,
     )? {
         Some(id) => id,
         None => return Ok(()),

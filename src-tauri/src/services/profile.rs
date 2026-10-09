@@ -193,7 +193,7 @@ impl ProfileService {
                 *slot = crate::settings::get_effective_current_provider_with(
                     &state.db,
                     app,
-                    crate::pi_config::pi_proxy_current_provider_key,
+                    crate::pi_config::pi_native_current_provider,
                 )?;
             }
             if let Some(slot) = payload.mcp.get_mut(app) {
@@ -372,7 +372,7 @@ impl ProfileService {
                     let current = crate::settings::get_effective_current_provider_with(
                         &state.db,
                         app,
-                        crate::pi_config::pi_proxy_current_provider_key,
+                        crate::pi_config::pi_native_current_provider,
                     )?;
                     if current.as_deref() != Some(target_pid.as_str()) {
                         match ProviderService::switch(state, app.clone(), target_pid) {

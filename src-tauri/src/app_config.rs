@@ -283,7 +283,7 @@ impl AppType {
     }
 
     pub fn supports_local_proxy(&self) -> bool {
-        matches!(self, AppType::Claude | AppType::Codex | AppType::Pi)
+        matches!(self, AppType::Claude | AppType::Codex)
     }
 
     /// Return an iterator over all app types

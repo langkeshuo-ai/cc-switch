@@ -3563,7 +3563,7 @@ impl ProviderService {
         crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )
         .map(|opt| opt.unwrap_or_default())
     }
@@ -3603,7 +3603,7 @@ impl ProviderService {
             let effective_current = crate::settings::get_effective_current_provider_with(
                 &state.db,
                 &app_type,
-                crate::pi_config::pi_proxy_current_provider_key,
+                crate::pi_config::pi_native_current_provider,
             )?;
 
             // Adding a non-current managed provider only mutates its DB row. Keep
@@ -3807,7 +3807,7 @@ impl ProviderService {
         let effective_current = crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )?;
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
@@ -4179,7 +4179,7 @@ impl ProviderService {
         let current_id = crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )?;
         let current_managed_codex_account_id = current_id
             .as_deref()
@@ -4420,7 +4420,7 @@ impl ProviderService {
         let current_id = match crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )? {
             Some(id) => id,
             None => return Ok(()),
@@ -5030,15 +5030,6 @@ impl ProviderService {
         .await
     }
 
-    /// 供 Pi 三源收敛（`ProxyService::reconcile_pi_sources`）在写库前复用既有校验。
-    ///
-    /// 收敛路径会凭 `models.json` 原生节点补建 DB 档案，属于一次真实的
-    /// `save_provider`，因此**必须**与 UI 手动新增走同一套校验。此处只做转调，
-    /// 刻意不复制 `validate_provider_settings` 的分支逻辑——避免两套校验漂移。
-    pub(crate) fn validate_pi_provider_for_reconcile(p: &Provider) -> Result<(), AppError> {
-        Self::validate_provider_settings(&AppType::Pi, p)
-    }
-
     fn validate_provider_settings(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
         match app_type {
             AppType::Claude => {
@@ -5465,7 +5456,7 @@ impl ProviderService {
         let is_current = match crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         ) {
             Ok(current) => current.as_deref() == Some(child_id),
             Err(err) => {

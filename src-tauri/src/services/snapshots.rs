@@ -159,7 +159,7 @@ impl SnapshotService {
         crate::settings::get_effective_current_provider_with(
             &state.db,
             app,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )
     }
 
@@ -559,7 +559,7 @@ mod tests {
             "codex current provider must be restored"
         );
         assert_eq!(
-            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            crate::pi_config::pi_native_current_provider().as_deref(),
             Some("pi-a"),
             "Pi defaultProvider must be restored"
         );
@@ -611,7 +611,7 @@ mod tests {
             Some("cx-a")
         );
         assert_eq!(
-            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            crate::pi_config::pi_native_current_provider().as_deref(),
             Some("pi-a")
         );
     }
@@ -650,35 +650,6 @@ mod tests {
 
     #[test]
     #[serial_test::serial(global_env)]
-    fn pi_snapshot_apply_result_is_what_provider_router_selects() {
-        let _home = TestHomeGuard::new();
-        let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
-        ProviderService::add(&state, AppType::Pi, pi_provider("pi-a"), false).expect("add pi-a");
-        ProviderService::add(&state, AppType::Pi, pi_provider("pi-b"), false).expect("add pi-b");
-
-        write_pi_settings(r#"{"defaultProvider":"pi-a"}"#);
-        SnapshotService::save(&state, "route").expect("save snapshot");
-
-        // 漂移：settings.json 与 DB current 都指向 pi-b
-        write_pi_settings(r#"{"defaultProvider":"pi-b"}"#);
-        state.db.set_current_provider("pi", "pi-b").unwrap();
-
-        SnapshotService::apply(&state, "route").expect("apply snapshot");
-
-        // 端到端切片：DB current 已经不指向快照目标，路由层必须经由
-        // settings.json defaultProvider（apply 恢复后的值）选出正确供应商
-        let router = crate::proxy::provider_router::ProviderRouter::new(state.db.clone());
-        let selected = tauri::async_runtime::block_on(router.select_providers("pi", None))
-            .expect("router must select a provider");
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].id, "pi-a");
-    }
-
-    #[test]
-    #[serial_test::serial(global_env)]
     fn pi_snapshot_roundtrip_preserves_settings_default_provider() {
         let _agent = TestAgentDir::new();
         let state = AppState::new(Arc::new(
@@ -708,7 +679,7 @@ mod tests {
 
         // apply 后 Pi CLI 唯一跟随的 defaultProvider 必须被恢复
         assert_eq!(
-            crate::pi_config::pi_proxy_current_provider_key().as_deref(),
+            crate::pi_config::pi_native_current_provider().as_deref(),
             Some("cc-switch-test"),
             "apply must restore Pi defaultProvider"
         );

@@ -108,7 +108,6 @@ pub struct ProxyServerInfo {
 pub struct ProxyTakeoverStatus {
     pub claude: bool,
     pub codex: bool,
-    pub pi: bool,
 }
 
 /// Provider健康状态

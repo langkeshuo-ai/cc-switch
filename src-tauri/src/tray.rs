@@ -565,7 +565,7 @@ async fn handle_auto_click(app: &tauri::AppHandle, app_type: &AppType) -> Result
             let current_id = crate::settings::get_effective_current_provider_with(
                 &app_state.db,
                 app_type,
-                crate::pi_config::pi_proxy_current_provider_key,
+                crate::pi_config::pi_native_current_provider,
             )?;
             let Some(current_id) = current_id else {
                 return Err(AppError::Message(
@@ -760,7 +760,7 @@ pub fn create_tray_menu(
         let current_id = crate::settings::get_effective_current_provider_with(
             &app_state.db,
             &section.app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )?
         .unwrap_or_default();
 
@@ -972,7 +972,7 @@ fn update_tray_usage_labels(app: &tauri::AppHandle) {
         let Ok(Some(current_id)) = crate::settings::get_effective_current_provider_with(
             &app_state.db,
             &section.app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         ) else {
             continue;
         };
@@ -1167,7 +1167,7 @@ pub(crate) async fn refresh_all_usage_in_tray(app: &tauri::AppHandle) {
         let current_id = match crate::settings::get_effective_current_provider_with(
             &app_state.db,
             &section.app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         ) {
             Ok(Some(id)) => id,
             Ok(None) => continue,

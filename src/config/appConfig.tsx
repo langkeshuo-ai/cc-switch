@@ -22,10 +22,10 @@ export const DEFAULT_VISIBLE_APPS: VisibleApps = {
 /** App IDs shown in Skills panels. */
 export const SKILLS_APP_IDS: AppId[] = ["claude", "codex", "pi"];
 
-export type ProxyAppId = Extract<AppId, "claude" | "codex" | "pi">;
+export type ProxyAppId = Extract<AppId, "claude" | "codex">;
 
 /** Apps with a complete local gateway data plane. */
-export const PROXY_APP_IDS: ProxyAppId[] = ["claude", "codex", "pi"];
+export const PROXY_APP_IDS: ProxyAppId[] = ["claude", "codex"];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);

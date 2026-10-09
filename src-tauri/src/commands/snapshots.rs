@@ -28,7 +28,7 @@ fn emit_snapshot_apply_events(app: &tauri::AppHandle, state: &AppState) {
         let provider_id = crate::settings::get_effective_current_provider_with(
             &state.db,
             &app_type,
-            crate::pi_config::pi_proxy_current_provider_key,
+            crate::pi_config::pi_native_current_provider,
         )
         .ok()
         .flatten()
