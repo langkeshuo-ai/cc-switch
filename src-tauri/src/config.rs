@@ -248,48 +248,6 @@ pub fn get_app_config_path() -> PathBuf {
     get_app_config_dir().join("config.json")
 }
 
-/// 清理供应商名称，确保文件名安全
-///
-/// 过滤范围：
-/// - Windows 非法字符 `<>:"/\|?*`
-/// - ASCII 控制字符（含 NUL、\t、\n、\r 及 0x01..0x1F、0x7F）
-/// - Windows 结尾不允许的 `.` 和空格
-/// - Windows 保留设备名（CON/PRN/AUX/NUL/COM1..9/LPT1..9），命中则前缀 `_`
-///   避免 `settings-con.json` 在部分 Windows 版本被 CreateFileW 拒绝。
-#[allow(dead_code)]
-pub fn sanitize_provider_name(name: &str) -> String {
-    let mut cleaned: String = name
-        .chars()
-        .map(|c| match c {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
-            c if c.is_control() => '-',
-            _ => c,
-        })
-        .collect::<String>()
-        .to_lowercase();
-
-    // Windows: 文件名不允许以 `.` 或空格结尾
-    while cleaned.ends_with('.') || cleaned.ends_with(' ') {
-        cleaned.pop();
-    }
-
-    // Windows 保留设备名（不含扩展名的主名部分）
-    const RESERVED: &[&str] = &[
-        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
-        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-    ];
-    if RESERVED.contains(&cleaned.as_str()) {
-        cleaned.insert(0, '_');
-    }
-
-    // 全部被过滤后为空时给一个占位，避免生成 `settings-.json` 之类奇怪文件名
-    if cleaned.is_empty() {
-        cleaned.push_str("provider");
-    }
-
-    cleaned
-}
-
 /// 读取 JSON 配置文件
 pub fn read_json_file<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T, AppError> {
     if !path.exists() {
@@ -995,33 +953,6 @@ mod tests {
             serde_json::to_string(&sorted_a).unwrap(),
             serde_json::to_string(&sorted_b).unwrap(),
         );
-    }
-
-    #[test]
-    fn sanitize_provider_name_filters_unsafe_and_reserved() {
-        // Windows 非法字符 → '-'
-        assert_eq!(sanitize_provider_name("a<b>c:d"), "a-b-c-d");
-        assert_eq!(sanitize_provider_name("a/b\\c|d?e*f"), "a-b-c-d-e-f");
-        // 控制字符（含 NUL、换行、制表）→ '-'（早期实现不过滤，会原样保留）
-        assert_eq!(sanitize_provider_name("a\0b\nc\td"), "a-b-c-d");
-        // 转小写
-        assert_eq!(sanitize_provider_name("MyProvider"), "myprovider");
-        // 结尾的 '.' 与空格被去除（Windows 不允许）
-        assert_eq!(sanitize_provider_name("trailing..."), "trailing");
-        assert_eq!(sanitize_provider_name("trailing   "), "trailing");
-        // Windows 保留设备名前缀 '_'
-        assert_eq!(sanitize_provider_name("CON"), "_con");
-        assert_eq!(sanitize_provider_name("nul"), "_nul");
-        assert_eq!(sanitize_provider_name("com1"), "_com1");
-        assert_eq!(sanitize_provider_name("lpt9"), "_lpt9");
-        // 非保留名不受影响
-        assert_eq!(sanitize_provider_name("console"), "console");
-        assert_eq!(sanitize_provider_name("anthropic"), "anthropic");
-        // 分隔符是替换为 '-' 而非删除，故不会变空（与原实现一致）
-        assert_eq!(sanitize_provider_name("///"), "---");
-        // 去尾点后变空 → 占位 "provider"，避免生成 "settings-.json"
-        assert_eq!(sanitize_provider_name("..."), "provider");
-        assert_eq!(sanitize_provider_name(""), "provider");
     }
 
     /// M8 运行时证据：atomic_write_private 在 Windows 上写出的凭据文件，
