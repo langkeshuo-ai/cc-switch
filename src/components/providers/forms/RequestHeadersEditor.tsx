@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HoverTip } from "@/components/ui/hover-tip";
 import { ImeSafeInput } from "@/components/ui/ime-safe-input";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -107,14 +108,12 @@ export function RequestHeadersEditor({
   };
 
   return (
-    <div
-      className={cn("space-y-2 border-l border-border-default pl-3", className)}
-    >
+    <div className={cn("space-y-2 border-l border-border pl-3", className)}>
       <div className="flex items-start justify-between gap-3">
-        <div className="max-w-3xl space-y-1">
-          <Label>{t("piProvider.headers", { defaultValue: "Headers" })}</Label>
-          <p className="text-xs text-muted-foreground">
-            {t("piProvider.headersHint", {
+        <div className="space-y-1">
+          <Label>{t("opencode.headers", { defaultValue: "Headers" })}</Label>
+          <p className="text-xs text-fg-2">
+            {t("opencode.headersHint", {
               defaultValue:
                 "Optional HTTP headers sent with provider requests, such as HTTP-Referer or X-Title.",
             })}
@@ -125,31 +124,31 @@ export function RequestHeadersEditor({
           variant="outline"
           size="sm"
           onClick={addHeader}
-          aria-label={t("piProvider.addHeader", {
+          aria-label={t("opencode.addHeader", {
             defaultValue: "Add header",
           })}
           className="h-7 shrink-0 gap-1"
         >
           <Plus className="h-3.5 w-3.5" />
-          {t("piProvider.addHeader", { defaultValue: "Add" })}
+          {t("opencode.addHeader", { defaultValue: "Add" })}
         </Button>
       </div>
 
-      <div className="max-w-3xl" aria-live="polite">
+      <div aria-live="polite">
         {Object.keys(headers).length === 0 ? (
-          <p className="py-1 text-sm text-muted-foreground">
-            {t("piProvider.noHeaders", {
+          <p className="py-1 text-sm text-fg-2">
+            {t("opencode.noHeaders", {
               defaultValue: "No custom headers configured",
             })}
           </p>
         ) : (
           <div className="space-y-2">
-            <div className="mb-1 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+            <div className="mb-1 flex items-center gap-2 px-1 text-xs text-fg-2">
               <span className="flex-1">
-                {t("piProvider.headerName", { defaultValue: "Header" })}
+                {t("opencode.headerName", { defaultValue: "Header" })}
               </span>
               <span className="flex-1">
-                {t("piProvider.headerValue", { defaultValue: "Value" })}
+                {t("opencode.headerValue", { defaultValue: "Value" })}
               </span>
               <span className="w-9" />
             </div>
@@ -158,36 +157,42 @@ export function RequestHeadersEditor({
                 <HeaderNameInput
                   headerName={key}
                   onChange={(newKey) => renameHeader(key, newKey)}
-                  ariaLabel={t("piProvider.headerName", {
+                  ariaLabel={t("opencode.headerName", {
                     defaultValue: "Header",
                   })}
-                  placeholder={t("piProvider.headerNamePlaceholder", {
+                  placeholder={t("opencode.headerNamePlaceholder", {
                     defaultValue: "X-Title",
                   })}
                 />
                 <ImeSafeInput
                   value={value}
                   onValueChange={(nextValue) => updateHeader(key, nextValue)}
-                  aria-label={t("piProvider.headerValue", {
+                  aria-label={t("opencode.headerValue", {
                     defaultValue: "Value",
                   })}
-                  placeholder={t("piProvider.headerValuePlaceholder", {
+                  placeholder={t("opencode.headerValuePlaceholder", {
                     defaultValue: "CC Switch",
                   })}
                   className="min-w-0 flex-1"
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeHeader(key)}
-                  aria-label={t("piProvider.removeHeader", {
+                <HoverTip
+                  content={t("opencode.removeHeader", {
                     defaultValue: "Remove header",
                   })}
-                  className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
                 >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => removeHeader(key)}
+                    aria-label={t("opencode.removeHeader", {
+                      defaultValue: "Remove header",
+                    })}
+                    className="h-9 w-9 shrink-0 text-fg-2 hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </HoverTip>
               </div>
             ))}
           </div>

@@ -1,12 +1,13 @@
 import { http, HttpResponse } from "msw";
 import type { AppId } from "@/lib/api/types";
-import { MODELS_DEV_API_URL } from "@/lib/modelsDevPricing";
-import type { Provider, Settings } from "@/types";
+import { MODELS_DEV_API_URL } from "@/lib/modelsDev";
+import type { McpServer, Provider, Settings } from "@/types";
 import {
   addProvider,
   deleteProvider,
   deleteSession,
   getCurrentProviderId,
+  getLiveProviderIds,
   getSessionMessages,
   getProviders,
   listProviders,
@@ -19,6 +20,10 @@ import {
   setSettings,
   getAppConfigDirOverride,
   setAppConfigDirOverrideState,
+  getMcpConfig,
+  setMcpServerEnabled,
+  upsertMcpServer,
+  deleteMcpServer,
 } from "./state";
 
 const TAURI_ENDPOINT = "http://tauri.local";
@@ -66,6 +71,20 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/update_tray_menu`, () => success(true)),
 
+  http.post(`${TAURI_ENDPOINT}/get_opencode_live_provider_ids`, () =>
+    success(getLiveProviderIds("opencode")),
+  ),
+
+  http.post(`${TAURI_ENDPOINT}/get_openclaw_live_provider_ids`, () =>
+    success(getLiveProviderIds("openclaw")),
+  ),
+
+  http.post(`${TAURI_ENDPOINT}/get_openclaw_default_model`, () =>
+    success({ primary: null, fallback: [] }),
+  ),
+
+  http.post(`${TAURI_ENDPOINT}/scan_openclaw_config_health`, () => success([])),
+
   http.post(`${TAURI_ENDPOINT}/switch_provider`, async ({ request }) => {
     const { id, app } = await withJson<{ id: string; app: AppId }>(request);
     const providers = listProviders(app);
@@ -86,6 +105,18 @@ export const handlers = [
     addProvider(app, { ...provider, id: newId });
     return success(true);
   }),
+
+  // 编辑器显示：测试里没有真实的 live 文件，关键字段直接取这一行（等于切到它之后的
+  // 样子），不列出不生效的字段。
+  http.post(
+    `${TAURI_ENDPOINT}/get_provider_editor_view`,
+    async ({ request }) => {
+      const { settingsConfig = {} } = await withJson<{
+        settingsConfig?: Record<string, unknown>;
+      }>(request);
+      return success({ settings: settingsConfig, inactive: [] });
+    },
+  ),
 
   http.post(`${TAURI_ENDPOINT}/update_provider`, async ({ request }) => {
     const { provider, app } = await withJson<{
@@ -156,8 +187,70 @@ export const handlers = [
   }),
 
   // MCP APIs
+  http.post(`${TAURI_ENDPOINT}/get_mcp_config`, async ({ request }) => {
+    const { app } = await withJson<{ app: AppId }>(request);
+    return success(getMcpConfig(app));
+  }),
+
   http.post(`${TAURI_ENDPOINT}/import_mcp_from_claude`, () => success(1)),
   http.post(`${TAURI_ENDPOINT}/import_mcp_from_codex`, () => success(1)),
+  http.post(`${TAURI_ENDPOINT}/resync_mcp_to_apps`, async ({ request }) => {
+    const { apps } = await withJson<{ apps?: AppId[] | null }>(request);
+    const targets = apps?.length
+      ? apps
+      : [
+          "claude",
+          "codex",
+          "gemini",
+          "grokbuild",
+          "opencode",
+          "hermes",
+          "mcode",
+        ];
+    return success(targets.map((app) => ({ app, ok: true })));
+  }),
+
+  // Skills / 用量：新加的只读或重投影命令，测试里默认都成功
+  http.post(`${TAURI_ENDPOINT}/resync_skills_to_apps`, () => success([])),
+  http.post(`${TAURI_ENDPOINT}/get_cc_switch_skills_dir`, () =>
+    success("/home/test/.cc-switch/skills"),
+  ),
+  http.post(`${TAURI_ENDPOINT}/open_cc_switch_skills_dir`, () => success(true)),
+  http.post(`${TAURI_ENDPOINT}/get_session_usage_last_sync`, () =>
+    success(null),
+  ),
+
+  http.post(`${TAURI_ENDPOINT}/set_mcp_enabled`, async ({ request }) => {
+    const { app, id, enabled } = await withJson<{
+      app: AppId;
+      id: string;
+      enabled: boolean;
+    }>(request);
+    setMcpServerEnabled(app, id, enabled);
+    return success(true);
+  }),
+
+  http.post(
+    `${TAURI_ENDPOINT}/upsert_mcp_server_in_config`,
+    async ({ request }) => {
+      const { app, id, spec } = await withJson<{
+        app: AppId;
+        id: string;
+        spec: McpServer;
+      }>(request);
+      upsertMcpServer(app, id, spec);
+      return success(true);
+    },
+  ),
+
+  http.post(
+    `${TAURI_ENDPOINT}/delete_mcp_server_in_config`,
+    async ({ request }) => {
+      const { app, id } = await withJson<{ app: AppId; id: string }>(request);
+      deleteMcpServer(app, id);
+      return success(true);
+    },
+  ),
 
   http.post(`${TAURI_ENDPOINT}/restart_app`, () => success(true)),
 
@@ -203,7 +296,7 @@ export const handlers = [
 
   http.post(`${TAURI_ENDPOINT}/get_config_dir`, async ({ request }) => {
     const { app } = await withJson<{ app: AppId }>(request);
-    return success(`/default/${app}`);
+    return success(app === "claude" ? "/default/claude" : "/default/codex");
   }),
 
   http.post(`${TAURI_ENDPOINT}/is_portable_mode`, () => success(false)),
@@ -290,11 +383,24 @@ export const handlers = [
     }),
   ),
 
+  http.post(`${TAURI_ENDPOINT}/get_direct_provider`, () => success(null)),
+
+  http.post(`${TAURI_ENDPOINT}/get_proxy_stack`, () =>
+    success({ active: false, members: [] }),
+  ),
+
+  http.post(`${TAURI_ENDPOINT}/set_proxy_stack_member`, () => success(null)),
+
+  http.post(`${TAURI_ENDPOINT}/restart_codex_app_server_daemon`, () =>
+    success("restarted"),
+  ),
+
   http.post(`${TAURI_ENDPOINT}/get_proxy_takeover_status`, () =>
     success({
       claude: false,
       codex: false,
-      pi: false,
+      gemini: false,
+      grokbuild: false,
     }),
   ),
 
@@ -305,6 +411,23 @@ export const handlers = [
     success(false),
   ),
   http.post(`${TAURI_ENDPOINT}/get_failover_queue`, () => success([])),
+
+  // 模式行：默认都在直连，直连那家就是当前供应商
+  http.post(`${TAURI_ENDPOINT}/get_app_mode`, async ({ request }) => {
+    const { appType } = await withJson<{ appType: AppId }>(request);
+    return success({
+      mode: "direct",
+      attached: false,
+      routeProviderId: null,
+      directProviderId: getCurrentProviderId(appType) || null,
+    });
+  }),
+  http.post(`${TAURI_ENDPOINT}/set_proxy_route`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/take_startup_attach_failures`, () =>
+    success([]),
+  ),
+  http.post(`${TAURI_ENDPOINT}/take_tray_navigation`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/tray_app_page_seen`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/get_available_providers_for_failover`, () =>
     success([]),
   ),
@@ -341,4 +464,84 @@ export const handlers = [
   ),
   http.post(`${TAURI_ENDPOINT}/reset_circuit_breaker`, () => success(true)),
   http.post(`${TAURI_ENDPOINT}/get_circuit_breaker_stats`, () => success(null)),
+
+  // 侧栏：今日花费、授权中心提醒；「应用」页：Claude Desktop 接入状态
+  http.post(`${TAURI_ENDPOINT}/get_usage_summary`, () =>
+    success({
+      totalRequests: 0,
+      totalCost: "0",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheCreationTokens: 0,
+      totalCacheReadTokens: 0,
+      successRate: 0,
+      realTotalTokens: 0,
+      cacheHitRate: 0,
+    }),
+  ),
+  // 会话阅读页头部：没有导入过用量时不显示
+  http.post(`${TAURI_ENDPOINT}/get_session_usage_summary`, () =>
+    success({
+      totalRequests: 0,
+      totalCost: "0",
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheCreationTokens: 0,
+      totalCacheReadTokens: 0,
+      successRate: 0,
+      realTotalTokens: 0,
+      cacheHitRate: 0,
+    }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/auth_get_status`, async ({ request }) => {
+    const { authProvider } = await withJson<{ authProvider: string }>(request);
+    return success({
+      provider: authProvider,
+      authenticated: false,
+      default_account_id: null,
+      accounts: [],
+    });
+  }),
+  // 应用页页头的「提示词：X ›」会读各应用的提示词列表
+  http.post(`${TAURI_ENDPOINT}/get_prompts`, () => success({})),
+  http.post(
+    `${TAURI_ENDPOINT}/get_prompt_file_location`,
+    async ({ request }) => {
+      const { app } = await withJson<{ app: AppId }>(request);
+      const file =
+        app === "claude"
+          ? "CLAUDE.md"
+          : app === "gemini"
+            ? "GEMINI.md"
+            : app === "hermes"
+              ? "SOUL.md"
+              : "AGENTS.md";
+      return success({
+        path: `/home/test/.${app}/${file}`,
+        displayPath: `~/.${app}/${file}`,
+      });
+    },
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_claude_desktop_status`, () =>
+    success({
+      supported: true,
+      configured: false,
+      proxyRunning: false,
+      staleRawModels: false,
+      missingRouteMappings: false,
+      gatewayTokenConfigured: false,
+    }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_hermes_memory`, async ({ request }) => {
+    const { kind } = await withJson<{ kind: string }>(request);
+    return success(kind === "user" ? "user profile" : "agent notes");
+  }),
+  http.post(`${TAURI_ENDPOINT}/get_hermes_memory_limits`, () =>
+    success({
+      memory: 2200,
+      user: 1375,
+      memoryEnabled: true,
+      userEnabled: true,
+    }),
+  ),
 ];

@@ -24,20 +24,31 @@ use crate::services::{McpService, PromptService, ProviderService, SkillService};
 use crate::store::AppState;
 
 /// Profile 操作的应用分组：项目实体全应用共享，但快照/应用/当前指针按组进行。
+///
+/// Claude Code 与 Claude Desktop 的供应商在 cc-switch 中是独立切换的，
+/// 因此各自拥有独立的项目分组。两者 live 文件零交集
+///（`~/.claude` / `Application Support/Claude-3p`），分组切换互不干扰。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProfileScope {
     Claude,
+    #[serde(rename = "claude-desktop")]
+    ClaudeDesktop,
     Codex,
 }
 
 impl ProfileScope {
     /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 2] = [ProfileScope::Claude, ProfileScope::Codex];
+    pub const ALL: [ProfileScope; 3] = [
+        ProfileScope::Claude,
+        ProfileScope::ClaudeDesktop,
+        ProfileScope::Codex,
+    ];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             ProfileScope::Claude => "claude",
+            ProfileScope::ClaudeDesktop => "claude-desktop",
             ProfileScope::Codex => "codex",
         }
     }
@@ -45,11 +56,8 @@ impl ProfileScope {
     pub fn parse(value: &str) -> Result<Self, AppError> {
         match value {
             "claude" => Ok(ProfileScope::Claude),
+            "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
             "codex" => Ok(ProfileScope::Codex),
-            // 旧数据中的 claude-desktop 分组按"不支持"处理，调用方跳过即可
-            "claude-desktop" => Err(AppError::InvalidInput(format!(
-                "Unknown profile scope: {value}"
-            ))),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
             ))),
@@ -60,6 +68,7 @@ impl ProfileScope {
     pub fn apps(&self) -> &'static [AppType] {
         match self {
             ProfileScope::Claude => &[AppType::Claude],
+            ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
             ProfileScope::Codex => &[AppType::Codex],
         }
     }
@@ -68,6 +77,7 @@ impl ProfileScope {
     pub fn for_app(app: &AppType) -> Option<Self> {
         match app {
             AppType::Claude => Some(ProfileScope::Claude),
+            AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
             AppType::Codex => Some(ProfileScope::Codex),
             _ => None,
         }
@@ -79,6 +89,8 @@ impl ProfileScope {
 #[serde(default)]
 pub struct PerApp<T> {
     pub claude: T,
+    #[serde(rename = "claude-desktop")]
+    pub claude_desktop: T,
     pub codex: T,
 }
 
@@ -86,6 +98,7 @@ impl<T> PerApp<T> {
     pub fn get(&self, app: &AppType) -> Option<&T> {
         match app {
             AppType::Claude => Some(&self.claude),
+            AppType::ClaudeDesktop => Some(&self.claude_desktop),
             AppType::Codex => Some(&self.codex),
             _ => None,
         }
@@ -94,6 +107,7 @@ impl<T> PerApp<T> {
     pub fn get_mut(&mut self, app: &AppType) -> Option<&mut T> {
         match app {
             AppType::Claude => Some(&mut self.claude),
+            AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
             AppType::Codex => Some(&mut self.codex),
             _ => None,
         }
@@ -190,10 +204,11 @@ impl ProfileService {
 
         for app in scope.apps().iter() {
             if let Some(slot) = payload.providers.get_mut(app) {
-                *slot = crate::settings::get_effective_current_provider_with(
+                // 和应用快照时一致：代理模式下记的是代理路由到的那家。
+                *slot = crate::mode::current::provider_for(
                     &state.db,
                     app,
-                    crate::pi_config::pi_native_current_provider,
+                    crate::mode::current::Purpose::InUse,
                 )?;
             }
             if let Some(slot) = payload.mcp.get_mut(app) {
@@ -314,14 +329,13 @@ impl ProfileService {
     ///
     /// 应用指定项目的快照到当前分组内的所有应用。
     ///
-    /// 返回 `(warnings, should_stop_proxy)`：当当前分组内所有接管都被关闭、且
-    /// 其它应用也没有接管时，建议调用者停止代理服务，以便 Claude Desktop 的
-    /// "本地路由"总开关同步显示为关闭。
+    /// 供应商按应用当前的模式切换：直连模式改直连指针，代理模式改代理路由；不再为了
+    /// 避开代理先退出代理模式。
     pub fn apply(
         state: &AppState,
         profile_id: &str,
         scope: ProfileScope,
-    ) -> Result<(Vec<String>, bool), AppError> {
+    ) -> Result<Vec<String>, AppError> {
         let mut warnings = Vec::new();
 
         // 自动保存旧项目当前状态（仅当前分组），失败不阻塞切换
@@ -352,16 +366,7 @@ impl ProfileService {
         for app in scope.apps().iter() {
             let app_str = app.as_str();
 
-            // 1. 切换项目前无条件关闭当前应用的代理接管。
-            // 接管态下 live 文件属于代理；用户希望切换工作目录时总是退出当前
-            // 代理环境，再按快照写入真实供应商配置。
-            if let Err(e) = state.proxy_service.disable_takeover_for_app_blocking(app) {
-                warnings.push(format!(
-                    "[{app_str}] auto-disable proxy takeover before profile switch failed: {e}"
-                ));
-            }
-
-            // 2. 供应商
+            // 1. 供应商
             if let Some(Some(target_pid)) = payload.providers.get(app) {
                 let providers = state.db.get_all_providers(app_str)?;
                 if !providers.contains_key(target_pid) {
@@ -369,10 +374,10 @@ impl ProfileService {
                         "[{app_str}] provider '{target_pid}' no longer exists, skipped"
                     ));
                 } else {
-                    let current = crate::settings::get_effective_current_provider_with(
+                    let current = crate::mode::current::provider_for(
                         &state.db,
                         app,
-                        crate::pi_config::pi_native_current_provider,
+                        crate::mode::current::Purpose::InUse,
                     )?;
                     if current.as_deref() != Some(target_pid.as_str()) {
                         match ProviderService::switch(state, app.clone(), target_pid) {
@@ -385,7 +390,7 @@ impl ProfileService {
                 }
             }
 
-            // 3. MCP diff（最小 toggle：仅动目标态≠当前态的条目；None = 该侧未拍过，不动）
+            // 2. MCP diff（最小 toggle：仅动目标态≠当前态的条目；None = 该侧未拍过，不动）
             if let Some(Some(target_ids)) = payload.mcp.get(app) {
                 let servers = state.db.get_all_mcp_servers()?;
                 let current: Vec<(String, bool)> = servers
@@ -405,7 +410,7 @@ impl ProfileService {
                 }
             }
 
-            // 4. Skills diff（SkillService 返回 anyhow::Result，收进 warning）
+            // 3. Skills diff（SkillService 返回 anyhow::Result，收进 warning）
             if let Some(Some(target_ids)) = payload.skills.get(app) {
                 let skills = state.db.get_all_installed_skills()?;
                 let current: Vec<(String, bool)> = skills
@@ -427,7 +432,7 @@ impl ProfileService {
                 }
             }
 
-            // 5. Prompt（None = 不动；已激活则幂等跳过，避免无谓的文件写与备份）
+            // 4. Prompt（None = 不动；已激活则幂等跳过，避免无谓的文件写与备份）
             if let Some(Some(target_prompt)) = payload.prompts.get(app) {
                 let prompts = state.db.get_prompts(app_str)?;
                 match prompts.get(target_prompt) {
@@ -452,10 +457,7 @@ impl ProfileService {
             .db
             .set_current_profile_id(scope.as_str(), Some(profile_id))?;
 
-        // 当前分组内所有接管已关闭；若其它应用也无接管，可停止代理服务。
-        let should_stop_proxy = !state.db.is_live_takeover_active_sync();
-
-        Ok((warnings, should_stop_proxy))
+        Ok(warnings)
     }
 }
 
@@ -472,24 +474,29 @@ mod tests {
         let payload = ProfilePayload {
             providers: PerApp {
                 claude: Some("p1".into()),
+                claude_desktop: Some("d1".into()),
                 codex: None,
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1", "m2"])),
+                claude_desktop: Some(vec![]),
                 codex: None,
             },
             skills: PerApp {
                 claude: Some(vec![]),
+                claude_desktop: Some(vec![]),
                 codex: Some(ids(&["s1"])),
             },
             prompts: PerApp {
                 claude: None,
+                claude_desktop: None,
                 codex: Some("pr1".into()),
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
-        // per-app key 必须与 AppType 的 serde 形式一致
+        // per-app key 必须与 AppType 的 serde 形式一致（claude-desktop 是连字符）
         assert!(json.contains("\"claude\""));
+        assert!(json.contains("\"claude-desktop\""));
         assert!(json.contains("\"codex\""));
         let back: ProfilePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
@@ -503,8 +510,10 @@ mod tests {
             serde_json::from_str(r#"{"providers":{"claude":"p1"},"mcp":{"claude":["m1"]}}"#)
                 .unwrap();
         assert_eq!(back.providers.claude, Some("p1".to_string()));
+        assert_eq!(back.providers.claude_desktop, None);
         assert_eq!(back.providers.codex, None);
         assert_eq!(back.mcp.claude, Some(ids(&["m1"])));
+        assert_eq!(back.mcp.claude_desktop, None);
         assert_eq!(back.mcp.codex, None, "missing slot means untouched");
         assert_eq!(back.prompts.codex, None);
 
@@ -518,10 +527,12 @@ mod tests {
         let mut payload = ProfilePayload {
             providers: PerApp {
                 claude: Some("p1".into()),
+                claude_desktop: Some("d1".into()),
                 codex: Some("c1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1"])),
+                claude_desktop: Some(vec![]),
                 codex: Some(ids(&["m9"])),
             },
             ..Default::default()
@@ -530,10 +541,12 @@ mod tests {
         let fresh = ProfilePayload {
             providers: PerApp {
                 claude: Some("p2".into()),
+                claude_desktop: None,
                 codex: Some("SHOULD-NOT-LEAK".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m2"])),
+                claude_desktop: Some(vec![]),
                 codex: None,
             },
             ..Default::default()
@@ -541,6 +554,11 @@ mod tests {
         payload.merge_scope_from(&fresh, ProfileScope::Claude);
 
         assert_eq!(payload.providers.claude, Some("p2".to_string()));
+        assert_eq!(
+            payload.providers.claude_desktop,
+            Some("d1".to_string()),
+            "claude-desktop slot is in its own scope, untouched by claude merge"
+        );
         assert_eq!(payload.mcp.claude, Some(ids(&["m2"])));
         // codex 侧完好：既没被覆盖也没被 fresh 的值污染
         assert_eq!(payload.providers.codex, Some("c1".to_string()));
@@ -551,20 +569,29 @@ mod tests {
     fn test_scope_captured_detects_per_scope_snapshot() {
         let mut payload = ProfilePayload::default();
         assert!(!payload.scope_captured(ProfileScope::Claude));
+        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
 
         // 只拍过 claude 组（哪怕拍到的是空集）
         payload.mcp.claude = Some(vec![]);
         assert!(payload.scope_captured(ProfileScope::Claude));
+        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
+
+        // Desktop 槽位属于独立的 claude-desktop 组
+        let mut desktop_only = ProfilePayload::default();
+        desktop_only.providers.claude_desktop = Some("d1".into());
+        assert!(desktop_only.scope_captured(ProfileScope::ClaudeDesktop));
+        assert!(!desktop_only.scope_captured(ProfileScope::Claude));
     }
 
     #[test]
     fn test_per_app_get_only_supports_profile_apps() {
         let per: PerApp<Option<String>> = PerApp::default();
         assert!(per.get(&AppType::Claude).is_some());
+        assert!(per.get(&AppType::ClaudeDesktop).is_some());
         assert!(per.get(&AppType::Codex).is_some());
-        assert!(per.get(&AppType::Pi).is_none());
+        assert!(per.get(&AppType::Gemini).is_none());
     }
 
     #[test]
@@ -583,15 +610,20 @@ mod tests {
 
     #[test]
     fn test_scope_app_grouping() {
-        // 各应用独立成组；组内应用与 for_app 反向映射必须一致
+        // Claude Code 与 Claude Desktop 各自独立成组；
+        // 组内应用与 for_app 反向映射必须一致
         assert_eq!(ProfileScope::Claude.apps(), &[AppType::Claude]);
+        assert_eq!(
+            ProfileScope::ClaudeDesktop.apps(),
+            &[AppType::ClaudeDesktop]
+        );
         assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
         for scope in ProfileScope::ALL {
             for app in scope.apps() {
                 assert_eq!(ProfileScope::for_app(app), Some(scope));
             }
         }
-        assert_eq!(ProfileScope::for_app(&AppType::Pi), None);
+        assert_eq!(ProfileScope::for_app(&AppType::Gemini), None);
     }
 
     #[test]

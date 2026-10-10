@@ -41,7 +41,7 @@ pub struct ModelPricingInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelsDevSyncConfig {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub auto_sync_enabled: bool,
     #[serde(default = "default_true")]
     pub include_common_models: bool,
@@ -58,7 +58,7 @@ pub struct ModelsDevSyncConfig {
 impl Default for ModelsDevSyncConfig {
     fn default() -> Self {
         Self {
-            auto_sync_enabled: false,
+            auto_sync_enabled: true,
             include_common_models: true,
             selected_model_keys: Vec::new(),
             excluded_common_model_keys: Vec::new(),
@@ -474,6 +474,7 @@ pub fn delete_model_pricing(db: &Database, model_id: &str) -> Result<(), AppErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     fn with_test_home(test: impl FnOnce(&Database, &PathBuf)) {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -502,12 +503,12 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
-    fn creates_local_file_with_auto_sync_disabled_by_default() {
+    #[serial]
+    fn creates_local_file_with_auto_sync_enabled_by_default() {
         with_test_home(|db, path| {
             let state = get_models_dev_sync_state(db).expect("sync state");
             assert!(path.exists());
-            assert!(!state.config.auto_sync_enabled);
+            assert!(state.config.auto_sync_enabled);
             assert!(state.config.include_common_models);
             assert_eq!(state.config_path, path.display().to_string());
 
@@ -518,7 +519,25 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
+    fn existing_file_with_auto_sync_disabled_stays_disabled() {
+        with_test_home(|db, path| {
+            // Files written before the default flipped carry an explicit `false`.
+            fs::create_dir_all(path.parent().expect("pricing file parent"))
+                .expect("create config dir");
+            fs::write(
+                path,
+                r#"{"version":1,"modelsDevSync":{"autoSyncEnabled":false}}"#,
+            )
+            .expect("write pricing file");
+
+            let state = get_models_dev_sync_state(db).expect("sync state");
+            assert!(!state.config.auto_sync_enabled);
+        });
+    }
+
+    #[test]
+    #[serial]
     fn empty_override_file_does_not_roll_back_builtin_pricing_repairs() {
         with_test_home(|db, path| {
             get_models_dev_sync_state(db).expect("create override file");
@@ -557,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
     fn models_dev_batch_sync_overwrites_existing_manual_pricing() {
         with_test_home(|db, path| {
             let mut manual = sample_pricing();
@@ -591,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
     fn batch_update_and_delete_are_persisted_to_local_file() {
         with_test_home(|db, path| {
             assert_eq!(
@@ -621,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
     fn reloads_manual_file_edits_and_deletion_tombstones() {
         with_test_home(|db, path| {
             get_models_dev_sync_state(db).expect("create pricing file");
@@ -672,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
     fn repeated_seeded_tombstone_deletion_does_not_backfill_unrelated_usage() {
         with_test_home(|db, _path| {
             get_models_dev_sync_state(db).expect("create override file");
@@ -722,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial]
     fn recording_sync_result_preserves_user_selection_and_switches() {
         with_test_home(|db, _path| {
             let config = ModelsDevSyncConfig {

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { invokeCommand } from "./invoke";
 import type { TFunction } from "i18next";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 export interface FetchedModel {
   id: string;

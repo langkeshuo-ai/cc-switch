@@ -17,6 +17,7 @@ mod claude;
 mod codex;
 pub(crate) mod codex_chat_common;
 pub mod codex_chat_history;
+pub(crate) mod codex_compaction;
 pub mod codex_oauth_auth;
 pub(crate) mod codex_responses_sse;
 pub mod copilot_auth;
@@ -24,8 +25,10 @@ pub mod copilot_model_map;
 mod gemini;
 pub(crate) mod gemini_schema;
 pub mod gemini_shadow;
-pub mod oauth_state;
+pub(crate) mod inline_think;
+pub mod models;
 pub(crate) mod reasoning_bridge;
+pub(crate) mod responses_late_arguments;
 pub mod streaming;
 pub mod streaming_codex_anthropic;
 pub mod streaming_codex_chat;
@@ -59,10 +62,12 @@ pub use claude::{
 pub use codex::CodexAdapter;
 pub use codex::{
     apply_codex_chat_upstream_model, apply_codex_upstream_model, codex_provider_upstream_model,
-    inject_codex_chat_prompt_cache_key, is_codex_official_provider,
-    provider_needs_responses_namespace_flatten, resolve_codex_catalog_tool_profile,
-    resolve_codex_chat_reasoning_config, should_convert_codex_responses_to_anthropic,
-    should_convert_codex_responses_to_chat,
+    codex_stack_upstream_rejects_web_search, inject_codex_chat_prompt_cache_key,
+    is_codex_official_provider, is_codex_responses_endpoint,
+    provider_needs_responses_late_arguments_repair, provider_needs_responses_namespace_flatten,
+    resolve_codex_catalog_tool_profile, resolve_codex_chat_reasoning_config,
+    should_convert_codex_responses_to_anthropic, should_convert_codex_responses_to_chat,
+    strip_codex_hosted_web_search,
 };
 pub use gemini::GeminiAdapter;
 
@@ -132,7 +137,7 @@ impl ProviderType {
     #[allow(dead_code)]
     pub fn from_app_type_and_config(app_type: &AppType, provider: &Provider) -> Option<Self> {
         let provider_type = match app_type {
-            AppType::Claude => {
+            AppType::Claude | AppType::ClaudeDesktop => {
                 if get_claude_api_format(provider) == "gemini_native" {
                     let adapter = ClaudeAdapter::new();
                     return Some(
@@ -191,7 +196,25 @@ impl ProviderType {
                 ProviderType::Claude
             }
             AppType::Codex => ProviderType::Codex,
-            AppType::Pi => return None,
+            AppType::Gemini => {
+                // 检测是否为 CLI 模式（OAuth）
+                let adapter = GeminiAdapter::new();
+                if let Some(auth) = adapter.extract_auth(provider) {
+                    let key = &auth.api_key;
+                    // OAuth access_token 以 ya29. 开头
+                    if key.starts_with("ya29.") {
+                        return Some(ProviderType::GeminiCli);
+                    }
+                    // JSON 格式的 OAuth 凭证
+                    if key.starts_with('{') {
+                        return Some(ProviderType::GeminiCli);
+                    }
+                }
+                ProviderType::Gemini
+            }
+            AppType::GrokBuild => ProviderType::Codex,
+            AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => ProviderType::Codex,
+            AppType::Pi | AppType::Mcode => return None,
         };
         Some(provider_type)
     }
@@ -242,10 +265,12 @@ impl std::str::FromStr for ProviderType {
 /// 根据 AppType 获取对应的适配器
 pub fn get_adapter(app_type: &AppType) -> Option<Box<dyn ProviderAdapter>> {
     Some(match app_type {
-        AppType::Claude => Box::new(ClaudeAdapter::new()),
+        AppType::Claude | AppType::ClaudeDesktop => Box::new(ClaudeAdapter::new()),
         AppType::Codex => Box::new(CodexAdapter::new()),
-        // Pi 无本地代理，不需要协议适配器
-        AppType::Pi => return None,
+        AppType::Gemini => Box::new(GeminiAdapter::new()),
+        AppType::GrokBuild => Box::new(CodexAdapter::new()),
+        AppType::OpenCode | AppType::OpenClaw | AppType::Hermes => Box::new(CodexAdapter::new()),
+        AppType::Pi | AppType::Mcode => return None,
     })
 }
 
@@ -463,6 +488,42 @@ mod tests {
 
         let provider_type = ProviderType::from_app_type_and_config(&AppType::Codex, &provider);
         assert_eq!(provider_type, Some(ProviderType::Codex));
+    }
+
+    #[test]
+    fn test_from_app_type_gemini_api_key() {
+        let provider = create_provider(json!({
+            "env": {
+                "GEMINI_API_KEY": "AIza-test-key"
+            }
+        }));
+
+        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
+        assert_eq!(provider_type, Some(ProviderType::Gemini));
+    }
+
+    #[test]
+    fn test_from_app_type_gemini_cli_oauth() {
+        let provider = create_provider(json!({
+            "env": {
+                "GEMINI_API_KEY": "ya29.test-access-token"
+            }
+        }));
+
+        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
+        assert_eq!(provider_type, Some(ProviderType::GeminiCli));
+    }
+
+    #[test]
+    fn test_from_app_type_gemini_cli_json() {
+        let provider = create_provider(json!({
+            "env": {
+                "GEMINI_API_KEY": "{\"access_token\":\"ya29.test\",\"refresh_token\":\"1//test\"}"
+            }
+        }));
+
+        let provider_type = ProviderType::from_app_type_and_config(&AppType::Gemini, &provider);
+        assert_eq!(provider_type, Some(ProviderType::GeminiCli));
     }
 
     #[test]

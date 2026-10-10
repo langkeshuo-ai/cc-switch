@@ -2,41 +2,16 @@
 //!
 //! 负责数据库表结构的创建和版本迁移。
 
-use super::{
-    lock_conn, rollback_savepoint, Database, MAX_NORMALIZABLE_LEGACY_VERSION, SCHEMA_VERSION,
-};
+use super::{lock_conn, Database, SCHEMA_VERSION};
 use crate::error::AppError;
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct LegacySkillMigrationRow {
     directory: String,
     app_type: String,
 }
-
-/// 内置默认模型定价表的一条记录。
-#[derive(Debug, Deserialize)]
-struct DefaultPricingEntry {
-    model_id: String,
-    display_name: String,
-    input_cost_per_million: String,
-    output_cost_per_million: String,
-    cache_read_cost_per_million: String,
-    cache_creation_cost_per_million: String,
-    /// 定价依据。原为 Rust 注释，JSON 无注释语法故用字段承载，不是计费输入。
-    /// 保留它是因为本表多处价格来自厂商汇率折算与历史教训——v3.20.3 曾按未生效
-    /// 的厂商公告提前改价，发出 0.3/1.2/0.006 错价。丢了依据就再也说不清。
-    ///
-    /// 必须出现在结构体里：serde 遇到未知字段会报错，删掉它整个 JSON 直接解析
-    /// 失败。运行时无人读它，故显式 allow——这不是"忘了用"，是"必须留、故意不用"。
-    #[serde(default)]
-    #[allow(dead_code)]
-    note: Option<String>,
-}
-
-/// 内置定价表原文，编译期嵌入二进制。
-const DEFAULT_MODEL_PRICING_JSON: &str = include_str!("../resources/model-pricing.default.json");
 
 impl Database {
     /// 创建所有数据库表
@@ -85,10 +60,6 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 3. MCP Servers 表
-        //
-        // 形状与基线上游 v3.20.4 完全一致（含 5 个已裁剪应用的 enabled_* 列，
-        // DEFAULT 0，本 fork 不再写入但保留列以对齐上游 schema）。
-        // Pi 没有原生 MCP 注册表（见 McpApps），无 enabled_pi 列。
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mcp_servers (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
@@ -97,7 +68,8 @@ impl Database {
             enabled_gemini BOOLEAN NOT NULL DEFAULT 0, enabled_grokbuild BOOLEAN NOT NULL DEFAULT 0,
             enabled_opencode BOOLEAN NOT NULL DEFAULT 0,
             enabled_mcode BOOLEAN NOT NULL DEFAULT 0,
-            enabled_hermes BOOLEAN NOT NULL DEFAULT 0
+            enabled_hermes BOOLEAN NOT NULL DEFAULT 0,
+            enabled_pi BOOLEAN NOT NULL DEFAULT 0
         )",
             [],
         )
@@ -154,9 +126,6 @@ impl Database {
         .map_err(|e| AppError::Database(e.to_string()))?;
 
         // 8. Proxy Config 表（三行结构，app_type 主键）
-        //
-        // CHECK 与基线上游 v3.20.4 完全一致（四值，不含 'pi'）。
-        // 本 fork 的 schema 不变量：绝不偏离上游（见 BASELINE.md 第 2 节）。
         conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
             app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
             proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
@@ -196,9 +165,25 @@ impl Database {
                 [],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute(
+                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests)
+                VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute(
+                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests)
+                VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+                [],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
         }
-        // 注意：刻意不 seed Pi——CHECK 约束（与上游一致）本就不放行 'pi'，
-        // Pi 无本地代理，不需要 proxy_config 行。
 
         // 9. Provider Health 表
         conn.execute("CREATE TABLE IF NOT EXISTS provider_health (
@@ -465,7 +450,8 @@ impl Database {
         let mut version = Self::get_user_version(conn)?;
 
         if version > SCHEMA_VERSION {
-            rollback_savepoint(conn, "schema_migration");
+            conn.execute("ROLLBACK TO schema_migration;", []).ok();
+            conn.execute("RELEASE schema_migration;", []).ok();
             return Err(AppError::Database(format!(
                 "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
             )));
@@ -579,6 +565,18 @@ impl Database {
                         }
                         Self::set_user_version(conn, 19)?;
                     }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（MCP 添加 Pi 支持）");
+                        if Self::table_exists(conn, "mcp_servers")? {
+                            Self::add_column_if_missing(
+                                conn,
+                                "mcp_servers",
+                                "enabled_pi",
+                                "BOOLEAN NOT NULL DEFAULT 0",
+                            )?;
+                        }
+                        Self::set_user_version(conn, 20)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -597,7 +595,8 @@ impl Database {
                 Ok(())
             }
             Err(e) => {
-                rollback_savepoint(conn, "schema_migration");
+                conn.execute("ROLLBACK TO schema_migration;", []).ok();
+                conn.execute("RELEASE schema_migration;", []).ok();
                 Err(e)
             }
         }
@@ -1437,117 +1436,6 @@ impl Database {
         Ok(())
     }
 
-    /// 把旧版 fork 自造 schema（v20/v21/v22）降级归一到基线上游 v19 形状。
-    ///
-    /// 背景（BASELINE.md 第 2 节）：fork 曾把 `SCHEMA_VERSION` 顶到 22——
-    /// - v19→v20：创建 `app_snapshots` 表（快照功能，fork 自造迁移）；
-    /// - v20→v21：放行 `proxy_config` 的 `'pi'` 行（fork 自造迁移）；
-    /// - v21→v22：清理被裁应用数据并把 CHECK 收紧到 claude/codex/pi。
-    ///
-    /// 三条迁移已删除；本函数把存量库**归一**回上游 v19 形状，使应用无需
-    /// 手工改库即可打开。只做形状归一，不恢复数据（v22 清理掉的行不复活）：
-    /// 1. `app_snapshots` 整表搬到 `settings`（键前缀 `app_snapshot:`，快照
-    ///    功能保留，存储改挂既有表），随后 DROP；
-    /// 2. `mcp_servers` / `skills` 补回上游 v19 的 5 个 `enabled_*` 列；
-    /// 3. `proxy_config` 按 sqlite_master 存的建表语句原样重建，仅把 CHECK
-    ///    收回上游四值（自然删除 `'pi'` 行——Pi 无本地代理，该行已无消费方）；
-    /// 4. `user_version` 置 19。
-    ///
-    /// 幂等：每步检测到目标形状即跳过。失败即返回 `Err`（调用方是 init）：
-    /// 宁可启动失败，也不带着偏离上游的 schema 静默运行。
-    pub(crate) fn normalize_legacy_trim_schema_on_conn(
-        conn: &Connection,
-        from_version: i32,
-    ) -> Result<(), AppError> {
-        log::info!("Normalizing legacy trim schema v{from_version} → upstream v19");
-
-        // 1) app_snapshots → settings（搬移幂等：INSERT OR REPLACE）
-        if Self::table_exists(conn, "app_snapshots")? {
-            let mut stmt = conn
-                .prepare("SELECT name, data FROM app_snapshots")
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            let mut moved = 0usize;
-            for row in rows {
-                let (name, data) = row.map_err(|e| AppError::Database(e.to_string()))?;
-                conn.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
-                    rusqlite::params![format!("app_snapshot:{name}"), data],
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-                moved += 1;
-            }
-            drop(stmt);
-            conn.execute("DROP TABLE app_snapshots", [])
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            log::info!("Migrated {moved} app snapshot(s) from app_snapshots table to settings");
-        }
-
-        // 2) mcp_servers / skills：补回上游 v19 的列（DEFAULT 0，本 fork 不写但保留列）
-        const UPSTREAM_FLAG_COLUMNS: [&str; 5] = [
-            "enabled_gemini",
-            "enabled_grokbuild",
-            "enabled_opencode",
-            "enabled_mcode",
-            "enabled_hermes",
-        ];
-        for table in ["mcp_servers", "skills"] {
-            if !Self::table_exists(conn, table)? {
-                continue;
-            }
-            for column in UPSTREAM_FLAG_COLUMNS {
-                Self::add_column_if_missing(conn, table, column, "BOOLEAN NOT NULL DEFAULT 0")?;
-            }
-        }
-
-        // 3) proxy_config：按存储的建表语句重建，CHECK 收回上游四值
-        if Self::table_exists(conn, "proxy_config")? {
-            let create_sql: Option<String> = conn
-                .query_row(
-                    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            if let Some(create_sql) = create_sql {
-                if create_sql.contains("'pi'") {
-                    conn.execute("DROP TABLE IF EXISTS proxy_config_norm", [])
-                        .map_err(|e| AppError::Database(e.to_string()))?;
-                    let norm_sql = create_sql
-                        .replace("proxy_config", "proxy_config_norm")
-                        .replace(
-                            "('claude','codex','pi')",
-                            "('claude','codex','gemini','grokbuild')",
-                        );
-                    if norm_sql == create_sql {
-                        return Err(AppError::Database(
-                            "proxy_config 含 'pi' 但未能改写 CHECK 约束（未知建表语句形态）".into(),
-                        ));
-                    }
-                    conn.execute(&norm_sql, [])
-                        .map_err(|e| AppError::Database(e.to_string()))?;
-                    conn.execute(
-                        "INSERT INTO proxy_config_norm SELECT * FROM proxy_config WHERE app_type != 'pi'",
-                        [],
-                    )
-                    .map_err(|e| AppError::Database(e.to_string()))?;
-                    conn.execute("DROP TABLE proxy_config", [])
-                        .map_err(|e| AppError::Database(e.to_string()))?;
-                    conn.execute("ALTER TABLE proxy_config_norm RENAME TO proxy_config", [])
-                        .map_err(|e| AppError::Database(e.to_string()))?;
-                    log::info!("proxy_config CHECK restored to upstream 4-value constraint");
-                }
-            }
-        }
-
-        Self::set_user_version(conn, 19)?;
-        Ok(())
-    }
-
     /// v12 -> v13：记录 input_tokens 是否包含缓存写入。
     ///
     /// 默认 0 表示旧版/未知语义；旧 Codex 行只包含 cache read，不包含
@@ -1739,21 +1627,1180 @@ impl Database {
         Ok(())
     }
 
-    /// 插入默认模型定价数据。
-    ///
-    /// 数据外置为 `src-tauri/resources/model-pricing.default.json`：改一条定价曾要
-    /// 改 1192 行 Rust 源码，触发整个 crate 重编（30s+）。改为资源文件后只改 JSON，
-    /// 配合 `include_str!` 依然在编译期把内容打进二进制，运行时解析失败即报错。
-    ///
-    /// 注意: model_id 使用短横线格式（如 claude-haiku-4-5），与 API 返回的模型名称
-    /// 标准化后一致。
+    /// 插入默认模型定价数据
+    /// 格式: (model_id, display_name, input, output, cache_read, cache_creation)
+    /// 注意: model_id 使用短横线格式（如 claude-haiku-4-5），与 API 返回的模型名称标准化后一致
     fn seed_model_pricing(conn: &Connection) -> Result<(), AppError> {
-        let pricing_data: Vec<DefaultPricingEntry> =
-            serde_json::from_str(DEFAULT_MODEL_PRICING_JSON).map_err(|e| {
-                AppError::Config(format!(
-                    "内置模型定价表解析失败（resources/model-pricing.default.json）: {e}"
-                ))
-            })?;
+        let pricing_data = [
+            // Claude Fable 5.1 / Mythos 5.1（2026-09-01 发布；同 Fable 5 价，
+            // 但缓存读为 0.025x = $0.25，非 Fable 5 的 $1）
+            (
+                "claude-fable-5-1",
+                "Claude Fable 5.1",
+                "10",
+                "50",
+                "0.25",
+                "12.50",
+            ),
+            (
+                "claude-mythos-5-1",
+                "Claude Mythos 5.1",
+                "10",
+                "50",
+                "0.25",
+                "12.50",
+            ),
+            // Claude Fable 5（Opus 之上的新档）
+            (
+                "claude-fable-5",
+                "Claude Fable 5",
+                "10",
+                "50",
+                "1.00",
+                "12.50",
+            ),
+            (
+                "claude-mythos-5",
+                "Claude Mythos 5",
+                "10",
+                "50",
+                "1.00",
+                "12.50",
+            ),
+            // Claude Opus 5.5（2026-09-23 发布；缓存读为 0.05x = $0.20，非常规 0.1x 的
+            // $0.40，也非 Opus 5 的 $0.50；fast mode $8/$40 不入表）
+            ("claude-opus-5-5", "Claude Opus 5.5", "4", "20", "0.20", "5"),
+            // Claude Opus 5（与 Opus 4.8 同价位；fast mode $10/$50 不入表）
+            ("claude-opus-5", "Claude Opus 5", "5", "25", "0.50", "6.25"),
+            // Claude 4.8 系列
+            (
+                "claude-opus-4-8",
+                "Claude Opus 4.8",
+                "5",
+                "25",
+                "0.50",
+                "6.25",
+            ),
+            // Claude Sonnet 5（官方定价页 2026-09 确认：$2/$10 介绍价转为正式价，
+            // 原定 09-01 涨至 $3/$15 取消）
+            (
+                "claude-sonnet-5",
+                "Claude Sonnet 5",
+                "2",
+                "10",
+                "0.20",
+                "2.50",
+            ),
+            // Claude 4.7 系列
+            (
+                "claude-opus-4-7",
+                "Claude Opus 4.7",
+                "5",
+                "25",
+                "0.50",
+                "6.25",
+            ),
+            // Claude 4.6 系列（裸 id 行覆盖无日期后缀的日志变体，与 dated 行同价）
+            (
+                "claude-opus-4-6",
+                "Claude Opus 4.6",
+                "5",
+                "25",
+                "0.50",
+                "6.25",
+            ),
+            (
+                "claude-sonnet-4-6",
+                "Claude Sonnet 4.6",
+                "3",
+                "15",
+                "0.30",
+                "3.75",
+            ),
+            (
+                "claude-opus-4-6-20260206",
+                "Claude Opus 4.6",
+                "5",
+                "25",
+                "0.50",
+                "6.25",
+            ),
+            (
+                "claude-sonnet-4-6-20260217",
+                "Claude Sonnet 4.6",
+                "3",
+                "15",
+                "0.30",
+                "3.75",
+            ),
+            // Claude 4.5 系列
+            (
+                "claude-opus-4-5-20251101",
+                "Claude Opus 4.5",
+                "5",
+                "25",
+                "0.50",
+                "6.25",
+            ),
+            (
+                "claude-sonnet-4-5-20250929",
+                "Claude Sonnet 4.5",
+                "3",
+                "15",
+                "0.30",
+                "3.75",
+            ),
+            (
+                "claude-haiku-4-5-20251001",
+                "Claude Haiku 4.5",
+                "1",
+                "5",
+                "0.10",
+                "1.25",
+            ),
+            // Claude 4 系列 (Legacy Models)
+            (
+                "claude-opus-4-20250514",
+                "Claude Opus 4",
+                "15",
+                "75",
+                "1.50",
+                "18.75",
+            ),
+            (
+                "claude-opus-4-1-20250805",
+                "Claude Opus 4.1",
+                "15",
+                "75",
+                "1.50",
+                "18.75",
+            ),
+            (
+                "claude-sonnet-4-20250514",
+                "Claude Sonnet 4",
+                "3",
+                "15",
+                "0.30",
+                "3.75",
+            ),
+            // Claude 3.5 系列
+            (
+                "claude-3-5-haiku-20241022",
+                "Claude 3.5 Haiku",
+                "0.80",
+                "4",
+                "0.08",
+                "1",
+            ),
+            (
+                "claude-3-5-sonnet-20241022",
+                "Claude 3.5 Sonnet",
+                "3",
+                "15",
+                "0.30",
+                "3.75",
+            ),
+            // GPT-6 系列（Astra 2026-09-04 发布，1.05M 窗口；Sol / Luna 2026-09-22 发布）
+            // 2026-09-23 核对官方价页 + 模型页 + models.dev：录入 Standard 短上下文价，
+            // cache read 0.1×、cache write 1.25× 输入价。>272K 长上下文档（输入与缓存 2×、输出 1.5×）、
+            // Batch/Flex、Fast mode、区域加价本表无法表达，与 gpt-5.5 同样忽略。
+            // effort 档 low/medium/high/xhigh 由查价剥后缀回落到本行；max 不在剥离列表
+            //（会与 *-max 真 id 撞名），不另加后缀行。
+            ("gpt-6-astra", "GPT-6 Astra", "10", "50", "1", "12.5"),
+            // GPT-6.1 Sol: Standard short-context pricing; cached input is 0.05× input.
+            // https://developers.openai.com/api/docs/models/gpt-6.1-sol
+            ("gpt-6.1-sol", "GPT-6.1 Sol", "2", "10", "0.10", "2.50"),
+            ("gpt-6-sol", "GPT-6 Sol", "2", "10", "0.20", "2.50"),
+            ("gpt-6-luna", "GPT-6 Luna", "0.10", "0.50", "0.01", "0.125"),
+            // GPT-5.6 系列（Sol / Terra / Luna，2026-06 发布）
+            // 5.6 家族起 cache write 收 1.25× 输入价（此前 GPT 模型写缓存免费，勿回填旧系列）
+            // 2026-09-06 审计：Sol 改促销价 4/20/0.40/5（OpenAI 价页原文"至少持续到 2026-11-21"），
+            // 挂牌价 5/30/0.50/6.25。录促销价、不进豁免表：促销结束 models.dev 更新后审计会自动报出。
+            ("gpt-5.6-sol", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            // 2026-07-30 OpenAI 降价：luna -80%、terra -20%，sol 不变（Fast mode 2× 价不入表）
+            ("gpt-5.6-terra", "GPT-5.6 Terra", "2", "12", "0.20", "2.50"),
+            (
+                "gpt-5.6-luna",
+                "GPT-5.6 Luna",
+                "0.20",
+                "1.20",
+                "0.02",
+                "0.25",
+            ),
+            // GPT-5.6 Cyber（Daybreak 计划的网安模型，需 Trusted Access；2026-09-23 核对官方价页）。
+            // 别名 gpt-daybreak-red-latest / gpt-daybreak-blue-latest 当前分别指向 gpt-5.6-cyber /
+            // gpt-5.6-sol，官方明说别名改指向时价格随之改变，故别名不入表。
+            (
+                "gpt-5.6-cyber",
+                "GPT-5.6 Cyber",
+                "12.50",
+                "75",
+                "1.25",
+                "15.625",
+            ),
+            // 裸名 gpt-5.6 是 sol 的官方别名；effort 后缀对齐 gpt-5.5 系列的记账形态。
+            // 查价先精确匹配 id 再剥 effort 后缀，这些行必须与 sol 同步改价，否则旧价会压过基础行。
+            ("gpt-5.6", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-low", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-medium", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-high", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-xhigh", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            ("gpt-5.6-minimal", "GPT-5.6 Sol", "4", "20", "0.40", "5"),
+            // GPT-5.5 系列
+            ("gpt-5.5", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.5-low", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.5-medium", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.5-high", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.5-xhigh", "GPT-5.5", "5", "30", "0.50", "0"),
+            ("gpt-5.5-minimal", "GPT-5.5", "5", "30", "0.50", "0"),
+            // GPT-5.4 系列
+            ("gpt-5.4", "GPT-5.4", "2.50", "15", "0.25", "0"),
+            ("gpt-5.4-mini", "GPT-5.4 Mini", "0.75", "4.50", "0.075", "0"),
+            ("gpt-5.4-nano", "GPT-5.4 Nano", "0.20", "1.25", "0.02", "0"),
+            // GPT-5.2 系列
+            ("gpt-5.2", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-low", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-medium", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-high", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-xhigh", "GPT-5.2", "1.75", "14", "0.175", "0"),
+            ("gpt-5.2-codex", "GPT-5.2 Codex", "1.75", "14", "0.175", "0"),
+            (
+                "gpt-5.2-codex-low",
+                "GPT-5.2 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.2-codex-medium",
+                "GPT-5.2 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.2-codex-high",
+                "GPT-5.2 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.2-codex-xhigh",
+                "GPT-5.2 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            // GPT-5.3 Codex 系列
+            ("gpt-5.3-codex", "GPT-5.3 Codex", "1.75", "14", "0.175", "0"),
+            (
+                "gpt-5.3-codex-spark",
+                "GPT-5.3 Codex Spark",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.3-codex-low",
+                "GPT-5.3 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.3-codex-medium",
+                "GPT-5.3 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.3-codex-high",
+                "GPT-5.3 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            (
+                "gpt-5.3-codex-xhigh",
+                "GPT-5.3 Codex",
+                "1.75",
+                "14",
+                "0.175",
+                "0",
+            ),
+            // GPT-5.1 系列
+            ("gpt-5.1", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-low", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-medium", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-high", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-minimal", "GPT-5.1", "1.25", "10", "0.125", "0"),
+            ("gpt-5.1-codex", "GPT-5.1 Codex", "1.25", "10", "0.125", "0"),
+            (
+                "gpt-5.1-codex-mini",
+                "GPT-5.1 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5.1-codex-max",
+                "GPT-5.1 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5.1-codex-max-high",
+                "GPT-5.1 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5.1-codex-max-xhigh",
+                "GPT-5.1 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            // GPT-5 系列
+            ("gpt-5", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-low", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-medium", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-high", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-minimal", "GPT-5", "1.25", "10", "0.125", "0"),
+            ("gpt-5-codex", "GPT-5 Codex", "1.25", "10", "0.125", "0"),
+            ("gpt-5-codex-low", "GPT-5 Codex", "1.25", "10", "0.125", "0"),
+            (
+                "gpt-5-codex-medium",
+                "GPT-5 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5-codex-high",
+                "GPT-5 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5-codex-mini",
+                "GPT-5 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5-codex-mini-medium",
+                "GPT-5 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gpt-5-codex-mini-high",
+                "GPT-5 Codex",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            // OpenAI Reasoning 系列
+            ("o3", "OpenAI o3", "2", "8", "0.50", "0"),
+            ("o4-mini", "OpenAI o4-mini", "1.10", "4.40", "0.275", "0"),
+            // GPT-4.1 系列
+            ("gpt-4.1", "GPT-4.1", "2", "8", "0.50", "0"),
+            ("gpt-4.1-mini", "GPT-4.1 Mini", "0.40", "1.60", "0.10", "0"),
+            ("gpt-4.1-nano", "GPT-4.1 Nano", "0.10", "0.40", "0.025", "0"),
+            // OpenAI 文本模型补全（2026-09-23）：各模型页的标准 token 价。
+            // 来源：https://developers.openai.com/api/docs/models/<model_id>
+            // 已按 /api/docs/deprecations 排除弃用模型；不含工具调用费及多模态价格。
+            // Pro 系列未提供缓存折扣，与 o3-pro 一样将未支持的缓存价格记为 0。
+            // 有意不收：chat-latest 是滚动别名（改指向即改价）；gpt-rosalind-research 官方
+            // 2026-10-05 才开始计费且仅限 Trusted Access，提前入表会给免费期用量记账。
+            ("gpt-5.5-pro", "GPT-5.5 Pro", "30", "180", "0", "0"),
+            ("gpt-5.4-pro", "GPT-5.4 Pro", "30", "180", "0", "0"),
+            ("gpt-5.2-pro", "GPT-5.2 Pro", "21", "168", "0", "0"),
+            ("gpt-4o", "GPT-4o", "2.50", "10", "1.25", "0"),
+            ("gpt-4o-mini", "GPT-4o Mini", "0.15", "0.60", "0.075", "0"),
+            // Gemini 3.8 系列（2026-09-02 发布，1M 窗口）
+            // 介绍价 0.75/3.75/0.075 至 2026-12-31，2027-01-01 起挂牌价 1.50/7.50/0.15；口径同 3.7 Flash，勿加豁免。
+            (
+                "gemini-3.8-flash",
+                "Gemini 3.8 Flash",
+                "0.75",
+                "3.75",
+                "0.075",
+                "0",
+            ),
+            // Gemini 3.7 系列
+            // 录的是介绍价（官方公告 + ai.google.dev 价表 + models.dev 三源一致）。
+            // ⚠️ 介绍价 2026-12-31 到期，2027-01-01 起恢复挂牌价 1.50/7.50/0.15（3.6/3.8 Flash 同此规则）。
+            // 到期后需走 seed + repair 双写改回；届时 models.dev 会先更新，
+            // /jason-update-model 审计的 A 段会自动报出这一行作为提醒——
+            // 因此这一行刻意不进 audit-ignore.json，勿加豁免（会屏蔽掉该提醒）。
+            (
+                "gemini-3.7-flash",
+                "Gemini 3.7 Flash",
+                "0.75",
+                "3.75",
+                "0.075",
+                "0",
+            ),
+            // Gemini 3.6 系列
+            // 2026-09-06 审计：Google 价页已把 3.6 Flash 也改成介绍价 0.75/3.75/0.075（至 2026-12-31），
+            // 2027-01-01 起恢复挂牌价 1.50/7.50/0.15。与 3.7/3.8 Flash 同口径，刻意不进 audit-ignore.json。
+            (
+                "gemini-3.6-flash",
+                "Gemini 3.6 Flash",
+                "0.75",
+                "3.75",
+                "0.075",
+                "0",
+            ),
+            // Gemini 3.5 系列
+            (
+                "gemini-3.5-flash",
+                "Gemini 3.5 Flash",
+                "1.50",
+                "9.00",
+                "0.15",
+                "0",
+            ),
+            (
+                "gemini-3.5-flash-lite",
+                "Gemini 3.5 Flash Lite",
+                "0.30",
+                "2.50",
+                "0.03",
+                "0",
+            ),
+            // Gemini 3.1 系列
+            (
+                "gemini-3.1-pro-preview",
+                "Gemini 3.1 Pro Preview",
+                "2",
+                "12",
+                "0.20",
+                "0",
+            ),
+            (
+                "gemini-3.1-flash-lite",
+                "Gemini 3.1 Flash Lite",
+                "0.25",
+                "1.50",
+                "0.025",
+                "0",
+            ),
+            (
+                "gemini-3.1-flash-lite-preview",
+                "Gemini 3.1 Flash Lite Preview",
+                "0.25",
+                "1.50",
+                "0.025",
+                "0",
+            ),
+            // Gemini 3 系列
+            (
+                "gemini-3-pro-preview",
+                "Gemini 3 Pro Preview",
+                "2",
+                "12",
+                "0.2",
+                "0",
+            ),
+            (
+                "gemini-3-flash-preview",
+                "Gemini 3 Flash Preview",
+                "0.5",
+                "3",
+                "0.05",
+                "0",
+            ),
+            // Gemini 2.5 系列
+            (
+                "gemini-2.5-pro",
+                "Gemini 2.5 Pro",
+                "1.25",
+                "10",
+                "0.125",
+                "0",
+            ),
+            (
+                "gemini-2.5-flash",
+                "Gemini 2.5 Flash",
+                "0.3",
+                "2.5",
+                "0.03",
+                "0",
+            ),
+            (
+                "gemini-2.5-flash-lite",
+                "Gemini 2.5 Flash Lite",
+                "0.10",
+                "0.40",
+                "0.01",
+                "0",
+            ),
+            // Gemini 2.0 系列
+            (
+                "gemini-2.0-flash",
+                "Gemini 2.0 Flash",
+                "0.10",
+                "0.40",
+                "0.025",
+                "0",
+            ),
+            // StepFun 系列：CNY 按 1 USD ≈ 7.14 CNY 折算，保留两位小数。
+            // Step 5 Preview 官方输入 / 输出 / 缓存读取：7 / 20 / 0.35 元。
+            (
+                "step-5-preview",
+                "Step 5 Preview",
+                "0.98",
+                "2.80",
+                "0.05",
+                "0",
+            ),
+            (
+                "step-3.7-flash",
+                "Step 3.7 Flash",
+                "0.19",
+                "1.13",
+                "0.04",
+                "0",
+            ),
+            (
+                "step-3.5-flash",
+                "Step 3.5 Flash",
+                "0.10",
+                "0.30",
+                "0.02",
+                "0",
+            ),
+            (
+                "step-3.5-flash-2603",
+                "Step 3.5 Flash 2603",
+                "0.10",
+                "0.30",
+                "0.02",
+                "0",
+            ),
+            // ====== 国产模型 (USD/1M tokens) ======
+            // Doubao (字节跳动)
+            // Seed 2.1 系列（2026-06 火山引擎官方 list 价，CNY 按 ~7.14 折算）：
+            //   pro   输入 6 元 / 输出 30 元 / 命中 1.2 元
+            //   turbo 输入 3 元 / 输出 15 元 / 命中 0.6 元
+            // 「缓存存储 0.017 元/M/小时」是按时长计费的存储费，与本表 cache_creation（按 token 写入价）口径不同，置 0。
+            (
+                "doubao-seed-2-1-pro",
+                "Doubao Seed 2.1 Pro",
+                "0.84",
+                "4.2",
+                "0.17",
+                "0",
+            ),
+            (
+                "doubao-seed-2-1-turbo",
+                "Doubao Seed 2.1 Turbo",
+                "0.42",
+                "2.1",
+                "0.08",
+                "0",
+            ),
+            (
+                "doubao-seed-code",
+                "Doubao Seed Code",
+                "0.17",
+                "1.11",
+                "0.02",
+                "0",
+            ),
+            (
+                "doubao-seed-2-0-pro",
+                "Doubao Seed 2.0 Pro",
+                "0.47",
+                "2.37",
+                "0.09",
+                "0",
+            ),
+            (
+                "doubao-seed-2-0-code",
+                "Doubao Seed 2.0 Code",
+                "0.47",
+                "2.37",
+                "0.09",
+                "0",
+            ),
+            (
+                "doubao-seed-2-0-code-preview-latest",
+                "Doubao Seed 2.0 Code Preview",
+                "0.47",
+                "2.37",
+                "0.09",
+                "0",
+            ),
+            (
+                "doubao-seed-2-0-lite",
+                "Doubao Seed 2.0 Lite",
+                "0.08",
+                "0.50",
+                "0.017",
+                "0",
+            ),
+            (
+                "doubao-seed-2-0-mini",
+                "Doubao Seed 2.0 Mini",
+                "0.03",
+                "0.31",
+                "0.0056",
+                "0",
+            ),
+            // DeepSeek 系列
+            (
+                "deepseek-v3.2",
+                "DeepSeek V3.2",
+                "0.28",
+                "0.42",
+                "0.028",
+                "0",
+            ),
+            (
+                "deepseek-v3.1",
+                "DeepSeek V3.1",
+                "0.55",
+                "1.67",
+                "0.055",
+                "0",
+            ),
+            ("deepseek-v3", "DeepSeek V3", "0.28", "1.11", "0.028", "0"),
+            // ── DeepSeek V4 系列：2026-08-16 16:00 UTC 起改为峰谷双档计价 ──
+            // 官方价页（api-docs.deepseek.com/quick_start/pricing，中英一致）直接挂 USD，
+            // 不再需要 CNY 折算。高峰时段 = 北京时间 9:00-12:00 与 14:00-18:00
+            // （= UTC 01:00-04:00、06:00-10:00），共 7h/天；其余 17h 为空闲档。
+            //
+            // 🔴 本表每模型仅一行、无时段维度，**统一录高峰档**（Jason 2026-08-18 拍板）：
+            //   ① 官方措辞是「空闲价为高峰价的一半」，高峰档才是基准挂牌价；
+            //   ② 高峰时段正是中文用户的工作时间，是 AI 编程主力时段。
+            //   代价=夜间/凌晨用量高估一倍。勿按「阶梯取低档」惯例改成空闲档。
+            //
+            // input=缓存未命中价，cache_read=缓存命中价；DeepSeek 不单收 cache write → 0。
+            //
+            // ── 2026-09-11：V4 Flash 退役，三个 id 全部由 DeepSeek-V4.1-Flash 承接 ──
+            // 官方价页原文：legacy names `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`
+            // 仍被接受，但「the corresponding models have been retired」，请求由 V4.1-Flash 服务
+            // 并按 Flash 价计费 → 三者同价。V4.1 Flash 高峰档 0.3/1.2/0.006（空闲档 0.15/0.6/0.003
+            // 恰为一半；models.dev 录的正是空闲档，故审计 A 段会长期报这几行，属预期）。
+            // deepseek-flash 是官方当前唯一推荐名，必须单列：查价前缀兜底是 LIKE '{id}-%'，
+            // 只命中更长的行，短 id 匹配不到 deepseek-v4-flash，缺行即静默按 0 计费。
+            //
+            // 🔴 deepseek-chat / deepseek-reasoner 停在 V4 Flash 高峰档不动（2026-09-11 复核）：
+            // 官方文档站已全站搜不到这两个 id、models.dev 第一方条目也已删除 —— 无权威源可证
+            // 「跟随 V4.1 Flash 降价」或「已下线」任一方向，按无源不动原则保留旧值。
+            (
+                "deepseek-chat",
+                "DeepSeek Chat",
+                "0.44",
+                "1.32",
+                "0.014",
+                "0",
+            ),
+            (
+                "deepseek-reasoner",
+                "DeepSeek Reasoner",
+                "0.44",
+                "1.32",
+                "0.014",
+                "0",
+            ),
+            (
+                "deepseek-flash",
+                "DeepSeek V4.1 Flash",
+                "0.3",
+                "1.2",
+                "0.006",
+                "0",
+            ),
+            (
+                "deepseek-v4-flash",
+                "DeepSeek V4 Flash",
+                "0.3",
+                "1.2",
+                "0.006",
+                "0",
+            ),
+            // 部分上游（如阿里百炼）回传 4 位 MMDD 日期变体。查价的
+            // strip_model_date_suffix 只剥 ISO / 8 位 YYYYMMDD / 6 位 YYMMDD，
+            // 剥不到裸 id，前缀兜底也只匹配更长的行 —— 不补别名会静默按 0 计费
+            (
+                "deepseek-v4-flash-0731",
+                "DeepSeek V4 Flash",
+                "0.3",
+                "1.2",
+                "0.006",
+                "0",
+            ),
+            // 旧视觉实验名，官方定价页明示「仍被接受、由 V4.1-Flash 承接并按 Flash 价计费」。
+            // 官方安装脚本 ≤1.2.0 写过这个 id，存量供应商仍在用；前缀兜底匹配不到更短的
+            // deepseek-v4-flash，不单列会静默按 0 计费
+            (
+                "deepseek-v4-flash-vision-exp",
+                "DeepSeek V4 Flash Vision Exp",
+                "0.3",
+                "1.2",
+                "0.006",
+                "0",
+            ),
+            // V4 Pro 高峰档 1.32/3.96/0.044（CNY 9/27/0.3）。官方 2026-09-12 撤回了「09-14 起
+            // 路由到 V4.1 Flash」的公告，定价页注(2)：9 月 14 日之后继续提供 V4 Pro API，
+            // 计费方式保持不变（2026-09-15 复核）。
+            // 🔴 勿按未生效的厂商公告提前改价：v3.20.3 曾因此发出 0.3/1.2/0.006 错价。
+            (
+                "deepseek-v4-pro",
+                "DeepSeek V4 Pro",
+                "1.32",
+                "3.96",
+                "0.044",
+                "0",
+            ),
+            // Kimi (月之暗面)
+            (
+                "kimi-k2-thinking",
+                "Kimi K2 Thinking",
+                "0.55",
+                "2.20",
+                "0.10",
+                "0",
+            ),
+            ("kimi-k2-0905", "Kimi K2", "0.55", "2.20", "0.10", "0"),
+            (
+                "kimi-k2-turbo",
+                "Kimi K2 Turbo",
+                "1.11",
+                "8.06",
+                "0.14",
+                "0",
+            ),
+            ("kimi-k2.5", "Kimi K2.5", "0.60", "3.00", "0.10", "0"),
+            ("kimi-k2.6", "Kimi K2.6", "0.95", "4.00", "0.16", "0"),
+            (
+                "kimi-k2.7-code",
+                "Kimi K2.7 Code",
+                "0.95",
+                "4.00",
+                "0.19",
+                "0",
+            ),
+            // HighSpeed 加速档=本体 2 倍价（Kimi 官方一贯模式，同 K2 Turbo）
+            (
+                "kimi-k2.7-code-highspeed",
+                "Kimi K2.7 Code HighSpeed",
+                "1.90",
+                "8.00",
+                "0.38",
+                "0",
+            ),
+            ("kimi-k3", "Kimi K3", "3.00", "15.00", "0.30", "0"),
+            // Kimi For Coding 套餐里 K3 的裸名（无 kimi- 前缀），同标准 list 价
+            ("k3", "Kimi K3", "3.00", "15.00", "0.30", "0"),
+            // 腾讯混元 (Tencent Hunyuan)（官方 CNY 1/4/0.25 按 1 USD ≈ 7.14 折算；Hy3 阶梯计价取最低档）
+            ("hunyuan-hy3", "Hunyuan Hy3", "0.14", "0.56", "0.035", "0"),
+            ("hy3", "Hunyuan Hy3", "0.14", "0.56", "0.035", "0"),
+            // Hy4 preview：官方广州地域 CNY 6/18/0.3（1823/130055，2026-09-11 版）按 7.14 折算，无阶梯
+            (
+                "hy4-preview",
+                "Hunyuan Hy4 Preview",
+                "0.84",
+                "2.52",
+                "0.042",
+                "0",
+            ),
+            // MiniMax 系列
+            // 2026-09-06 审计：官方按量价页（platform.minimax.io/docs/guides/pricing-paygo）
+            // M2 / M2.1 / M2.5 均为 0.3/1.2/0.03/0.375，models.dev 一致；旧值 0.27/0.95 与 0.15 为早期误录。
+            (
+                "minimax-m2.1",
+                "MiniMax M2.1",
+                "0.30",
+                "1.20",
+                "0.03",
+                "0.375",
+            ),
+            (
+                "minimax-m2.1-lightning",
+                "MiniMax M2.1 Lightning",
+                "0.27",
+                "2.33",
+                "0.03",
+                "0",
+            ),
+            ("minimax-m2", "MiniMax M2", "0.30", "1.20", "0.03", "0.375"),
+            (
+                "minimax-m2.5",
+                "MiniMax M2.5",
+                "0.30",
+                "1.20",
+                "0.03",
+                "0.375",
+            ),
+            (
+                "minimax-m2.5-lightning",
+                "MiniMax M2.5 Lightning",
+                "0.30",
+                "2.40",
+                "0.03",
+                "0",
+            ),
+            (
+                "minimax-m2.7",
+                "MiniMax M2.7",
+                "0.30",
+                "1.20",
+                "0.06",
+                "0.375",
+            ),
+            (
+                "minimax-m2.7-highspeed",
+                "MiniMax M2.7 Highspeed",
+                "0.60",
+                "2.40",
+                "0.06",
+                "0.375",
+            ),
+            ("minimax-m3", "MiniMax M3", "0.30", "1.20", "0.06", "0"),
+            // GLM (智谱)
+            ("glm-4.7", "GLM-4.7", "0.6", "2.2", "0.11", "0"),
+            ("glm-4.6", "GLM-4.6", "0.6", "2.2", "0.11", "0"),
+            ("glm-5", "GLM-5", "1", "3.2", "0.2", "0"),
+            ("glm-5.1", "GLM-5.1", "1.4", "4.4", "0.26", "0"),
+            ("glm-5.2", "GLM-5.2", "1.4", "4.4", "0.26", "0"),
+            ("glm-5.3", "GLM-5.3", "1.4", "4.4", "0.26", "0"),
+            (
+                "glm-5.3-flash",
+                "GLM-5.3-Flash",
+                "0.15",
+                "0.50",
+                "0.03",
+                "0",
+            ),
+            (
+                "glm-5.3-flashx",
+                "GLM-5.3-FlashX",
+                "0.37",
+                "1.25",
+                "0.075",
+                "0",
+            ),
+            ("glm-5-turbo", "GLM-5-Turbo", "1.2", "4", "0.24", "0"),
+            ("glm-5v-turbo", "GLM-5V-Turbo", "1.2", "4", "0.24", "0"),
+            // MiMo (小米)
+            (
+                "mimo-v2-flash",
+                "MiMo V2 Flash",
+                "0.09",
+                "0.29",
+                "0.009",
+                "0",
+            ),
+            ("mimo-v2-pro", "MiMo V2 Pro", "0.435", "0.87", "0.0036", "0"),
+            ("mimo-v2.5", "MiMo V2.5", "0.14", "0.28", "0.0028", "0"),
+            (
+                "mimo-v2.5-pro",
+                "MiMo V2.5 Pro",
+                "0.435",
+                "0.87",
+                "0.0036",
+                "0",
+            ),
+            // Qwen 系列 (阿里巴巴)
+            ("qwen3.8-max", "Qwen3.8 Max", "2", "6", "0.25", "2.50"),
+            // 2026-09-06：阿里国际站价页 0.15/0.47 全区间（0<Token≤1M）平价、无阶梯；
+            // 缓存两列官方只注明"非常规比例"未给数字，取 models.dev（与 qwen3.8-max 同口径）
+            (
+                "qwen3.8-flash",
+                "Qwen3.8 Flash",
+                "0.15",
+                "0.47",
+                "0.016",
+                "0.20",
+            ),
+            // 2026-09-15：开放权重两款，取阿里国际站（新加坡）模型页单价，无阶梯；缓存两列为
+            // 隐式缓存命中价与显式缓存创建价，与 qwen3.8-max 同口径
+            (
+                "qwen3.8-2.4t-a95b",
+                "Qwen3.8 2.4T A95B",
+                "2",
+                "6",
+                "0.25",
+                "2.50",
+            ),
+            ("qwen3.8-27b", "Qwen3.8 27B", "0.50", "3", "0.10", "0.625"),
+            ("qwen3.7-max", "Qwen3.7 Max", "2.50", "7.50", "0.25", "0"),
+            ("qwen3.7-plus", "Qwen3.7 Plus", "0.40", "1.60", "0.08", "0"),
+            (
+                "qwen3.6-plus",
+                "Qwen3.6 Plus",
+                "0.325",
+                "1.95",
+                "0.065",
+                "0",
+            ),
+            (
+                "qwen3.6-flash",
+                "Qwen3.6 Flash",
+                "0.1875",
+                "1.125",
+                "0.0375",
+                "0",
+            ),
+            ("qwen3.5-plus", "Qwen3.5 Plus", "0.26", "1.56", "0.052", "0"),
+            ("qwen3-max", "Qwen3 Max", "0.78", "3.90", "0", "0"),
+            (
+                "qwen3-235b-a22b",
+                "Qwen3 235B-A22B",
+                "0.70",
+                "8.40",
+                "0",
+                "0",
+            ),
+            (
+                "qwen3-coder-plus",
+                "Qwen3 Coder Plus",
+                "0.65",
+                "3.25",
+                "0.13",
+                "0",
+            ),
+            (
+                "qwen3-coder-480b",
+                "Qwen3 Coder 480B",
+                "0.65",
+                "3.25",
+                "0",
+                "0",
+            ),
+            (
+                "qwen3-coder-480b-a35b-instruct",
+                "Qwen3 Coder 480B-A35B Instruct",
+                "0.65",
+                "3.25",
+                "0",
+                "0",
+            ),
+            (
+                "qwen3-coder-flash",
+                "Qwen3 Coder Flash",
+                "0.195",
+                "0.975",
+                "0.039",
+                "0",
+            ),
+            (
+                "qwen3-coder-next",
+                "Qwen3 Coder Next",
+                "0.12",
+                "0.75",
+                "0",
+                "0",
+            ),
+            ("qwq-plus", "QwQ Plus", "0.80", "2.40", "0", "0"),
+            ("qwq-32b", "QwQ 32B", "0.20", "0.60", "0", "0"),
+            ("qwen3-32b", "Qwen3 32B", "0.16", "0.64", "0", "0"),
+            // Grok 系列 (xAI)
+            // 4.5/4.6/4.7 均为分档计价：prompt ≥200K 时单价翻倍（4/12，cached 亦翻倍）。
+            // 本表无档位列，统一取基础档（<200K），与其它分档厂商口径一致
+            ("grok-4.7", "Grok 4.7", "2", "6", "0.50", "0"),
+            ("grok-4.6", "Grok 4.6", "2", "6", "0.50", "0"),
+            ("grok-4.5", "Grok 4.5", "2", "6", "0.30", "0"),
+            // Grok CLI 官方 OAuth 态 modelUsage 上报的内部别名。定价由
+            // costUsdTicks（1 tick = 1e-10 USD）双轮实测反推：input/output 与
+            // grok-4.5 同为 2/6，cache read 同为 0.30
+            ("grok-4.5-build", "Grok 4.5 Build", "2", "6", "0.30", "0"),
+            ("grok-4.3", "Grok 4.3", "1.25", "2.50", "0.20", "0"),
+            (
+                "grok-4.20-0309-reasoning",
+                "Grok 4.20 Reasoning",
+                "1.25",
+                "2.50",
+                "0.20",
+                "0",
+            ),
+            (
+                "grok-4.20-0309-non-reasoning",
+                "Grok 4.20",
+                "1.25",
+                "2.50",
+                "0.20",
+                "0",
+            ),
+            (
+                "grok-4-1-fast-reasoning",
+                "Grok 4.1 Fast Reasoning",
+                "0.20",
+                "0.50",
+                "0.05",
+                "0",
+            ),
+            (
+                "grok-4-1-fast-non-reasoning",
+                "Grok 4.1 Fast",
+                "0.20",
+                "0.50",
+                "0.05",
+                "0",
+            ),
+            ("grok-4", "Grok 4", "3", "15", "0.75", "0"),
+            (
+                "grok-code-fast-1",
+                "Grok Build 0.1 (Code Fast Alias)",
+                "1",
+                "2",
+                "0.20",
+                "0",
+            ),
+            ("grok-build-0.1", "Grok Build 0.1", "1", "2", "0.20", "0"),
+            ("grok-3", "Grok 3", "3", "15", "0.75", "0"),
+            ("grok-3-mini", "Grok 3 Mini", "0.25", "0.50", "0.075", "0"),
+            // Mistral 系列
+            (
+                "mistral-medium-3.5",
+                "Mistral Medium 3.5",
+                "1.50",
+                "7.50",
+                "0",
+                "0",
+            ),
+            (
+                "mistral-small-4",
+                "Mistral Small 4",
+                "0.10",
+                "0.30",
+                "0.01",
+                "0",
+            ),
+            (
+                "devstral-small-2-2512",
+                "Devstral Small 2",
+                "0.10",
+                "0.30",
+                "0.01",
+                "0",
+            ),
+            (
+                "magistral-small",
+                "Magistral Small",
+                "0.50",
+                "1.50",
+                "0",
+                "0",
+            ),
+            ("codestral-2508", "Codestral", "0.30", "0.90", "0.03", "0"),
+            (
+                "devstral-small-1.1",
+                "Devstral Small 1.1",
+                "0.07",
+                "0.28",
+                "0.01",
+                "0",
+            ),
+            ("devstral-2-2512", "Devstral 2", "0.40", "2", "0.04", "0"),
+            (
+                "devstral-medium",
+                "Devstral Medium",
+                "0.40",
+                "2",
+                "0.04",
+                "0",
+            ),
+            (
+                "mistral-large-3-2512",
+                "Mistral Large 3",
+                "0.50",
+                "1.50",
+                "0.05",
+                "0",
+            ),
+            (
+                "mistral-medium-3.1",
+                "Mistral Medium 3.1",
+                "0.40",
+                "2",
+                "0.04",
+                "0",
+            ),
+            (
+                "mistral-small-3.2-24b",
+                "Mistral Small 3.2",
+                "0.075",
+                "0.20",
+                "0.01",
+                "0",
+            ),
+            ("magistral-medium", "Magistral Medium", "2", "5", "0", "0"),
+            // Cohere 系列
+            ("command-a", "Cohere Command A", "2.50", "10", "0", "0"),
+            (
+                "command-r-plus",
+                "Cohere Command R+",
+                "2.50",
+                "10",
+                "0",
+                "0",
+            ),
+            ("command-r", "Cohere Command R", "0.15", "0.60", "0", "0"),
+            // OpenAI 补充
+            ("o3-pro", "OpenAI o3-pro", "20", "80", "0", "0"),
+            ("o3-mini", "OpenAI o3-mini", "1.10", "4.40", "0.55", "0"),
+            ("o1", "OpenAI o1", "15", "60", "7.50", "0"),
+            ("o1-mini", "OpenAI o1-mini", "0.55", "2.20", "0.55", "0"),
+            ("codex-mini", "Codex Mini", "0.75", "3", "0.025", "0"),
+            ("gpt-5-mini", "GPT-5 Mini", "0.25", "2", "0.025", "0"),
+            ("gpt-5-nano", "GPT-5 Nano", "0.05", "0.40", "0.005", "0"),
+            // MiMo 2.6：2026-09-23 核对官方标准价格，单位 USD / 百万 tokens。
+            (
+                "mimo-v2.6-pro",
+                "MiMo V2.6 Pro",
+                "0.435",
+                "0.87",
+                "0.0036",
+                "0",
+            ),
+            (
+                "mimo-v2.6-flash",
+                "MiMo V2.6 Flash",
+                "0.14",
+                "0.28",
+                "0.0028",
+                "0",
+            ),
+            (
+                "mimo-v2.6-pro-ultraspeed",
+                "MiMo V2.6 Pro UltraSpeed",
+                "4.35",
+                "8.7",
+                "0.036",
+                "0",
+            ),
+        ];
 
         let mut stmt = conn
             .prepare(
@@ -1763,14 +2810,14 @@ impl Database {
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )
             .map_err(|e| AppError::Database(format!("准备模型定价语句失败: {e}")))?;
-        for p in &pricing_data {
+        for (model_id, display_name, input, output, cache_read, cache_creation) in pricing_data {
             stmt.execute(rusqlite::params![
-                p.model_id,
-                p.display_name,
-                p.input_cost_per_million,
-                p.output_cost_per_million,
-                p.cache_read_cost_per_million,
-                p.cache_creation_cost_per_million
+                model_id,
+                display_name,
+                input,
+                output,
+                cache_read,
+                cache_creation
             ])
             .map_err(|e| AppError::Database(format!("插入模型定价失败: {e}")))?;
         }
@@ -2678,7 +3725,6 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn migrate_v12_to_v13_adds_input_token_semantics_columns() -> Result<(), AppError> {
@@ -2718,7 +3764,7 @@ mod tests {
     }
 
     #[test]
-    fn migrate_v13_to_v14_restores_grokbuild_row_per_upstream() -> Result<(), AppError> {
+    fn migrate_v13_to_v14_adds_grokbuild_proxy_row_and_preserves_values() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::create_tables_on_conn(&conn)?;
         conn.execute("DELETE FROM proxy_config WHERE app_type = 'grokbuild'", [])?;
@@ -2731,7 +3777,6 @@ mod tests {
         Database::apply_schema_migrations_on_conn(&conn)?;
 
         assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        // schema 回到上游 v19：v13 -> v14 恢复 grokbuild 行（上游语义，fork 不消费但保留）
         let grok_rows: i64 = conn.query_row(
             "SELECT COUNT(*) FROM proxy_config WHERE app_type = 'grokbuild'",
             [],
@@ -2745,6 +3790,31 @@ mod tests {
         )?;
         assert_eq!(codex_values, (1, 9));
 
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v19_to_v20_adds_pi_mcp_flag_and_keeps_existing_flags() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE mcp_servers (
+                id TEXT PRIMARY KEY,
+                enabled_codex BOOLEAN NOT NULL DEFAULT 0,
+                enabled_mcode BOOLEAN NOT NULL DEFAULT 0
+            );
+            INSERT INTO mcp_servers (id, enabled_codex, enabled_mcode) VALUES ('mcp-1', 1, 1);",
+        )?;
+        Database::set_user_version(&conn, 19)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        let values: (i64, i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_mcode, enabled_pi FROM mcp_servers WHERE id = 'mcp-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(values, (1, 1, 0));
         Ok(())
     }
 
@@ -2774,25 +3844,24 @@ mod tests {
         Database::apply_schema_migrations_on_conn(&conn)?;
 
         assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
-        // 上游 v19 形状：enabled_grokbuild 列保留
         assert!(Database::has_column(
             &conn,
             "mcp_servers",
             "enabled_grokbuild"
         )?);
         assert!(Database::has_column(&conn, "skills", "enabled_grokbuild")?);
-        let mcp_codex: i64 = conn.query_row(
-            "SELECT enabled_codex FROM mcp_servers WHERE id = 'mcp-1'",
+        let mcp_values: (i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_grokbuild FROM mcp_servers WHERE id = 'mcp-1'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let skill_codex: i64 = conn.query_row(
-            "SELECT enabled_codex FROM skills WHERE id = 'skill-1'",
+        let skill_values: (i64, i64) = conn.query_row(
+            "SELECT enabled_codex, enabled_grokbuild FROM skills WHERE id = 'skill-1'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        assert_eq!(mcp_codex, 1);
-        assert_eq!(skill_codex, 1);
+        assert_eq!(mcp_values, (1, 0));
+        assert_eq!(skill_values, (1, 0));
 
         Ok(())
     }
@@ -2834,7 +3903,6 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-        // v15 -> v16 只重置 codex 的会话用量；gemini 行按上游语义保留
         assert_eq!(counts, (0, 1, 0, 1));
         Ok(())
     }
@@ -2895,245 +3963,5 @@ mod tests {
         assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
         assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
         Ok(())
-    }
-
-    /// 用**真实存量库副本**验证归一（可选，手动运行）：
-    /// `CCSW_LEGACY_DB_PATH=<旧库路径> cargo test --lib normalize_real_legacy_database -- --ignored`
-    ///
-    /// 测试只读副本，不触碰原库。用于每次 schema 相关改动后的端到端复核。
-    #[test]
-    #[ignore = "requires CCSW_LEGACY_DB_PATH pointing at a copy of a legacy v20-v22 database"]
-    fn normalize_real_legacy_database() -> Result<(), AppError> {
-        let path = std::env::var("CCSW_LEGACY_DB_PATH")
-            .expect("set CCSW_LEGACY_DB_PATH to a legacy database copy");
-        let conn = Connection::open(&path).map_err(|e| AppError::Database(e.to_string()))?;
-        let before = Database::get_user_version(&conn)?;
-        assert!(
-            (20..=22).contains(&before),
-            "fixture must be a legacy trim database, got v{before}"
-        );
-        let providers_before: i64 =
-            conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
-        let usage_before: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))?;
-
-        Database::normalize_legacy_trim_schema_on_conn(&conn, before)?;
-
-        assert_eq!(Database::get_user_version(&conn)?, 19);
-        let create_sql: String = conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert!(!create_sql.contains("'pi'"));
-        let providers_after: i64 =
-            conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
-        let usage_after: i64 =
-            conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |r| r.get(0))?;
-        assert_eq!(providers_before, providers_after, "供应商数据零丢失");
-        assert_eq!(usage_before, usage_after, "用量数据零丢失");
-        let integrity: String = conn
-            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        assert_eq!(integrity, "ok");
-        Ok(())
-    }
-
-    #[test]
-    fn fresh_database_matches_upstream_v19_invariants() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        Database::create_tables_on_conn(&conn)?;
-        assert_eq!(Database::get_user_version(&conn)?, 0);
-
-        // schema 不变量：proxy_config 的 CHECK 与上游 v3.20.4 一致，不含 'pi'
-        let create_sql: String = conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert!(create_sql.contains("'claude','codex','gemini','grokbuild'"));
-        assert!(!create_sql.contains("'pi'"), "CHECK 不得放行 'pi'");
-
-        // 上游 v19 的 mcp_servers / skills 形状：5 个已裁剪应用列保留（DEFAULT 0）
-        for table in ["mcp_servers", "skills"] {
-            for column in [
-                "enabled_gemini",
-                "enabled_grokbuild",
-                "enabled_opencode",
-                "enabled_mcode",
-                "enabled_hermes",
-            ] {
-                assert!(
-                    Database::has_column(&conn, table, column)?,
-                    "{table}.{column} 必须存在（上游 v19 形状）"
-                );
-            }
-        }
-
-        // 不变量测试：写入 'pi' 行必须被 CHECK 拒绝
-        assert!(
-            conn.execute("INSERT INTO proxy_config (app_type) VALUES ('pi')", [])
-                .is_err(),
-            "proxy_config CHECK 必须拒绝 'pi' 行"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn normalize_legacy_v22_database_restores_upstream_shapes() -> Result<(), AppError> {
-        let conn = Connection::open_in_memory()?;
-        // 复刻旧 fork v22 库：3 值 CHECK + pi 行、缺 5 列的 mcp_servers/skills、
-        // app_snapshots 独立表
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
-             CREATE TABLE mcp_servers (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, server_config TEXT NOT NULL,
-                description TEXT, homepage TEXT, docs TEXT, tags TEXT NOT NULL DEFAULT '[]',
-                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0);
-             CREATE TABLE skills (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, directory TEXT NOT NULL,
-                repo_owner TEXT, repo_name TEXT, repo_branch TEXT DEFAULT 'main', readme_url TEXT,
-                enabled_claude BOOLEAN NOT NULL DEFAULT 0, enabled_codex BOOLEAN NOT NULL DEFAULT 0,
-                installed_at INTEGER NOT NULL DEFAULT 0, content_hash TEXT,
-                updated_at INTEGER NOT NULL DEFAULT 0);
-             CREATE TABLE proxy_config (
-                app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','pi')),
-                proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-                listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-                enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-                streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-                circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-                circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-                circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-                default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-                pricing_model_source TEXT NOT NULL DEFAULT 'response',
-                live_takeover_active INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
-             CREATE TABLE app_snapshots (
-                name TEXT PRIMARY KEY, data TEXT NOT NULL, created_at INTEGER NOT NULL);
-             INSERT INTO proxy_config (app_type, enabled) VALUES ('claude', 1), ('codex', 0), ('pi', 0);
-             INSERT INTO mcp_servers (id, name, server_config) VALUES ('m1', 'M', '{}');
-             INSERT INTO app_snapshots (name, data, created_at)
-                VALUES ('work', '{\"name\":\"work\",\"created_at\":1000,\"apps\":{}}', 1000);",
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        Database::set_user_version(&conn, 22)?;
-
-        Database::normalize_legacy_trim_schema_on_conn(&conn, 22)?;
-
-        // 归一后：v19 版本 + 上游形状
-        assert_eq!(Database::get_user_version(&conn)?, 19);
-        let create_sql: String = conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'proxy_config'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert!(create_sql.contains("'claude','codex','gemini','grokbuild'"));
-        assert!(!create_sql.contains("'pi'"));
-
-        // pi 行删除，claude/codex 数据完好
-        let claude_enabled: i64 = conn.query_row(
-            "SELECT enabled FROM proxy_config WHERE app_type = 'claude'",
-            [],
-            |r| r.get(0),
-        )?;
-        assert_eq!(claude_enabled, 1, "归一不能丢 claude 配置");
-        assert!(
-            conn.query_row(
-                "SELECT 1 FROM proxy_config WHERE app_type = 'pi'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .is_err(),
-            "pi 行必须被删除"
-        );
-        assert!(Database::has_column(
-            &conn,
-            "proxy_config",
-            "live_takeover_active"
-        )?);
-
-        // mcp_servers / skills 补回 5 列，数据未丢
-        for table in ["mcp_servers", "skills"] {
-            for column in [
-                "enabled_gemini",
-                "enabled_grokbuild",
-                "enabled_opencode",
-                "enabled_mcode",
-                "enabled_hermes",
-            ] {
-                assert!(Database::has_column(&conn, table, column)?);
-            }
-        }
-        let mcp: i64 = conn.query_row("SELECT COUNT(*) FROM mcp_servers", [], |r| r.get(0))?;
-        assert_eq!(mcp, 1, "归一不能丢 mcp_servers 数据");
-
-        // app_snapshots → settings 搬移 + DROP
-        let snapshot: Option<String> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'app_snapshot:work'",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        assert!(snapshot.is_some(), "快照必须搬到 settings");
-        assert!(!Database::table_exists(&conn, "app_snapshots")?);
-
-        // 幂等：再跑一次不报错、版本不变
-        Database::normalize_legacy_trim_schema_on_conn(&conn, 22)?;
-        assert_eq!(Database::get_user_version(&conn)?, 19);
-        Ok(())
-    }
-
-    /// 构造一个指定 user_version 的裸库文件（可选带 app_snapshots 表）。
-    fn seed_db_file(version: i32, with_app_snapshots: bool) -> NamedTempFile {
-        let file = NamedTempFile::new().expect("temp db file");
-        let conn = Connection::open(file.path()).expect("open seed db");
-        if with_app_snapshots {
-            conn.execute(
-                "CREATE TABLE app_snapshots (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
-                [],
-            )
-            .expect("create app_snapshots");
-        }
-        conn.execute_batch(&format!("PRAGMA user_version = {version};"))
-            .expect("set user_version");
-        file
-    }
-
-    #[test]
-    fn version_precheck_allows_normalizable_fork_legacy_shapes() {
-        // fork 遗留 v20..=22 且带 app_snapshots 标志表 → 放行（返回 None），
-        // 否则 app_setup 预检会抢在 Database::init 的 normalize 之前把
-        // 真实存量库拦进「版本过新」恢复界面（2026-10-10 真机回归）。
-        for version in 20..=MAX_NORMALIZABLE_LEGACY_VERSION {
-            let file = seed_db_file(version, true);
-            let exceeded =
-                Database::stored_user_version_exceeds_supported(file.path()).expect("precheck");
-            assert_eq!(exceeded, None, "v{version} fork 遗留形态必须放行 normalize");
-        }
-    }
-
-    #[test]
-    fn version_precheck_still_blocks_unknown_newer_shapes() {
-        // 同版本但缺 app_snapshots 表（如未来上游 v20 形态）→ 仍判过新
-        let file = seed_db_file(20, false);
-        assert_eq!(
-            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
-            Some(20)
-        );
-        // 超出可归一上限的任何形态 → 过新
-        let file = seed_db_file(MAX_NORMALIZABLE_LEGACY_VERSION + 1, true);
-        assert_eq!(
-            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
-            Some(MAX_NORMALIZABLE_LEGACY_VERSION + 1)
-        );
-        // 支持范围内的版本 → 放行
-        let file = seed_db_file(SCHEMA_VERSION, false);
-        assert_eq!(
-            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
-            None
-        );
     }
 }

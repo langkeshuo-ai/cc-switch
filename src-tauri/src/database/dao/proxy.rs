@@ -1,61 +1,16 @@
 //! 代理功能数据访问层
 //!
 //! 处理代理配置、Provider健康状态和使用统计的数据库操作
-//!
-//! # 关于本模块的 `async fn`
-//!
-//! 本模块多数 `async fn` **函数体内没有 `await`** —— 它们首行就抢
-//! `std::sync::Mutex` 阻塞锁并跑同步 SQLite。签名是 `async` 属**刻意保留**，
-//! 不是疏忽：
-//!
-//! - 这些方法会被 `futures::executor::block_on` 在**没有 tokio runtime** 的上下文
-//!   调用（`services/proxy.rs`、`services/provider/live.rs`、`tray.rs`）。改成
-//!   `spawn_blocking` 会在 runtime 外 panic。
-//! - tokio 热路径（axum handler、failover、每请求转发）另有`*_blocking` 变体，
-//!   走 [`Database::db_blocking`] 把同步工作移出 worker线程。
-//!
-//! **新增 DAO 方法时的规则**：先判断调用方是否在 tokio runtime 内。
-//! 在 → 用 `db_blocking`；不在 → 保持内联同步（本文件现状）。
-//! 不要"顺手"把内联方法改成 `spawn_blocking`。
-
-use std::str::FromStr;
 
 use crate::error::AppError;
 use crate::proxy::types::*;
-use rust_decimal::Decimal;
 
 use super::super::{lock_conn, Database};
 
 pub(crate) const PRICING_SOURCE_RESPONSE: &str = "response";
 pub(crate) const PRICING_SOURCE_REQUEST: &str = "request";
 
-pub(crate) fn validate_cost_multiplier(value: &str) -> Result<Decimal, AppError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::localized(
-            "error.multiplierEmpty",
-            "倍率不能为空",
-            "Multiplier cannot be empty",
-        ));
-    }
-    let parsed = Decimal::from_str(trimmed).map_err(|e| {
-        AppError::localized(
-            "error.invalidMultiplier",
-            format!("无效倍率: {value} - {e}"),
-            format!("Invalid multiplier: {value} - {e}"),
-        )
-    })?;
-    if parsed < Decimal::ZERO {
-        return Err(AppError::localized(
-            "error.invalidMultiplier",
-            format!("无效倍率: {value} - 倍率不能为负数"),
-            format!("Invalid multiplier: {value} - multiplier cannot be negative"),
-        ));
-    }
-    Ok(parsed)
-}
-
-pub(crate) fn validate_pricing_source(value: &str) -> Result<&str, AppError> {
+fn validate_pricing_source(value: &str) -> Result<&str, AppError> {
     let trimmed = value.trim();
     if trimmed == PRICING_SOURCE_RESPONSE || trimmed == PRICING_SOURCE_REQUEST {
         Ok(trimmed)
@@ -136,75 +91,25 @@ impl Database {
         Ok(())
     }
 
-    /// 获取默认成本倍率
-    ///
-    /// H4：热路径（usage 记账每响应调用）——内部经 `db_blocking` 在 blocking
-    /// 线程池执行，不阻塞 tokio worker。禁止在无 tokio runtime 的上下文中调用。
-    pub async fn get_default_cost_multiplier(&self, app_type: &str) -> Result<String, AppError> {
-        let app_type = app_type.to_string();
-        self.db_blocking(move |conn| {
-            match conn.query_row(
-                "SELECT default_cost_multiplier FROM proxy_config WHERE app_type = ?1",
-                [app_type.as_str()],
-                |row| row.get(0),
-            ) {
-                Ok(value) => Ok(value),
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    Self::init_proxy_config_rows_on_conn(conn)?;
-                    Ok("1".to_string())
-                }
-                Err(e) => Err(AppError::Database(e.to_string())),
-            }
-        })
-        .await
-    }
-
-    /// 设置默认成本倍率
-    pub async fn set_default_cost_multiplier(
-        &self,
-        app_type: &str,
-        value: &str,
-    ) -> Result<(), AppError> {
-        validate_cost_multiplier(value)?;
-        let trimmed = value.trim();
-
-        // 确保行存在
-        self.ensure_proxy_config_row_exists(app_type)?;
-
-        let conn = lock_conn!(self.conn);
-        conn.execute(
-            "UPDATE proxy_config SET
-                default_cost_multiplier = ?2,
-                updated_at = datetime('now')
-             WHERE app_type = ?1",
-            rusqlite::params![app_type, trimmed],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        Ok(())
-    }
-
     /// 获取计费模式来源
-    ///
-    /// H4：热路径（usage 记账每响应调用）——内部经 `db_blocking` 在 blocking
-    /// 线程池执行，不阻塞 tokio worker。禁止在无 tokio runtime 的上下文中调用。
     pub async fn get_pricing_model_source(&self, app_type: &str) -> Result<String, AppError> {
-        let app_type = app_type.to_string();
-        self.db_blocking(move |conn| {
-            match conn.query_row(
+        let result = {
+            let conn = lock_conn!(self.conn);
+            conn.query_row(
                 "SELECT pricing_model_source FROM proxy_config WHERE app_type = ?1",
-                [app_type.as_str()],
+                [app_type],
                 |row| row.get(0),
-            ) {
-                Ok(value) => Ok(value),
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    Self::init_proxy_config_rows_on_conn(conn)?;
-                    Ok(PRICING_SOURCE_RESPONSE.to_string())
-                }
-                Err(e) => Err(AppError::Database(e.to_string())),
+            )
+        };
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                self.init_proxy_config_rows().await?;
+                Ok(PRICING_SOURCE_RESPONSE.to_string())
             }
-        })
-        .await
+            Err(e) => Err(AppError::Database(e.to_string())),
+        }
     }
 
     /// 设置计费模式来源
@@ -231,77 +136,49 @@ impl Database {
         Ok(())
     }
 
-    /// 初始化 proxy_config 表三行数据的核心实现（在传入连接上执行）
-    ///
-    /// 使用与 schema.rs seed 相同的 per-app 默认值
-    fn init_proxy_config_rows_on_conn(conn: &rusqlite::Connection) -> Result<(), AppError> {
-        // 使用与 schema.rs seed 相同的 per-app 默认值
-        // claude: 更激进的重试和超时配置
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // codex: 默认配置
-        conn.execute(
-            "INSERT OR IGNORE INTO proxy_config (
-                app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests
-            ) VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 注意：刻意不 seed Pi（理由同 schema.rs：CHECK 与上游一致，本就不放行
-        // 'pi'；Pi 无本地代理，不需要 proxy_config 行）。
-        // 由 ensure_proxy_config_row_exists_on_conn 惰性创建。
-
-        Ok(())
-    }
-
-    /// 获取应用级代理配置（同步核心，供内联与 blocking 两个变体复用）
-    fn get_proxy_config_for_app_on_conn(
-        conn: &rusqlite::Connection,
+    /// 获取应用级代理配置
+    pub async fn get_proxy_config_for_app(
+        &self,
         app_type: &str,
     ) -> Result<AppProxyConfig, AppError> {
-        match conn.query_row(
-            "SELECT app_type, enabled, auto_failover_enabled,
-                    max_retries, streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                    circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                    circuit_error_rate_threshold, circuit_min_requests
-             FROM proxy_config WHERE app_type = ?1",
-            [app_type],
-            |row| {
-                Ok(AppProxyConfig {
-                    app_type: row.get(0)?,
-                    enabled: row.get::<_, i32>(1)? != 0,
-                    auto_failover_enabled: row.get::<_, i32>(2)? != 0,
-                    max_retries: row.get::<_, i32>(3)? as u32,
-                    streaming_first_byte_timeout: row.get::<_, i32>(4)? as u32,
-                    streaming_idle_timeout: row.get::<_, i32>(5)? as u32,
-                    non_streaming_timeout: row.get::<_, i32>(6)? as u32,
-                    circuit_failure_threshold: row.get::<_, i32>(7)? as u32,
-                    circuit_success_threshold: row.get::<_, i32>(8)? as u32,
-                    circuit_timeout_seconds: row.get::<_, i32>(9)? as u32,
-                    circuit_error_rate_threshold: row.get(10)?,
-                    circuit_min_requests: row.get::<_, i32>(11)? as u32,
-                })
-            },
-        ) {
+        // 使用 block 限制 conn 的作用域，避免跨 await 持有锁
+        let app_type_owned = app_type.to_string();
+        let result = {
+            let conn = lock_conn!(self.conn);
+            conn.query_row(
+                "SELECT app_type, enabled, auto_failover_enabled,
+                        max_retries, streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                        circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                        circuit_error_rate_threshold, circuit_min_requests
+                 FROM proxy_config WHERE app_type = ?1",
+                [app_type],
+                |row| {
+                    Ok(AppProxyConfig {
+                        app_type: row.get(0)?,
+                        enabled: row.get::<_, i32>(1)? != 0,
+                        auto_failover_enabled: row.get::<_, i32>(2)? != 0,
+                        max_retries: row.get::<_, i32>(3)? as u32,
+                        streaming_first_byte_timeout: row.get::<_, i32>(4)? as u32,
+                        streaming_idle_timeout: row.get::<_, i32>(5)? as u32,
+                        non_streaming_timeout: row.get::<_, i32>(6)? as u32,
+                        circuit_failure_threshold: row.get::<_, i32>(7)? as u32,
+                        circuit_success_threshold: row.get::<_, i32>(8)? as u32,
+                        circuit_timeout_seconds: row.get::<_, i32>(9)? as u32,
+                        circuit_error_rate_threshold: row.get(10)?,
+                        circuit_min_requests: row.get::<_, i32>(11)? as u32,
+                    })
+                },
+            )
+        };
+        // conn 已在 block 结束时释放
+
+        match result {
             Ok(config) => Ok(config),
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 // 如果不存在，创建默认配置
-                Self::init_proxy_config_rows_on_conn(conn)?;
+                self.init_proxy_config_rows().await?;
                 Ok(AppProxyConfig {
-                    app_type: app_type.to_string(),
+                    app_type: app_type_owned,
                     enabled: false,
                     auto_failover_enabled: false,
                     max_retries: 3,
@@ -319,43 +196,12 @@ impl Database {
         }
     }
 
-    /// 获取应用级代理配置
-    ///
-    /// 保持内联同步执行：本方法仍会被 `futures::executor::block_on` 等无 tokio
-    /// runtime 的上下文调用（services/proxy.rs、services/provider/live.rs），
-    /// 不能改为 spawn_blocking，否则会在 runtime 外 panic。
-    /// tokio 热路径请改用 [`Database::get_proxy_config_for_app_blocking`]。
-    pub async fn get_proxy_config_for_app(
-        &self,
-        app_type: &str,
-    ) -> Result<AppProxyConfig, AppError> {
-        let conn = lock_conn!(self.conn);
-        Self::get_proxy_config_for_app_on_conn(&conn, app_type)
-    }
-
-    /// 获取应用级代理配置（blocking 变体，H4）
-    ///
-    /// 供每请求热路径（axum handler、failover）在 tokio runtime 内调用，
-    /// 把同步 DB 工作移到 blocking 线程池，避免阻塞 tokio worker。
-    pub(crate) async fn get_proxy_config_for_app_blocking(
-        &self,
-        app_type: &str,
-    ) -> Result<AppProxyConfig, AppError> {
-        let app_type = app_type.to_string();
-        self.db_blocking(move |conn| Self::get_proxy_config_for_app_on_conn(conn, &app_type))
-            .await
-    }
-
     /// 更新应用级代理配置
     pub async fn update_proxy_config_for_app(
         &self,
         config: AppProxyConfig,
     ) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-
-        // UPDATE 匹配不到行时 SQLite 不报错、静默影响 0 行——Pi 的接管状态就是
-        // 这么丢的（表里没有 'pi' 行）。写之前先确保行存在。
-        Self::ensure_proxy_config_row_exists_on_conn(&conn, &config.app_type)?;
 
         conn.execute(
             "UPDATE proxy_config SET
@@ -400,24 +246,15 @@ impl Database {
             .conn
             .lock()
             .map_err(|e| AppError::Lock(e.to_string()))?;
-        Self::ensure_proxy_config_row_exists_on_conn(&conn, app_type)
-    }
 
-    /// `ensure_proxy_config_row_exists` 的连接版，供已持有连接锁的调用方复用。
-    ///
-    /// `INSERT OR IGNORE` 违反 `proxy_config.app_type` CHECK 约束时会静默跳过
-    /// （不报错、影响 0 行）。这里在插入后显式复查行数，把「写不进去却无人
-    /// 察觉」变成硬错误——Pi 当初就是因为约束未放行而长期静默失败。
-    fn ensure_proxy_config_row_exists_on_conn(
-        conn: &rusqlite::Connection,
-        app_type: &str,
-    ) -> Result<(), AppError> {
         // 根据 app_type 使用不同的默认值（与 schema.rs seed 保持一致）
         let (retries, fb_timeout, idle_timeout, cb_fail, cb_succ, cb_timeout, cb_rate, cb_min) =
             match app_type {
                 "claude" => (6, 90, 180, 8, 3, 90, 0.7, 15),
-                // codex 与 pi 共用默认档
-                _ => (3, 60, 120, 4, 2, 60, 0.6, 10),
+                "codex" => (3, 60, 120, 4, 2, 60, 0.6, 10),
+                "gemini" => (5, 60, 120, 4, 2, 60, 0.6, 10),
+                "grokbuild" => (3, 60, 120, 4, 2, 60, 0.6, 10),
+                _ => (3, 60, 120, 4, 2, 60, 0.6, 10), // 默认值
             };
 
         conn.execute(
@@ -441,20 +278,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 复查：CHECK 约束未放行时 INSERT OR IGNORE 会静默跳过
-        let exists: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM proxy_config WHERE app_type = ?1",
-                [app_type],
-                |row| row.get(0),
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        if exists == 0 {
-            return Err(AppError::Database(format!(
-                "proxy_config 不接受 app_type '{app_type}'（CHECK 约束未放行），请检查数据库迁移是否已执行"
-            )));
-        }
-
         Ok(())
     }
 
@@ -463,7 +286,57 @@ impl Database {
     /// 使用与 schema.rs seed 相同的 per-app 默认值
     async fn init_proxy_config_rows(&self) -> Result<(), AppError> {
         let conn = lock_conn!(self.conn);
-        Self::init_proxy_config_rows_on_conn(&conn)
+
+        // 使用与 schema.rs seed 相同的 per-app 默认值
+        // claude: 更激进的重试和超时配置
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (
+                app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests
+            ) VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // codex: 默认配置
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (
+                app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests
+            ) VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // gemini: 稍高的重试次数
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (
+                app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests
+            ) VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // grokbuild: Responses protocol, same timeout defaults as Codex.
+        conn.execute(
+            "INSERT OR IGNORE INTO proxy_config (
+                app_type, max_retries,
+                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
+                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
+                circuit_error_rate_threshold, circuit_min_requests
+            ) VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
     }
 
     // ==================== Legacy Proxy Config (兼容旧代码) ====================
@@ -486,6 +359,7 @@ impl Database {
                         max_retries: row.get::<_, i32>(2)? as u8,
                         request_timeout: 600, // 废弃字段，返回默认值
                         enable_logging: row.get::<_, i32>(3)? != 0,
+                        live_takeover_active: false, // 废弃字段
                         streaming_first_byte_timeout: row.get::<_, i32>(4).unwrap_or(60) as u64,
                         streaming_idle_timeout: row.get::<_, i32>(5).unwrap_or(120) as u64,
                         non_streaming_timeout: row.get::<_, i32>(6).unwrap_or(600) as u64,
@@ -533,6 +407,13 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        Ok(())
+    }
+
+    /// 设置 Live 接管状态（兼容旧版本，更新 enabled 字段）
+    pub async fn set_live_takeover_active(&self, _active: bool) -> Result<(), AppError> {
+        // 不再使用此字段，由 enabled 字段替代
+        // 保留空实现以兼容旧代码
         Ok(())
     }
 
@@ -634,9 +515,6 @@ impl Database {
 
     /// 更新Provider健康状态（带阈值参数）
     ///
-    /// H4：热路径（每次请求结果回写健康度）——内部经 `db_blocking` 在 blocking
-    /// 线程池执行，不阻塞 tokio worker。禁止在无 tokio runtime 的上下文中调用。
-    ///
     /// # Arguments
     /// * `failure_threshold` - 连续失败多少次后标记为不健康
     pub async fn update_provider_health_with_threshold(
@@ -647,63 +525,79 @@ impl Database {
         error_msg: Option<String>,
         failure_threshold: u32,
     ) -> Result<(), AppError> {
-        let provider_id = provider_id.to_string();
-        let app_type = app_type.to_string();
-        self.db_blocking(move |conn| {
-            let now = chrono::Utc::now().to_rfc3339();
+        let conn = lock_conn!(self.conn);
 
-            // 先查询当前状态
-            let current = conn.query_row(
-                "SELECT consecutive_failures FROM provider_health
-                 WHERE provider_id = ?1 AND app_type = ?2",
-                rusqlite::params![provider_id, app_type],
-                |row| Ok(row.get::<_, i64>(0)? as u32),
-            );
+        let now = chrono::Utc::now().to_rfc3339();
 
-            let (is_healthy, consecutive_failures) = if success {
-                // 成功：重置失败计数
-                (1, 0)
-            } else {
-                // 失败：增加失败计数
-                let failures = current.unwrap_or(0) + 1;
-                // 使用传入的阈值而非硬编码
-                let healthy = if failures >= failure_threshold { 0 } else { 1 };
-                (healthy, failures)
-            };
+        // 先查询当前状态
+        let current = conn.query_row(
+            "SELECT consecutive_failures FROM provider_health
+             WHERE provider_id = ?1 AND app_type = ?2",
+            rusqlite::params![provider_id, app_type],
+            |row| Ok(row.get::<_, i64>(0)? as u32),
+        );
 
-            let (last_success_at, last_failure_at) = if success {
-                (Some(now.clone()), None)
-            } else {
-                (None, Some(now.clone()))
-            };
+        let (is_healthy, consecutive_failures) = if success {
+            // 成功：重置失败计数
+            (1, 0)
+        } else {
+            // 失败：增加失败计数
+            let failures = current.unwrap_or(0) + 1;
+            // 使用传入的阈值而非硬编码
+            let healthy = if failures >= failure_threshold { 0 } else { 1 };
+            (healthy, failures)
+        };
 
-            // UPSERT
-            conn.execute(
-                "INSERT OR REPLACE INTO provider_health
-                 (provider_id, app_type, is_healthy, consecutive_failures,
-                  last_success_at, last_failure_at, last_error, updated_at)
-                 VALUES (?1, ?2, ?3, ?4,
-                         COALESCE(?5, (SELECT last_success_at FROM provider_health
-                                       WHERE provider_id = ?1 AND app_type = ?2)),
-                         COALESCE(?6, (SELECT last_failure_at FROM provider_health
-                                       WHERE provider_id = ?1 AND app_type = ?2)),
-                         ?7, ?8)",
-                rusqlite::params![
-                    provider_id,
-                    app_type,
-                    is_healthy,
-                    consecutive_failures as i64,
-                    last_success_at,
-                    last_failure_at,
-                    error_msg,
-                    &now,
-                ],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        let (last_success_at, last_failure_at) = if success {
+            (Some(now.clone()), None)
+        } else {
+            (None, Some(now.clone()))
+        };
 
-            Ok(())
-        })
-        .await
+        // UPSERT
+        conn.execute(
+            "INSERT OR REPLACE INTO provider_health
+             (provider_id, app_type, is_healthy, consecutive_failures,
+              last_success_at, last_failure_at, last_error, updated_at)
+             VALUES (?1, ?2, ?3, ?4,
+                     COALESCE(?5, (SELECT last_success_at FROM provider_health
+                                   WHERE provider_id = ?1 AND app_type = ?2)),
+                     COALESCE(?6, (SELECT last_failure_at FROM provider_health
+                                   WHERE provider_id = ?1 AND app_type = ?2)),
+                     ?7, ?8)",
+            rusqlite::params![
+                provider_id,
+                app_type,
+                is_healthy,
+                consecutive_failures as i64,
+                last_success_at,
+                last_failure_at,
+                error_msg,
+                &now,
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// 重置Provider健康状态
+    pub async fn reset_provider_health(
+        &self,
+        provider_id: &str,
+        app_type: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+
+        conn.execute(
+            "DELETE FROM provider_health WHERE provider_id = ?1 AND app_type = ?2",
+            rusqlite::params![provider_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        log::debug!("Reset health status for provider {provider_id} (app: {app_type})");
+
+        Ok(())
     }
 
     /// 清空指定应用的健康状态（关闭单个代理时使用）
@@ -891,6 +785,24 @@ impl Database {
     ///
     /// 用于托盘菜单构建等同步场景
     /// 返回 (enabled, auto_failover_enabled)
+    /// 同步读代理的监听地址和端口（读不到时用默认值）。给直连切换生成 Codex 休眠表的
+    /// 本地地址用，不需要代理在运行。
+    pub fn get_proxy_listen_sync(&self) -> (String, u16) {
+        let fallback = || {
+            let defaults = crate::proxy::types::ProxyConfig::default();
+            (defaults.listen_address, defaults.listen_port)
+        };
+        let Ok(conn) = self.conn.lock() else {
+            return fallback();
+        };
+        conn.query_row(
+            "SELECT listen_address, listen_port FROM proxy_config WHERE app_type = 'claude'",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)? as u16)),
+        )
+        .unwrap_or_else(|_| fallback())
+    }
+
     pub fn get_proxy_flags_sync(&self, app_type: &str) -> (bool, bool) {
         let conn = match self.conn.lock() {
             Ok(c) => c,
@@ -939,40 +851,6 @@ mod tests {
     use crate::error::AppError;
 
     #[tokio::test]
-    async fn test_default_cost_multiplier_round_trip() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        let default = db.get_default_cost_multiplier("claude").await?;
-        assert_eq!(default, "1");
-
-        db.set_default_cost_multiplier("claude", "1.5").await?;
-        let updated = db.get_default_cost_multiplier("claude").await?;
-        assert_eq!(updated, "1.5");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_default_cost_multiplier_validation() -> Result<(), AppError> {
-        let db = Database::memory()?;
-
-        let err = db
-            .set_default_cost_multiplier("claude", "not-a-number")
-            .await
-            .unwrap_err();
-        // AppError::localized returns AppError::Localized variant
-        assert!(matches!(
-            err,
-            AppError::Localized {
-                key: "error.invalidMultiplier",
-                ..
-            }
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_pricing_model_source_round_trip_and_validation() -> Result<(), AppError> {
         let db = Database::memory()?;
 
@@ -992,18 +870,6 @@ mod tests {
             err,
             AppError::Localized {
                 key: "error.invalidPricingMode",
-                ..
-            }
-        ));
-
-        let err = db
-            .set_default_cost_multiplier("claude", "-0.5")
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            AppError::Localized {
-                key: "error.invalidMultiplier",
                 ..
             }
         ));

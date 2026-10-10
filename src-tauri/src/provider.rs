@@ -112,6 +112,11 @@ impl Provider {
         self.meta.as_ref().and_then(|m| m.provider_type.as_deref())
     }
 
+    /// The stored OpenCode source format; only native declarations record one.
+    pub fn opencode_config_format(&self) -> Option<OpenCodeConfigFormat> {
+        self.meta.as_ref().and_then(|m| m.opencode_config_format)
+    }
+
     fn claude_base_url_contains(&self, needle: &str) -> bool {
         self.settings_config
             .pointer("/env/ANTHROPIC_BASE_URL")
@@ -183,15 +188,57 @@ impl Provider {
                     .unwrap_or_default();
                 (base_url, api_key)
             }
+            // Gemini uses Google-specific env keys (with a legacy GOOGLE_API_KEY fallback).
+            AppType::Gemini => {
+                let env = settings.get("env");
+                let base_url = str_at(env.and_then(|e| e.get("GOOGLE_GEMINI_BASE_URL")));
+                let api_key = first_non_empty(env, &["GEMINI_API_KEY", "GOOGLE_API_KEY"]);
+                (base_url, api_key)
+            }
+            // GrokBuild 的 base_url 与 api_key 必须各自解析：extract_credentials 在
+            // 凭据缺失时整个 Option 变 None，一并 unwrap_or_default 会把明明写在
+            // 配置里的 base_url 也清成空串。凭据缺失是常态（env_key 指向的变量在
+            // GUI 进程里读不到），端点不该被连坐——否则用量脚本的 {{baseUrl}} 变成
+            // 相对路径、余额查询只报「API key is empty」掩盖真因。
+            // 与上面 Codex 分支的写法保持一致。
+            AppType::GrokBuild => {
+                let config_text = settings.get("config").and_then(Value::as_str);
+                let base_url = config_text
+                    .and_then(crate::grok_config::extract_base_url)
+                    .unwrap_or_default();
+                let api_key = config_text
+                    .and_then(crate::grok_config::extract_credentials)
+                    .map(|(_, api_key)| api_key)
+                    .unwrap_or_default();
+                (base_url, api_key)
+            }
+            // Hermes (config.yaml) flattens credentials at the top level, snake_case.
+            AppType::Hermes => (
+                str_at(settings.get("base_url")),
+                str_at(settings.get("api_key")),
+            ),
+            // OpenClaw (openclaw.json) flattens credentials at the top level, camelCase.
+            AppType::OpenClaw => (
+                str_at(settings.get("baseUrl")),
+                str_at(settings.get("apiKey")),
+            ),
             // Pi custom providers use the native models.json field names.
             AppType::Pi => (
                 crate::pi_config::provider_base_url(settings).unwrap_or_default(),
                 str_at(settings.get("apiKey")),
             ),
-            // Claude uses the Anthropic-style env map, keeping
+            // OpenCode (OMO) nests credentials under `options` (the SDK options object).
+            AppType::OpenCode | AppType::Mcode => {
+                let options = settings.get("options");
+                (
+                    str_at(options.and_then(|o| o.get("baseURL"))),
+                    str_at(options.and_then(|o| o.get("apiKey"))),
+                )
+            }
+            // Claude and Claude Desktop both use the Anthropic-style env map, keeping
             // the OpenRouter/Google key fallbacks the JS-script path relies on.
             // Listed explicitly (not `_`) so a new AppType fails to compile here.
-            AppType::Claude => {
+            AppType::Claude | AppType::ClaudeDesktop => {
                 let env = settings.get("env");
                 let base_url = str_at(env.and_then(|e| e.get("ANTHROPIC_BASE_URL")));
                 let api_key = first_non_empty(
@@ -334,6 +381,51 @@ pub struct AuthBinding {
     pub account_id: Option<String>,
 }
 
+/// Claude Desktop 3P 写入模式。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClaudeDesktopMode {
+    Direct,
+    Proxy,
+}
+
+/// Claude Desktop 本地路由模式下暴露给 Desktop 的安全模型路由。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeDesktopModelRoute {
+    /// 真实上游模型名，只保存在 CC Switch 内部，不写入 Claude Desktop profile。
+    pub model: String,
+    /// Claude Desktop 模型菜单显示名；写入 profile 的 `labelOverride`。
+    #[serde(rename = "labelOverride", skip_serializing_if = "Option::is_none")]
+    pub label_override: Option<String>,
+    /// Claude Desktop 3P 识别的 1M 上下文能力标记。
+    #[serde(rename = "supports1m", skip_serializing_if = "Option::is_none")]
+    pub supports_1m: Option<bool>,
+}
+
+/// Codex Copilot protocol selection; independent of legacy `apiFormat` metadata.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexCopilotApiFormat {
+    #[default]
+    Auto,
+    OpenaiResponses,
+    OpenaiChat,
+}
+
+impl CodexCopilotApiFormat {
+    /// Read the stored selection. The meta field stays a plain string so a value
+    /// written by a newer version survives sync round-trips here instead of
+    /// failing the whole `ProviderMeta` parse; unknown values fall back to auto.
+    pub fn from_meta(meta: Option<&ProviderMeta>) -> Self {
+        match meta.and_then(|meta| meta.codex_copilot_api_format.as_deref()) {
+            Some("openai_responses") => Self::OpenaiResponses,
+            Some("openai_chat") => Self::OpenaiChat,
+            _ => Self::Auto,
+        }
+    }
+}
+
 /// Codex Responses -> Chat Completions 的 reasoning 能力描述。
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct CodexChatReasoningConfig {
@@ -387,6 +479,16 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub common_config_enabled: Option<bool>,
+    /// Claude Desktop 3P 写入模式：direct（直连）或 proxy（预留）
+    #[serde(rename = "claudeDesktopMode", skip_serializing_if = "Option::is_none")]
+    pub claude_desktop_mode: Option<ClaudeDesktopMode>,
+    /// Claude Desktop proxy 模式的模型路由映射：Claude-safe route -> upstream model。
+    #[serde(
+        default,
+        rename = "claudeDesktopModelRoutes",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
+    pub claude_desktop_model_routes: HashMap<String, ClaudeDesktopModelRoute>,
     /// 用量查询脚本配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage_script: Option<UsageScript>,
@@ -402,10 +504,11 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub partner_promotion_key: Option<String>,
-    /// 成本倍数（用于计算实际成本）
+    /// 已停用：供应商级成本倍率。新版不再读取，只为与旧版设备同步时原样往返保留
     #[serde(rename = "costMultiplier", skip_serializing_if = "Option::is_none")]
     pub cost_multiplier: Option<String>,
-    /// 计费模式来源（response/request）
+    /// 已停用：供应商级计费模式覆盖（response/request）。新版只读全局设置，
+    /// 该字段只为与旧版设备同步时原样往返保留
     #[serde(rename = "pricingModelSource", skip_serializing_if = "Option::is_none")]
     pub pricing_model_source: Option<String>,
     /// 每日消费限额（USD）
@@ -420,6 +523,13 @@ pub struct ProviderMeta {
     /// - "openai_responses": OpenAI Responses API 格式，需要转换
     #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
+    /// Codex Copilot only: absent or auto prefers advertised Responses, then Chat.
+    /// Legacy `apiFormat` does not imply an explicit Copilot protocol override.
+    #[serde(
+        rename = "codexCopilotApiFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub codex_copilot_api_format: Option<String>,
     /// 通用认证绑定（provider_config / managed_account）
     ///
     /// 新代码应只写入该字段；githubAccountId 仅保留兼容读取。
@@ -480,6 +590,13 @@ pub struct ProviderMeta {
     /// `None` 表示旧数据/未知状态，`Some(false)` 表示明确仅存在于数据库中。
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]
     pub live_config_managed: Option<bool>,
+    /// Source format for OpenCode entries whose fields alone are ambiguous
+    /// (for example, a native V2 built-in provider containing only models).
+    #[serde(
+        rename = "opencodeConfigFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub opencode_config_format: Option<OpenCodeConfigFormat>,
     /// 供应商类型标识（用于特殊供应商检测）
     /// - "github_copilot": GitHub Copilot 供应商
     #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
@@ -488,6 +605,28 @@ pub struct ProviderMeta {
     /// 用于多账号支持，关联到特定的 GitHub 账号
     #[serde(rename = "githubAccountId", skip_serializing_if = "Option::is_none")]
     pub github_account_id: Option<String>,
+    /// Stack 模式下这家 Claude Code 供应商发布的模型（`mode::stack`）。`None` 是没配列表，
+    /// 按模型映射（`ANTHROPIC_MODEL` 和各档）发布；空列表是用户清空了，什么都不发布。
+    #[serde(
+        rename = "stackModels",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub stack_models: Option<Vec<ClaudeStackModel>>,
+}
+
+/// Stack 模式下 Claude Code 供应商发布的一个模型。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeStackModel {
+    /// 发往上游的模型名。
+    pub model: String,
+    /// 选择器里的显示名，没有时用模型名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// 上游是 1M 窗口。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub one_m: bool,
 }
 
 /// 解析 Provider 级自定义 User-Agent 字符串（单一真理来源）。
@@ -564,6 +703,8 @@ pub struct UniversalProviderApps {
     pub claude: bool,
     #[serde(default)]
     pub codex: bool,
+    #[serde(default)]
+    pub gemini: bool,
 }
 
 /// Claude 模型配置
@@ -598,6 +739,14 @@ pub struct CodexModelConfig {
     pub reasoning_effort: Option<String>,
 }
 
+/// Gemini 模型配置
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeminiModelConfig {
+    /// 模型名称
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 /// 各应用的模型配置
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct UniversalProviderModels {
@@ -605,6 +754,8 @@ pub struct UniversalProviderModels {
     pub claude: Option<ClaudeModelConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex: Option<CodexModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gemini: Option<GeminiModelConfig>,
 }
 
 /// 统一供应商（跨应用共享配置）
@@ -793,12 +944,155 @@ requires_openai_auth = true"#
             in_failover_queue: false,
         })
     }
+
+    /// 生成 Gemini 供应商配置
+    pub fn to_gemini_provider(&self) -> Option<Provider> {
+        if !self.apps.gemini {
+            return None;
+        }
+
+        let models = self.models.gemini.as_ref();
+        let model = models
+            .and_then(|m| m.model.clone())
+            .unwrap_or_else(|| "gemini-2.5-pro".to_string());
+
+        let settings_config = serde_json::json!({
+            "env": {
+                "GOOGLE_GEMINI_BASE_URL": self.base_url,
+                "GEMINI_API_KEY": self.api_key,
+                "GEMINI_MODEL": model,
+            }
+        });
+
+        Some(Provider {
+            id: format!("universal-gemini-{}", self.id),
+            name: self.name.clone(),
+            settings_config,
+            website_url: self.website_url.clone(),
+            category: Some("aggregator".to_string()),
+            created_at: self.created_at,
+            sort_index: self.sort_index,
+            notes: self.notes.clone(),
+            meta: self.meta.clone(),
+            icon: self.icon.clone(),
+            icon_color: self.icon_color.clone(),
+            in_failover_queue: false,
+        })
+    }
+}
+
+// ============================================================================
+// OpenCode 供应商配置结构
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenCodeConfigFormat {
+    V1,
+    V2,
+}
+
+/// OpenCode 供应商的 settings_config 结构
+///
+/// OpenCode 使用 AI SDK 包名来指定供应商类型，与其他应用的配置格式不同。
+/// 配置示例：
+/// ```json
+/// {
+///   "npm": "@ai-sdk/openai-compatible",
+///   "options": { "baseURL": "https://api.example.com/v1", "apiKey": "sk-xxx" },
+///   "models": { "gpt-4o": { "name": "GPT-4o" } }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeProviderConfig {
+    /// AI SDK 包名，如 "@ai-sdk/openai-compatible", "@ai-sdk/anthropic"
+    /// 内置供应商可以省略，沿用 OpenCode 的包和模型定义。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub npm: String,
+
+    /// 供应商名称（可选，用于显示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// 供应商选项（API 密钥、基础 URL 等）
+    #[serde(default)]
+    pub options: OpenCodeProviderOptions,
+
+    /// 模型定义映射
+    #[serde(default)]
+    pub models: HashMap<String, OpenCodeModel>,
+}
+
+impl Default for OpenCodeProviderConfig {
+    fn default() -> Self {
+        Self {
+            npm: "@ai-sdk/openai-compatible".to_string(),
+            name: None,
+            options: OpenCodeProviderOptions::default(),
+            models: HashMap::new(),
+        }
+    }
+}
+
+/// OpenCode 供应商选项
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OpenCodeProviderOptions {
+    /// API 基础 URL
+    #[serde(rename = "baseURL", skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+
+    /// API 密钥（支持环境变量引用，如 "{env:API_KEY}"）
+    #[serde(rename = "apiKey", skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
+    /// 自定义请求头
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
+
+    /// 额外选项（timeout, setCacheKey 等）
+    /// 使用 flatten 捕获所有未明确定义的字段
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, Value>,
+}
+
+/// OpenCode 模型定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenCodeModel {
+    /// 模型显示名称
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+
+    /// 模型限制（上下文和输出 token 数）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<OpenCodeModelLimit>,
+
+    /// 模型额外选项（provider 路由等）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<HashMap<String, Value>>,
+
+    /// 额外字段（cost、modalities、thinking、variants 等）
+    /// 使用 flatten 捕获所有未明确定义的字段
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, Value>,
+}
+
+/// OpenCode 模型限制
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OpenCodeModelLimit {
+    /// 上下文 token 限制
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
+
+    /// 输出 token 限制
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<u64>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ClaudeModelConfig, CodexModelConfig, LocalProxyRequestOverrides, Provider, ProviderManager,
+        ClaudeModelConfig, CodexCopilotApiFormat, CodexModelConfig, GeminiModelConfig,
+        LocalProxyRequestOverrides, OpenCodeProviderConfig, Provider, ProviderManager,
         ProviderMeta, UniversalProvider,
     };
     use serde_json::json;
@@ -876,6 +1170,65 @@ mod tests {
     fn provider_meta_omits_max_output_tokens_when_none() {
         let value = serde_json::to_value(ProviderMeta::default()).expect("serialize ProviderMeta");
         assert!(value.get("maxOutputTokens").is_none());
+    }
+
+    #[test]
+    fn codex_copilot_api_format_roundtrips_supported_values() {
+        for (wire, expected) in [
+            ("auto", CodexCopilotApiFormat::Auto),
+            ("openai_responses", CodexCopilotApiFormat::OpenaiResponses),
+            ("openai_chat", CodexCopilotApiFormat::OpenaiChat),
+        ] {
+            let value = json!({
+                "apiFormat": "openai_chat",
+                "codexCopilotApiFormat": wire
+            });
+            let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(CodexCopilotApiFormat::from_meta(Some(&meta)), expected);
+            assert_eq!(meta.api_format.as_deref(), Some("openai_chat"));
+            assert_eq!(serde_json::to_value(meta).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn codex_copilot_api_format_preserves_legacy_absence() {
+        for value in [
+            json!({}),
+            json!({"apiFormat": "openai_chat"}),
+            json!({"apiFormat": "openai_responses"}),
+        ] {
+            let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(meta.codex_copilot_api_format, None);
+            assert_eq!(
+                CodexCopilotApiFormat::from_meta(Some(&meta)),
+                CodexCopilotApiFormat::Auto
+            );
+            assert_eq!(serde_json::to_value(meta).unwrap(), value);
+        }
+        assert_eq!(
+            CodexCopilotApiFormat::from_meta(None),
+            CodexCopilotApiFormat::Auto
+        );
+    }
+
+    /// A value from a newer version must not fail the whole meta parse (the DAO
+    /// would fall back to an empty meta and drop the account binding); it is read
+    /// as auto and written back unchanged.
+    #[test]
+    fn codex_copilot_api_format_keeps_unknown_values_without_losing_meta() {
+        for wire in ["anthropic", "messages", "openai", "unknown", ""] {
+            let value = json!({
+                "providerType": "github_copilot",
+                "codexCopilotApiFormat": wire
+            });
+            let meta: ProviderMeta = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(meta.provider_type.as_deref(), Some("github_copilot"));
+            assert_eq!(
+                CodexCopilotApiFormat::from_meta(Some(&meta)),
+                CodexCopilotApiFormat::Auto
+            );
+            assert_eq!(serde_json::to_value(meta).unwrap(), value);
+        }
     }
 
     #[test]
@@ -1125,6 +1478,65 @@ mod tests {
     }
 
     #[test]
+    fn universal_provider_to_gemini_provider_defaults_model() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.gemini = true;
+
+        let provider = universal.to_gemini_provider().expect("gemini provider");
+
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/env/GEMINI_MODEL")
+                .and_then(|item| item.as_str()),
+            Some("gemini-2.5-pro")
+        );
+    }
+
+    #[test]
+    fn universal_provider_to_gemini_provider_uses_model() {
+        let mut universal = UniversalProvider::new(
+            "u1".to_string(),
+            "Universal".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "api-key".to_string(),
+        );
+        universal.apps.gemini = true;
+        universal.models.gemini = Some(GeminiModelConfig {
+            model: Some("gemini-custom".to_string()),
+        });
+
+        let provider = universal.to_gemini_provider().expect("gemini provider");
+
+        assert_eq!(
+            provider
+                .settings_config
+                .pointer("/env/GEMINI_MODEL")
+                .and_then(|item| item.as_str()),
+            Some("gemini-custom")
+        );
+    }
+
+    #[test]
+    fn opencode_provider_config_defaults() {
+        let config = OpenCodeProviderConfig::default();
+        assert_eq!(config.npm, "@ai-sdk/openai-compatible");
+        assert!(config.name.is_none());
+        assert!(config.models.is_empty());
+        assert!(config.options.base_url.is_none());
+        assert!(config.options.api_key.is_none());
+        assert!(config.options.headers.is_none());
+        assert!(config.options.extra.is_empty());
+    }
+
+    #[test]
     fn universal_codex_provider_origin_base_url_adds_v1() {
         let mut p = UniversalProvider::new(
             "id".to_string(),
@@ -1225,6 +1637,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_credentials_gemini_env_with_google_fallback() {
+        let p = provider_with(json!({
+            "env": {
+                "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com",
+                "GOOGLE_API_KEY": "g-legacy",
+            }
+        }));
+        let (base_url, api_key) = p.resolve_usage_credentials(&AppType::Gemini);
+        assert_eq!(base_url, "https://generativelanguage.googleapis.com");
+        assert_eq!(api_key, "g-legacy");
+    }
+
+    #[test]
     fn resolve_credentials_claude_skips_empty_primary_key() {
         // Presets seed ANTHROPIC_AUTH_TOKEN as a present-but-empty placeholder.
         // The fallback chain must skip empty values (matching the frontend's
@@ -1242,6 +1667,49 @@ mod tests {
     }
 
     #[test]
+    fn resolve_credentials_gemini_skips_empty_primary_key() {
+        let p = provider_with(json!({
+            "env": {
+                "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com",
+                "GEMINI_API_KEY": "",
+                "GOOGLE_API_KEY": "g-real",
+            }
+        }));
+        let (_, api_key) = p.resolve_usage_credentials(&AppType::Gemini);
+        assert_eq!(api_key, "g-real");
+    }
+
+    #[test]
+    fn resolve_credentials_hermes_snake_case() {
+        let p = provider_with(json!({
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-hermes",
+        }));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::Hermes),
+            (
+                "https://api.deepseek.com".to_string(),
+                "sk-hermes".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_credentials_openclaw_camel_case() {
+        let p = provider_with(json!({
+            "baseUrl": "https://api.deepseek.com",
+            "apiKey": "sk-openclaw",
+        }));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::OpenClaw),
+            (
+                "https://api.deepseek.com".to_string(),
+                "sk-openclaw".to_string()
+            )
+        );
+    }
+
+    #[test]
     fn resolve_credentials_pi_uses_native_model_level_base_url() {
         let p = provider_with(json!({
             "apiKey": "sk-pi",
@@ -1256,6 +1724,47 @@ mod tests {
             (
                 "https://api.example.com/v1".to_string(),
                 "sk-pi".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_credentials_opencode_options() {
+        // OpenCode (OMO) nests creds under options.{baseURL,apiKey}; useOpencodeFormState
+        // writes config.options.apiKey, so the stored provider keeps them there.
+        let p = provider_with(json!({
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "https://api.deepseek.com/v1",
+                "apiKey": "sk-opencode",
+                "setCacheKey": true,
+            }
+        }));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::OpenCode),
+            (
+                "https://api.deepseek.com/v1".to_string(),
+                "sk-opencode".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_credentials_claude_desktop_uses_env() {
+        // ClaudeDesktop persists the Anthropic env shape (ClaudeDesktopProviderForm
+        // reads env.ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN), so it resolves via
+        // the default env branch — it is NOT unsupported.
+        let p = provider_with(json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "sk-desktop",
+            }
+        }));
+        assert_eq!(
+            p.resolve_usage_credentials(&AppType::ClaudeDesktop),
+            (
+                "https://api.deepseek.com/anthropic".to_string(),
+                "sk-desktop".to_string()
             )
         );
     }

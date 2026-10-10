@@ -138,54 +138,62 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// 更新代理配置（热更新）
+///
+/// 可在运行时调用以更改代理设置，无需重启应用。
+/// 注意：此函数同时验证和应用，如果需要先验证后持久化再应用，
+/// 请使用 validate_proxy + apply_proxy 组合。
+///
+/// # Arguments
+/// * `proxy_url` - 新的代理 URL，None 或空字符串表示直连
+#[allow(dead_code)]
+pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
+    let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
+    let new_client = build_client(effective_url)?;
+
+    // 更新客户端
+    if let Some(lock) = GLOBAL_CLIENT.get() {
+        let mut client = lock.write().map_err(|e| {
+            log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
+            "Failed to update proxy: lock poisoned".to_string()
+        })?;
+        *client = new_client;
+    } else {
+        // 如果还没初始化，则初始化
+        return init(proxy_url);
+    }
+
+    // 更新代理 URL 记录
+    if let Some(lock) = CURRENT_PROXY_URL.get() {
+        let mut url = lock.write().map_err(|e| {
+            log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
+            "Failed to update proxy URL record: lock poisoned".to_string()
+        })?;
+        *url = effective_url.map(|s| s.to_string());
+    }
+
+    log::info!(
+        "[GlobalProxy] Updated: {}",
+        effective_url
+            .map(mask_url)
+            .unwrap_or_else(|| "direct connection".to_string())
+    );
+
+    Ok(())
+}
+
 /// 获取全局 HTTP 客户端
 ///
 /// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
-///
-/// 回退路径（未初始化 / RwLock 中毒）必须仍带完整超时/连接池配置：早期实现
-/// 用 `Client::default()` 兜底，会静默丢掉 600s 请求超时、30s 连接超时、
-/// `no_gzip/no_brotli/...` 等关键设置，导致 `response_processor` 的手动解压
-/// 逻辑与 reqwest 的自动解压冲突。因此这里显式构造"直连但同配置"的客户端，
-/// 并把锁中毒的 warn 提到 error——中毒意味着上游线程 panic 过，不能被静默。
 pub fn get() -> Client {
-    match GLOBAL_CLIENT.get() {
-        Some(lock) => match lock.read() {
-            Ok(guard) => return guard.clone(),
-            Err(poisoned) => {
-                log::error!(
-                    "[GlobalProxy] [GP-004] Client lock poisoned, rebuilding direct client: {}",
-                    poisoned
-                );
-                return poisoned.into_inner().clone();
-            }
-        },
-        None => {
-            log::error!(
-                "[GlobalProxy] [GP-004] Client not initialized, building direct fallback \
-                 (this indicates a startup ordering bug)"
-            );
-        }
-    }
-
-    match build_client(None) {
-        Ok(client) => client,
-        Err(e) => {
-            // build_client(None) 只在 reqwest TLS 后端初始化失败时报错。此时
-            // 先降级为无自定义配置的默认客户端兜底；若默认客户端也构建失败
-            // （实际不会发生，说明进程已无法发出任何 HTTP 请求），才 panic
-            // 让 crash.log 抓到。
-            log::error!(
-                "[GlobalProxy] [GP-004] Failed to build fallback HTTP client with custom config: {e}; \
-                 falling back to a plain default client"
-            );
-            match Client::builder().build() {
-                Ok(client) => client,
-                Err(default_err) => {
-                    panic!("[GlobalProxy] failed to build fallback HTTP client: {default_err}");
-                }
-            }
-        }
-    }
+    GLOBAL_CLIENT
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .map(|c| c.clone())
+        .unwrap_or_else(|| {
+            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
+            build_client(None).unwrap_or_default()
+        })
 }
 
 /// 获取当前代理 URL
@@ -196,6 +204,12 @@ pub fn get_current_proxy_url() -> Option<String> {
         .get()
         .and_then(|lock| lock.read().ok())
         .and_then(|url| url.clone())
+}
+
+/// 检查是否正在使用代理
+#[allow(dead_code)]
+pub fn is_proxy_enabled() -> bool {
+    get_current_proxy_url().is_some()
 }
 
 /// 构建 HTTP 客户端
@@ -249,38 +263,24 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
-/// 环境代理变量候选；大小写两种拼写都可能出现（各工具链行为不一致）。
-const PROXY_ENV_KEYS: [&str; 6] = [
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-];
-
 fn system_proxy_points_to_loopback() -> bool {
-    proxy_env_points_to_loopback(|key| env::var(key).ok(), get_proxy_port())
-}
+    const KEYS: [&str; 6] = [
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
 
-/// `system_proxy_points_to_loopback` 的纯函数版本：env 查找与 CC Switch 端口
-/// 都由调用方注入。
-///
-/// 保持纯函数是为了让测试**无需改写进程级 env 与全局端口**。改写全局状态会与
-/// 同进程内并发运行的用例互相污染（表现为转发用例随机 502，且难以稳定复现）。
-fn proxy_env_points_to_loopback(
-    lookup: impl Fn(&str) -> Option<String>,
-    cc_switch_port: u16,
-) -> bool {
-    PROXY_ENV_KEYS
-        .iter()
-        .filter_map(|key| lookup(key))
+    KEYS.iter()
+        .filter_map(|key| env::var(key).ok())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .any(|value| proxy_points_to_loopback(&value, cc_switch_port))
+        .any(|value| proxy_points_to_loopback(&value))
 }
 
-fn proxy_points_to_loopback(value: &str, cc_switch_port: u16) -> bool {
+fn proxy_points_to_loopback(value: &str) -> bool {
     fn host_is_loopback(host: &str) -> bool {
         if host.eq_ignore_ascii_case("localhost") {
             return true;
@@ -290,8 +290,12 @@ fn proxy_points_to_loopback(value: &str, cc_switch_port: u16) -> bool {
             .unwrap_or(false)
     }
 
-    // 只有指向 CC Switch 自己端口的代理才需要跳过，否则会与自己递归
-    let is_cc_switch_proxy_port = |port: Option<u16>| port == Some(cc_switch_port);
+    // 检查是否指向 CC Switch 自己的代理端口
+    // 只有指向自己的代理才需要跳过，避免递归
+    fn is_cc_switch_proxy_port(port: Option<u16>) -> bool {
+        let cc_switch_port = get_proxy_port();
+        port == Some(cc_switch_port)
+    }
 
     if let Ok(parsed) = url::Url::parse(value) {
         if let Some(host) = parsed.host_str() {
@@ -338,6 +342,12 @@ pub fn mask_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_mask_url() {
@@ -398,60 +408,60 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_proxy_points_to_loopback() {
-        const PORT: u16 = 15721;
+        // 设置 CC Switch 代理端口为 15721（默认值）
+        set_proxy_port(15721);
 
         // 只有指向 CC Switch 自己端口的 loopback 地址才返回 true
-        assert!(proxy_points_to_loopback("http://127.0.0.1:15721", PORT));
-        assert!(proxy_points_to_loopback("socks5://localhost:15721", PORT));
-        assert!(proxy_points_to_loopback("127.0.0.1:15721", PORT));
+        assert!(proxy_points_to_loopback("http://127.0.0.1:15721"));
+        assert!(proxy_points_to_loopback("socks5://localhost:15721"));
+        assert!(proxy_points_to_loopback("127.0.0.1:15721"));
 
         // 其他 loopback 端口不应该被跳过（允许使用其他本地代理工具）
-        assert!(!proxy_points_to_loopback("http://127.0.0.1:7890", PORT));
-        assert!(!proxy_points_to_loopback("socks5://localhost:1080", PORT));
+        assert!(!proxy_points_to_loopback("http://127.0.0.1:7890"));
+        assert!(!proxy_points_to_loopback("socks5://localhost:1080"));
 
         // 非 loopback 地址不应该被跳过
-        assert!(!proxy_points_to_loopback("http://192.168.1.10:7890", PORT));
-        assert!(!proxy_points_to_loopback("http://192.168.1.10:15721", PORT));
+        assert!(!proxy_points_to_loopback("http://192.168.1.10:7890"));
+        assert!(!proxy_points_to_loopback("http://192.168.1.10:15721"));
     }
 
-    /// 纯函数版：env 由调用方注入，**不改写进程级环境变量**。
-    ///
-    /// 原实现临时改写 env 与全局代理端口再还原，既与同进程并发用例互相污染
-    /// （转发用例随机 502），又在 panic 时留下脏状态。
     #[test]
-    fn test_proxy_env_points_to_loopback() {
-        const PORT: u16 = 15721;
-        let http_proxy = |value: &str| {
-            // 捕获 String 而非 &str：`lookup` 是 `for<'a> Fn(&'a str)`，借用会违反 HRTB
-            let value = value.to_string();
-            move |key: &str| (key == "HTTP_PROXY").then(|| value.clone())
-        };
+    #[serial_test::serial]
+    fn test_system_proxy_points_to_loopback() {
+        let _guard = env_lock().lock().unwrap();
+
+        // 设置 CC Switch 代理端口
+        set_proxy_port(15721);
+
+        let keys = [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ];
+
+        for key in &keys {
+            std::env::remove_var(key);
+        }
 
         // 指向 CC Switch 端口的代理应该被跳过
-        assert!(proxy_env_points_to_loopback(
-            http_proxy("http://127.0.0.1:15721"),
-            PORT
-        ));
-        // 小写变量名同样识别
-        assert!(proxy_env_points_to_loopback(
-            |key| (key == "all_proxy").then(|| "socks5://localhost:15721".to_string()),
-            PORT
-        ));
+        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:15721");
+        assert!(system_proxy_points_to_loopback());
 
         // 指向其他端口的本地代理不应该被跳过
-        assert!(!proxy_env_points_to_loopback(
-            http_proxy("http://127.0.0.1:7890"),
-            PORT
-        ));
+        std::env::set_var("HTTP_PROXY", "http://127.0.0.1:7890");
+        assert!(!system_proxy_points_to_loopback());
+
         // 非 loopback 地址不应该被跳过
-        assert!(!proxy_env_points_to_loopback(
-            http_proxy("http://10.0.0.2:7890"),
-            PORT
-        ));
-        // 空白值视为未设置
-        assert!(!proxy_env_points_to_loopback(http_proxy("   "), PORT));
-        // 完全没有代理变量
-        assert!(!proxy_env_points_to_loopback(|_| None, PORT));
+        std::env::set_var("HTTP_PROXY", "http://10.0.0.2:7890");
+        assert!(!system_proxy_points_to_loopback());
+
+        for key in &keys {
+            std::env::remove_var(key);
+        }
     }
 }

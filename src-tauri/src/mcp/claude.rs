@@ -90,6 +90,12 @@ pub fn import_from_claude(config: &mut MultiAppConfig) -> Result<usize, AppError
                     apps: McpApps {
                         claude: true,
                         codex: false,
+                        gemini: false,
+                        grokbuild: false,
+                        opencode: false,
+                        hermes: false,
+                        mcode: false,
+                        pi: false,
                     },
                     description: None,
                     homepage: None,

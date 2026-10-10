@@ -1,7 +1,12 @@
 import React from "react";
 import type { AppId } from "@/lib/api/types";
 import type { VisibleApps } from "@/types";
-import { ClaudeIcon, CodexIcon } from "@/components/BrandIcons";
+import {
+  ClaudeIcon,
+  CodexIcon,
+  GeminiIcon,
+  OpenClawIcon,
+} from "@/components/BrandIcons";
 import { ProviderIcon } from "@/components/ProviderIcon";
 
 export interface AppConfig {
@@ -11,52 +16,114 @@ export interface AppConfig {
   badgeClass: string;
 }
 
-export const APP_IDS: AppId[] = ["claude", "codex", "pi"];
+export const APP_IDS: AppId[] = [
+  "claude",
+  "claude-desktop",
+  "codex",
+  "gemini",
+  "grokbuild",
+  "opencode",
+  "openclaw",
+  "hermes",
+  "pi",
+  "mcode",
+];
 
 export const DEFAULT_VISIBLE_APPS: VisibleApps = {
   claude: true,
+  "claude-desktop": true,
   codex: true,
+  gemini: true,
+  grokbuild: true,
+  opencode: true,
+  openclaw: true,
+  hermes: true,
   pi: true,
+  mcode: true,
 };
 
 /** App IDs shown in Skills panels. */
-export const SKILLS_APP_IDS: AppId[] = ["claude", "codex", "pi"];
+export const SKILLS_APP_IDS: AppId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "grokbuild",
+  "opencode",
+  "hermes",
+  "pi",
+  "mcode",
+];
 
-export type ProxyAppId = Extract<AppId, "claude" | "codex">;
+export type ProxyAppId = Extract<
+  AppId,
+  "claude" | "codex" | "gemini" | "grokbuild"
+>;
 
-/** Apps with a complete local gateway data plane. */
-export const PROXY_APP_IDS: ProxyAppId[] = ["claude", "codex"];
+/** Apps with a complete local gateway + failover data plane. */
+export const PROXY_APP_IDS: ProxyAppId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "grokbuild",
+];
 
 export function isProxyAppId(appId: string): appId is ProxyAppId {
   return (PROXY_APP_IDS as string[]).includes(appId);
 }
 
-/**
- * Apps whose gateway can hand off to another provider mid-stream.
- *
- * Narrower than {@link PROXY_APP_IDS}: Pi's transparent forwarding cannot
- * switch dialects safely, so the backend rejects it
- * (`commands/failover.rs`). Keeping the two lists separate stops the UI from
- * advertising a capability the backend refuses.
- */
-export type FailoverAppId = Extract<AppId, "claude" | "codex">;
-export const FAILOVER_APP_IDS: FailoverAppId[] = ["claude", "codex"];
+/** 支持 Stack 模式的应用（后端 `mode::stack::supports_stack` 的镜像）。 */
+export type StackAppId = Extract<ProxyAppId, "claude" | "codex">;
 
-export function isFailoverAppId(appId: string): appId is FailoverAppId {
-  return (FAILOVER_APP_IDS as string[]).includes(appId);
+export const STACK_APP_IDS: StackAppId[] = ["claude", "codex"];
+
+export function isStackAppId(appId: string): appId is StackAppId {
+  return (STACK_APP_IDS as string[]).includes(appId);
 }
 
-export type AdditiveAppId = Extract<AppId, "pi">;
+export type AdditiveAppId = Extract<
+  AppId,
+  "opencode" | "openclaw" | "hermes" | "pi" | "mcode"
+>;
 
-export const ADDITIVE_APP_IDS: AdditiveAppId[] = ["pi"];
+export const ADDITIVE_APP_IDS: AdditiveAppId[] = [
+  "mcode",
+  "opencode",
+  "openclaw",
+  "hermes",
+  "pi",
+];
 
 export function isAdditiveAppId(appId: string): appId is AdditiveAppId {
   return (ADDITIVE_APP_IDS as string[]).includes(appId);
 }
 
-/** Pi has no native MCP registry; do not manufacture a disabled mirror. */
-export type McpAppId = Exclude<AppId, "pi">;
-export const MCP_APP_IDS: McpAppId[] = ["claude", "codex"];
+/**
+ * 切换只替换关键字段的应用：供应商编辑器显示「切到这个供应商之后配置文件的样子」，由后端
+ * `ProviderService::editor_view` 投影。
+ */
+export const EDITOR_VIEW_APP_IDS: AppId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "grokbuild",
+];
+
+export function usesEditorView(appId: AppId): boolean {
+  return EDITOR_VIEW_APP_IDS.includes(appId);
+}
+
+/** Claude Desktop、OpenClaw 不由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`） */
+export type McpAppId = Exclude<AppId, "claude-desktop" | "openclaw">;
+export const MCP_APP_IDS: McpAppId[] = [
+  "claude",
+  "codex",
+  "gemini",
+  "grokbuild",
+  "opencode",
+  "hermes",
+  "pi",
+  "mcode",
+];
 
 export function isMcpAppId(appId: string): appId is McpAppId {
   return (MCP_APP_IDS as string[]).includes(appId);
@@ -71,6 +138,14 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
     badgeClass:
       "bg-orange-500/10 text-orange-700 dark:text-orange-300 hover:bg-orange-500/20 border-0 gap-1.5",
   },
+  "claude-desktop": {
+    label: "Claude Desktop",
+    icon: <ClaudeIcon size={14} />,
+    activeClass:
+      "bg-amber-500/10 ring-1 ring-amber-500/20 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300",
+    badgeClass:
+      "bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 border-0 gap-1.5",
+  },
   codex: {
     label: "Codex",
     icon: <CodexIcon size={14} />,
@@ -78,6 +153,74 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-green-500/10 ring-1 ring-green-500/20 hover:bg-green-500/20 text-green-600 dark:text-green-400",
     badgeClass:
       "bg-green-500/10 text-green-700 dark:text-green-300 hover:bg-green-500/20 border-0 gap-1.5",
+  },
+  gemini: {
+    label: "Gemini",
+    icon: <GeminiIcon size={14} />,
+    activeClass:
+      "bg-blue-500/10 ring-1 ring-blue-500/20 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400",
+    badgeClass:
+      "bg-blue-500/10 text-blue-700 dark:text-blue-300 hover:bg-blue-500/20 border-0 gap-1.5",
+  },
+  grokbuild: {
+    label: "Grok Build",
+    icon: (
+      <ProviderIcon
+        icon="grok"
+        name="Grok Build"
+        size={14}
+        showFallback={false}
+      />
+    ),
+    activeClass:
+      "bg-cyan-500/10 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 text-cyan-700 dark:text-cyan-300",
+    badgeClass:
+      "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/20 border-0 gap-1.5",
+  },
+  opencode: {
+    label: "OpenCode",
+    icon: (
+      <ProviderIcon
+        icon="opencode"
+        name="OpenCode"
+        size={14}
+        showFallback={false}
+      />
+    ),
+    activeClass:
+      "bg-indigo-500/10 ring-1 ring-indigo-500/20 hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400",
+    badgeClass:
+      "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/20 border-0 gap-1.5",
+  },
+  openclaw: {
+    label: "OpenClaw",
+    icon: <OpenClawIcon size={14} />,
+    activeClass:
+      "bg-rose-500/10 ring-1 ring-rose-500/20 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400",
+    badgeClass:
+      "bg-rose-500/10 text-rose-700 dark:text-rose-300 hover:bg-rose-500/20 border-0 gap-1.5",
+  },
+  hermes: {
+    label: "Hermes",
+    icon: (
+      <ProviderIcon
+        icon="hermes"
+        name="Hermes"
+        size={14}
+        showFallback={false}
+      />
+    ),
+    activeClass:
+      "bg-violet-500/10 ring-1 ring-violet-500/20 hover:bg-violet-500/20 text-violet-600 dark:text-violet-400",
+    badgeClass:
+      "bg-violet-500/10 text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 border-0 gap-1.5",
+  },
+  mcode: {
+    label: "MiniMax Code",
+    icon: <ProviderIcon icon="minimax" name="MiniMax Code" size={14} />,
+    activeClass: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+    badgeClass:
+      "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-0 gap-1.5",
   },
   pi: {
     label: "Pi",

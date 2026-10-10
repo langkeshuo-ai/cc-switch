@@ -4,19 +4,26 @@
 //! - 支持三应用开关（Claude/Codex/Gemini）
 //! - SSOT 存储在 ~/.cc-switch/skills/
 
-use crate::app_config::{InstalledSkill, UnmanagedSkill};
+use crate::app_config::{AppType, InstalledSkill, UnmanagedSkill};
 use crate::error::format_skill_error;
 use crate::services::skill::{
-    DiscoverableSkill, ImportSkillSelection, MigrationResult, Skill, SkillBackupEntry, SkillRepo,
-    SkillService, SkillStorageLocation, SkillUninstallResult, SkillUpdateInfo,
-    SkillsShSearchResult,
+    DiscoverableSkill, ImportSkillSelection, MigrationResult, Skill, SkillAppSyncOutcome,
+    SkillBackupEntry, SkillDiscoveryResult, SkillRepo, SkillService, SkillStorageLocation,
+    SkillUninstallResult, SkillUpdateCheckResult, SkillsShSearchResult, ZipInstallResult,
 };
 use crate::store::AppState;
+use std::str::FromStr;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 /// SkillService 状态包装
 pub struct SkillServiceState(pub Arc<SkillService>);
+
+/// 解析 app 参数为 AppType
+fn parse_app_type(app: &str) -> Result<AppType, String> {
+    AppType::from_str(app).map_err(|e| e.to_string())
+}
 
 // ========== 统一管理命令 ==========
 
@@ -49,7 +56,7 @@ pub async fn install_skill_unified(
     service: State<'_, SkillServiceState>,
     app_state: State<'_, AppState>,
 ) -> Result<InstalledSkill, String> {
-    let app_type = super::parse_app(&current_app)?;
+    let app_type = parse_app_type(&current_app)?;
 
     service
         .0
@@ -73,7 +80,7 @@ pub fn restore_skill_backup(
     current_app: String,
     app_state: State<'_, AppState>,
 ) -> Result<InstalledSkill, String> {
-    let app_type = super::parse_app(&current_app)?;
+    let app_type = parse_app_type(&current_app)?;
     SkillService::restore_from_backup(&app_state.db, &backup_id, &app_type)
         .map_err(|e| e.to_string())
 }
@@ -86,7 +93,7 @@ pub fn toggle_skill_app(
     enabled: bool,
     app_state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = parse_app_type(&app)?;
     SkillService::toggle_app(&app_state.db, &id, &app_type, enabled).map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -110,31 +117,43 @@ pub fn import_skills_from_apps(
 
 // ========== 发现功能命令 ==========
 
-/// 发现可安装的 Skills（从仓库获取）
+/// 发现可安装的 Skills（从仓库获取），并逐仓库报告没读到的仓库
 #[tauri::command]
 pub async fn discover_available_skills(
     service: State<'_, SkillServiceState>,
     app_state: State<'_, AppState>,
-) -> Result<Vec<DiscoverableSkill>, String> {
+) -> Result<SkillDiscoveryResult, String> {
     let repos = app_state.db.get_skill_repos().map_err(|e| e.to_string())?;
     service
         .0
-        .discover_available(repos)
+        .discover_available_report(repos)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// 检查 Skills 更新
+/// 检查 Skills 更新，并逐仓库报告没读到的仓库
 #[tauri::command]
 pub async fn check_skill_updates(
     service: State<'_, SkillServiceState>,
     app_state: State<'_, AppState>,
-) -> Result<Vec<SkillUpdateInfo>, String> {
+) -> Result<SkillUpdateCheckResult, String> {
     service
         .0
-        .check_updates(&app_state.db)
+        .check_updates_report(&app_state.db)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 立即重新同步：按数据库里的开关和当前同步方式，把 Skill 重新投影到各应用目录，
+/// 逐应用返回结果。只动 Skills 目录，不碰各应用的配置文件。
+#[tauri::command]
+pub async fn resync_skills_to_apps(
+    app_state: State<'_, AppState>,
+) -> Result<Vec<SkillAppSyncOutcome>, String> {
+    let db = app_state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || SkillService::resync_all_apps(&db))
+        .await
+        .map_err(|e| format!("重新同步 Skill 失败: {e}"))
 }
 
 /// 更新单个 Skill
@@ -158,6 +177,31 @@ pub async fn migrate_skill_storage(
     app_state: State<'_, AppState>,
 ) -> Result<MigrationResult, String> {
     SkillService::migrate_storage(&app_state.db, target).map_err(|e| e.to_string())
+}
+
+/// CC Switch 目录下放 Skill 主副本的位置（改过配置目录就是改后的）
+fn cc_switch_skills_dir() -> std::path::PathBuf {
+    crate::config::get_app_config_dir().join("skills")
+}
+
+/// 「存储与同步」里显示的 CC Switch 目录路径
+#[tauri::command]
+pub async fn get_cc_switch_skills_dir() -> Result<String, String> {
+    Ok(cc_switch_skills_dir().to_string_lossy().to_string())
+}
+
+/// 在系统文件管理器里打开 CC Switch 目录下的 Skills 目录（不存在就先建）
+#[tauri::command]
+pub async fn open_cc_switch_skills_dir(handle: AppHandle) -> Result<bool, String> {
+    let dir = cc_switch_skills_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    handle
+        .opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<String>)
+        .map_err(|e| format!("打开文件夹失败: {e}"))?;
+    Ok(true)
 }
 
 /// 搜索 skills.sh 公共目录
@@ -196,7 +240,7 @@ pub async fn get_skills_for_app(
     app_state: State<'_, AppState>,
 ) -> Result<Vec<Skill>, String> {
     // 新版本不再区分应用，统一返回所有技能
-    let _ = super::parse_app(&app)?; // 验证 app 参数有效
+    let _ = parse_app_type(&app)?; // 验证 app 参数有效
     get_skills(service, app_state).await
 }
 
@@ -218,7 +262,7 @@ pub async fn install_skill_for_app(
     service: State<'_, SkillServiceState>,
     app_state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = parse_app_type(&app)?;
 
     // 先获取技能信息
     let repos = app_state.db.get_skill_repos().map_err(|e| e.to_string())?;
@@ -271,7 +315,7 @@ pub fn uninstall_skill_for_app(
     directory: String,
     app_state: State<'_, AppState>,
 ) -> Result<SkillUninstallResult, String> {
-    let _ = super::parse_app(&app)?; // 验证参数
+    let _ = parse_app_type(&app)?; // 验证参数
 
     // 通过 directory 找到对应的 skill id
     let skills = SkillService::get_all_installed(&app_state.db).map_err(|e| e.to_string())?;
@@ -320,14 +364,14 @@ pub fn remove_skill_repo(
     Ok(true)
 }
 
-/// 从 ZIP 文件安装 Skills
+/// 从 ZIP 文件安装 Skills；目录名已被占用的如实列在 `skipped` 里（#3749）
 #[tauri::command]
 pub fn install_skills_from_zip(
     file_path: String,
     current_app: String,
     app_state: State<'_, AppState>,
-) -> Result<Vec<InstalledSkill>, String> {
-    let app_type = super::parse_app(&current_app)?;
+) -> Result<ZipInstallResult, String> {
+    let app_type = parse_app_type(&current_app)?;
     let path = std::path::Path::new(&file_path);
 
     SkillService::install_from_zip(&app_state.db, path, &app_type).map_err(|e| e.to_string())

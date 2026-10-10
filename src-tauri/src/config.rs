@@ -20,17 +20,71 @@ use crate::error::AppError;
 /// 为了让 Windows CI/本地测试能稳定隔离真实用户数据，可通过 `CC_SWITCH_TEST_HOME`
 /// 显式覆盖 home dir（仅用于测试/调试场景）。
 pub fn get_home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("CC_SWITCH_TEST_HOME") {
-        let trimmed = home.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
+    if let Some(home) = test_home_override() {
+        return home;
     }
 
     dirs::home_dir().unwrap_or_else(|| {
         log::warn!("无法获取用户主目录，回退到当前目录");
         PathBuf::from(".")
     })
+}
+
+/// 检测路径是否为 WSL 网络路径（如 \\wsl$\Ubuntu\... 或 \\wsl.localhost\Ubuntu\...）
+/// 注意：仅检测直接 UNC 路径，映射磁盘符（如 Z: -> \\wsl$\...）无法检测
+#[cfg(windows)]
+pub(crate) fn is_wsl_path(path: &Path) -> bool {
+    use std::path::Prefix;
+    if let Some(Component::Prefix(prefix)) = path.components().next() {
+        match prefix.kind() {
+            Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => {
+                let s = server.to_string_lossy();
+                s.eq_ignore_ascii_case("wsl$") || s.eq_ignore_ascii_case("wsl.localhost")
+            }
+            _ => false,
+        }
+    } else {
+        false
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_wsl_path(_path: &Path) -> bool {
+    false
+}
+
+/// 临时目录在 WSL 共享路径上时（WSL2 夜间测试），SQLite 拿不到文件锁，
+/// 在磁盘上建 SQLite 夹具的测试只能跳过。
+#[cfg(test)]
+pub(crate) fn sqlite_unsupported_in_temp_dir() -> bool {
+    let temp = std::env::temp_dir();
+    let unsupported = is_wsl_path(&temp);
+    if unsupported {
+        eprintln!(
+            "temp dir {} is a WSL share where SQLite cannot lock; skipping",
+            temp.display()
+        );
+    }
+    unsupported
+}
+
+/// `CC_SWITCH_TEST_HOME` 的覆盖值（测试/调试用的 home 覆盖）。
+///
+/// 返回 `Some` 即表示显式覆盖生效——此时任何基于“库里有没有 db”的启发式回退
+/// 都不该再介入，否则测试会被引导到真实用户数据上。
+///
+/// 用 `var_os` 而非 `var`：非 Unicode 的取值只应让路径变 lossy，而不该让
+/// “覆盖是否存在”的判断失效、进而退回真实用户目录。
+fn test_home_override() -> Option<PathBuf> {
+    let raw = std::env::var_os("CC_SWITCH_TEST_HOME")?;
+    // to_string_lossy 的结果必须先绑住，否则 trim 借的是一个已释放的临时值。
+    let lossy = raw.to_string_lossy();
+    let trimmed = lossy.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
 }
 
 /// 获取 Claude Code 配置目录路径
@@ -152,6 +206,62 @@ fn derive_wsl_default_mcp_path(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Derive the WSL-side home directory from a WSL UNC path inside a user's
+/// home: `\\wsl$\<distro>\home\<user>\...` -> `\\wsl$\<distro>\home\<user>`,
+/// and `\\wsl.localhost\<distro>\root\...` -> `\\wsl.localhost\<distro>\root`.
+/// Returns None for non-WSL paths and for WSL paths outside a home directory
+/// (e.g. `\\wsl$\<distro>\etc`), where no home can be derived safely.
+#[cfg(windows)]
+pub(crate) fn derive_wsl_home_dir(dir: &Path) -> Option<PathBuf> {
+    use std::path::Prefix;
+
+    let normalized = normalize_path_lexically(dir);
+    let mut components = normalized.components();
+    let prefix = match components.next()? {
+        Component::Prefix(prefix) => prefix,
+        _ => return None,
+    };
+
+    let server = match prefix.kind() {
+        Prefix::UNC(server, _) | Prefix::VerbatimUNC(server, _) => server.to_string_lossy(),
+        _ => return None,
+    };
+
+    if !server.eq_ignore_ascii_case("wsl$") && !server.eq_ignore_ascii_case("wsl.localhost") {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    for component in components {
+        match component {
+            Component::RootDir | Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::ParentDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    let home_len = match parts.as_slice() {
+        [home, user, ..] if home == "home" && !user.is_empty() => 2,
+        [root, ..] if root == "root" => 1,
+        _ => return None,
+    };
+
+    // Rebuild prefix + root + the first `home_len` components.
+    let mut home_dir = PathBuf::new();
+    let mut normal_seen = 0usize;
+    for component in normalized.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => home_dir.push(component.as_os_str()),
+            Component::Normal(_) if normal_seen < home_len => {
+                home_dir.push(component.as_os_str());
+                normal_seen += 1;
+            }
+            _ => break,
+        }
+    }
+    Some(home_dir)
+}
+
 fn default_mcp_path_for_config_dir(dir: &Path) -> Option<PathBuf> {
     let default_config_dir = get_home_dir().join(".claude");
     if path_eq_lexical(dir, &default_config_dir) {
@@ -211,16 +321,18 @@ pub fn get_app_config_dir() -> PathBuf {
     // v3.10.3 可能在 `HOME/.cc-switch/` 下创建/使用了数据库。
     // 这里仅在“默认位置没有数据库”时回退到旧位置，避免再次出现“供应商消失”问题，
     // 同时也避免新安装因为 `HOME` 被设置而写入非预期路径。
+    //
+    // `CC_SWITCH_TEST_HOME` 是测试用的显式 home 覆盖，必须在这里短路：测试的临时
+    // 目录本来就不带 cc-switch.db，若不先返回，下面的 HOME 回退会把测试指向真实
+    // 用户库（Windows 上 runner 的 HOME 下常常确实有该 db），既污染用户数据，又让
+    // 隔离测试读到别人写的状态而失败。
+    #[cfg(windows)]
+    if test_home_override().is_some() {
+        return default_dir;
+    }
+
     #[cfg(windows)]
     {
-        // 测试环境下（CC_SWITCH_TEST_HOME）禁用 legacy 回退，避免测试数据
-        // 泄漏到真实用户目录
-        let in_test = std::env::var("CC_SWITCH_TEST_HOME")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
-        if in_test {
-            return default_dir;
-        }
         let default_db = default_dir.join("cc-switch.db");
         if !default_db.exists() {
             if let Ok(home_env) = std::env::var("HOME") {
@@ -246,6 +358,28 @@ pub fn get_app_config_dir() -> PathBuf {
 /// 获取应用配置文件路径
 pub fn get_app_config_path() -> PathBuf {
     get_app_config_dir().join("config.json")
+}
+
+/// 清理供应商名称，确保文件名安全
+#[allow(dead_code)]
+pub fn sanitize_provider_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// 获取供应商配置文件路径
+#[allow(dead_code)]
+pub fn get_provider_config_path(provider_id: &str, provider_name: Option<&str>) -> PathBuf {
+    let base_name = provider_name
+        .map(sanitize_provider_name)
+        .unwrap_or_else(|| sanitize_provider_name(provider_id));
+
+    get_claude_config_dir().join(format!("settings-{base_name}.json"))
 }
 
 /// 读取 JSON 配置文件
@@ -276,42 +410,39 @@ fn sort_json_keys(value: &Value) -> Value {
     }
 }
 
-/// 写入 JSON 配置文件（键按字母排序，确保确定性输出）。
-pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    write_json_file_with_mode(path, data, false)
-}
-
-/// 写入 JSON 配置文件，权限收紧到仅当前用户可读写。
-///
-/// 用于**含凭证**的配置文件（如 Codex 的 `auth.json`）。Unix 上新文件与
-/// 替换文件均为 0600；Windows 上 DACL 受保护且仅含当前用户一条 ACE。
-/// 底层与普通写入共用同一份序列化逻辑，只切换权限模式。
-pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
-    write_json_file_with_mode(path, data, true)
-}
-
-fn write_json_file_with_mode<T: Serialize>(
+/// 写入 JSON 配置文件并返回实际写入的字节。
+pub fn write_json_file_with_contents<T: Serialize>(
     path: &Path,
     data: &T,
-    private: bool,
-) -> Result<(), AppError> {
+) -> Result<Vec<u8>, AppError> {
     // 确保目录存在
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
     }
 
+    let contents = sorted_json_bytes(data)?;
+    atomic_write(path, &contents)?;
+    Ok(contents)
+}
+
+pub(crate) fn sorted_json_bytes<T: Serialize>(data: &T) -> Result<Vec<u8>, AppError> {
     let value = serde_json::to_value(data).map_err(|e| AppError::JsonSerialize { source: e })?;
     let sorted_value = sort_json_keys(&value);
     let json = serde_json::to_string_pretty(&sorted_value)
         .map_err(|e| AppError::JsonSerialize { source: e })?;
+    Ok(json.into_bytes())
+}
 
-    let contents = json.into_bytes();
-    if private {
-        atomic_write_private(path, &contents)?;
-    } else {
-        atomic_write(path, &contents)?;
-    }
-    Ok(())
+/// 写入 JSON 配置文件（键按字母排序，确保确定性输出）
+pub fn write_json_file<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    write_json_file_with_contents(path, data).map(|_| ())
+}
+
+/// 同 [`write_json_file`]，用于含凭据的 live 文件（Codex `auth.json`、Claude Code
+/// `settings.json`）：Unix 下新文件和替换文件都是 0600。普通写入新建文件时按 umask
+/// 落成 0644，Key 就对同机其他用户可读。
+pub fn write_json_file_private<T: Serialize>(path: &Path, data: &T) -> Result<(), AppError> {
+    atomic_write_private(path, &sorted_json_bytes(data)?)
 }
 
 /// 原子写入文本文件（用于 TOML/纯文本）
@@ -322,14 +453,9 @@ pub fn write_text_file(path: &Path, data: &str) -> Result<(), AppError> {
     atomic_write(path, data.as_bytes())
 }
 
-/// 原子写入文本文件，权限收紧到仅当前用户可读写。
-///
-/// 用于可能含内联凭证的配置文件（如 Codex 的 `config.toml`：其
-/// `mcp_servers.*.http_headers` 与 `model_providers.*.env_key` 段可带密钥）。
+/// 同 [`write_text_file`]，用于含凭据的 live 文件（Codex / Grok Build 的
+/// `config.toml`，第三方 Key 就写在里面）：Unix 下 0600。
 pub fn write_text_file_private(path: &Path, data: &str) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
-    }
     atomic_write_private(path, data.as_bytes())
 }
 
@@ -348,6 +474,38 @@ fn atomic_write_with_unix_mode(
     data: &[u8],
     unix_mode: Option<u32>,
 ) -> Result<(), AppError> {
+    stage_write(path, data, unix_mode, false)?.commit()
+}
+
+/// 已写好、还没替换目标的临时文件。原子写的前半步：写入引擎先把一次操作涉及的
+/// 所有文件都备好临时文件、记下写前意图，再逐个 [`StagedWrite::commit`]。
+#[derive(Debug)]
+pub struct StagedWrite {
+    tmp: PathBuf,
+    path: PathBuf,
+}
+
+impl StagedWrite {
+    pub fn tmp_path(&self) -> &Path {
+        &self.tmp
+    }
+
+    /// 用临时文件替换目标（失败时删掉临时文件）。
+    pub fn commit(self) -> Result<(), AppError> {
+        commit_staged(&self.tmp, &self.path).inspect_err(|_| {
+            let _ = fs::remove_file(&self.tmp);
+        })
+    }
+}
+
+/// 写入临时文件：Unix 下 `unix_mode` 为 `None` 时沿用目标文件现有的权限位。
+/// `durable` 为真时写完先 fsync，崩溃恢复要靠这份临时文件前滚。
+pub(crate) fn stage_write(
+    path: &Path,
+    data: &[u8],
+    unix_mode: Option<u32>,
+    durable: bool,
+) -> Result<StagedWrite, AppError> {
     #[cfg(not(unix))]
     let _ = unix_mode;
 
@@ -396,20 +554,14 @@ fn atomic_write_with_unix_mode(
         Err(AppError::io(&candidate, source))
     })()?;
 
-    if let Err(source) = file.write_all(data).and_then(|_| file.flush()) {
+    let written = file
+        .write_all(data)
+        .and_then(|_| file.flush())
+        .and_then(|_| if durable { file.sync_all() } else { Ok(()) });
+    if let Err(source) = written {
         drop(file);
         let _ = fs::remove_file(&tmp);
         return Err(AppError::io(&tmp, source));
-    }
-    // fsync：flush 只保证用户态缓冲进入内核页缓存，断电/掉电时 rename 可能
-    // 先于数据块落盘被重排，目标文件会出现半截/空文件（对凭据与主配置不可
-    // 接受）。sync_all 失败仅降级为原尽力而为行为（个别文件系统不支持
-    // fsync），不让持久化增强反过来阻断配置写入。
-    if let Err(e) = file.sync_all() {
-        log::warn!(
-            "fsync 失败（继续替换，持久性降级）: {} ({e})",
-            tmp.display()
-        );
     }
     drop(file);
 
@@ -427,6 +579,17 @@ fn atomic_write_with_unix_mode(
         }
     }
 
+    Ok(StagedWrite {
+        tmp,
+        path: path.to_path_buf(),
+    })
+}
+
+/// 原子写的后半步：用 `tmp` 替换 `path`。崩溃恢复也用它提交上次留下的临时文件。
+///
+/// 失败时临时文件留在原处：写入引擎的 pending 指着它，下次恢复要靠它前滚（目标文件被
+/// 占用、只读这类失败，过后多半能补完）。只做一次性原子写的调用方自己删。
+pub(crate) fn commit_staged(tmp: &Path, path: &Path) -> Result<(), AppError> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -475,7 +638,7 @@ fn atomic_write_with_unix_mode(
                 break;
             }
 
-            match fs::rename(&tmp, path) {
+            match fs::rename(tmp, path) {
                 Ok(()) => {
                     completed = true;
                     break;
@@ -497,38 +660,16 @@ fn atomic_write_with_unix_mode(
 
         if !completed {
             let source = last_error.unwrap_or_else(std::io::Error::last_os_error);
-            let _ = fs::remove_file(&tmp);
             return Err(AppError::IoContext {
                 context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
                 source,
             });
-        }
-
-        // M8: 凭据文件（unix_mode == Some(0o600)）在 Windows 上显式收紧 DACL。
-        //
-        // 根因：Windows 没有 Unix `chmod 600` 的 stdlib 等价物，早期实现
-        // `#[cfg(not(unix))] let _ = unix_mode;` 直接丢弃了权限意图，凭据文件
-        // 完全继承父目录 ACL。默认 `%USERPROFILE%` ACL 已限制到当前用户 +
-        // Administrators + SYSTEM，但若用户手动放宽过 home 权限、或 home 位于
-        // 漫游配置/网络共享，则无第二道防线。
-        //
-        // 此处 best-effort 收紧：仅授予当前用户 SID GENERIC_ALL，移除继承 ACE。
-        // 失败时只 log warn、不让写入失败——最坏情况退回继承 ACL（即原状态），
-        // 绝不因权限设置失败而锁死用户自己的配置文件。
-        if unix_mode == Some(0o600) {
-            if let Err(e) = restrict_file_to_current_user(path) {
-                log::warn!(
-                    "收紧凭据文件 DACL 失败（退回继承权限）: {} ({e})",
-                    path.display()
-                );
-            }
         }
     }
 
     #[cfg(not(windows))]
     {
-        if let Err(source) = fs::rename(&tmp, path) {
-            let _ = fs::remove_file(&tmp);
+        if let Err(source) = fs::rename(tmp, path) {
             return Err(AppError::IoContext {
                 context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
                 source,
@@ -538,172 +679,23 @@ fn atomic_write_with_unix_mode(
     Ok(())
 }
 
-/// 复制文件
-pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
-    fs::copy(from, to).map_err(|e| AppError::IoContext {
-        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
-        source: e,
-    })?;
-    Ok(())
-}
-
-/// Windows: 将文件 DACL 收紧为"仅当前用户完全控制"，移除所有继承 ACE。
-///
-/// 这是 Unix `chmod 600` 在 Windows 上的等价物。实现路径：
-/// 1. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY)` 拿当前进程令牌
-/// 2. `GetTokenInformation(TokenUser)` 取出用户 SID
-/// 3. 构造只含一条 ACCESS_ALLOWED_ACE（GENERIC_ALL → 用户 SID）的 ACL
-/// 4. `SetNamedSecurityInfoW` 以 `PROTECTED_DACL_SECURITY_INFORMATION` 写回，
-///    PROTECTED 标志阻止后续再从父目录继承 ACE
-///
-/// 所有 Win32 句柄/缓冲都在本函数内释放；失败路径返回 `String` 错误供调用方
-/// log warn，不 panic、不传播到写入结果（best-effort 加固）。
-#[cfg(windows)]
-fn restrict_file_to_current_user(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::{
-        Foundation::{CloseHandle, GENERIC_ALL, HANDLE},
-        Security::{
-            AddAccessAllowedAce,
-            Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT},
-            GetLengthSid, GetTokenInformation, InitializeAcl, TokenUser, ACL, ACL_REVISION,
-            DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, TOKEN_QUERY,
-            TOKEN_USER,
-        },
-        System::Threading::{GetCurrentProcess, OpenProcessToken},
-    };
-
-    // ---- Step 1: 打开当前进程令牌 ----
-    let mut token: HANDLE = std::ptr::null_mut();
-    // SAFETY: GetCurrentProcess 返回伪句柄（无需 CloseHandle）；token 是出参，
-    // 指向本栈帧的有效可写位置；TOKEN_QUERY 是只读查询权限。
-    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
-    if opened == 0 {
-        return Err(format!(
-            "OpenProcessToken failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // RAII guard：确保所有提前返回路径都关闭令牌句柄。
-    struct TokenGuard(HANDLE);
-    impl Drop for TokenGuard {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: token 由 OpenProcessToken 成功返回，本 guard 拥有
-                // 唯一所有权，CloseHandle 是文档规定的配对释放。
-                unsafe { CloseHandle(self.0) };
-            }
-        }
-    }
-    let _token_guard = TokenGuard(token);
-
-    // ---- Step 2: 取 TokenUser（含用户 SID）----
-    let mut needed: u32 = 0;
-    // 第一次调用故意传空缓冲拿所需大小，预期返回 0 + ERROR_INSUFFICIENT_BUFFER。
-    // SAFETY: 传 null 缓冲 + 0 长度是 GetTokenInformation 文档化的"查询大小"用法；
-    // needed 是有效出参。
-    unsafe {
-        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
-    }
-    if needed == 0 {
-        return Err(format!(
-            "GetTokenInformation size query failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // TOKEN_USER 内含 SID_AND_ATTRIBUTES（其 Sid 是指针）。用 LocalAlloc 风格：
-    // 这里改用 Vec<u8> 做分配器并手动 8 字节对齐，避免 HLOCAL 生命周期管理。
-    let mut buffer: Vec<u8> = vec![0u8; needed as usize + 8];
-    let aligned_ptr = ((buffer.as_mut_ptr() as usize + 7) & !7) as *mut u8;
-    let mut returned: u32 = 0;
-    // SAFETY: aligned_ptr 指向本栈上 Vec 的有效可写区域，长度 >= needed；
-    // GetTokenInformation 只会写入 needed 字节。buffer 在函数返回前一直存活。
-    let ok =
-        unsafe { GetTokenInformation(token, TokenUser, aligned_ptr.cast(), needed, &mut returned) };
-    if ok == 0 {
-        return Err(format!(
-            "GetTokenInformation(TokenUser) failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let token_user = aligned_ptr.cast::<TOKEN_USER>();
-    // SAFETY: GetTokenInformation 成功返回后，token_user 指向有效的 TOKEN_USER，
-    // 其 User.Sid 字段指向同一缓冲内的有效 SID。buffer 仍存活。
-    let user_sid: PSID = unsafe { (*token_user).User.Sid };
-
-    // ---- Step 3: 构造只含一条 ACE 的 ACL ----
-    // SAFETY: user_sid 是上一步取得的有效 SID 指针，buffer 仍存活。
-    let sid_len = unsafe { GetLengthSid(user_sid) };
-    // ACCESS_ALLOWED_ACE 的 SidStart 与 ACE 头重叠 4 字节（DWORD），
-    // 故 ACE 实际大小 = size_of(ACCESS_ALLOWED_ACE) - 4 + sid_len。
-    let ace_size = std::mem::size_of::<windows_sys::Win32::Security::ACCESS_ALLOWED_ACE>()
-        - std::mem::size_of::<u32>()
-        + sid_len as usize;
-    let acl_size = (std::mem::size_of::<ACL>() + ace_size) as u32;
-
-    let mut acl_buffer: Vec<u8> = vec![0u8; acl_size as usize];
-    let acl_ptr = acl_buffer.as_mut_ptr().cast::<ACL>();
-    // SAFETY: acl_ptr 指向 acl_size 字节的有效可写缓冲，恰好容纳 ACL 头 + 一条 ACE；
-    // InitializeAcl 只会写入 acl_size 字节。acl_buffer 在函数返回前一直存活。
-    let init_ok = unsafe { InitializeAcl(acl_ptr, acl_size, ACL_REVISION) };
-    if init_ok == 0 {
-        return Err(format!(
-            "InitializeAcl failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // SAFETY: acl_ptr 已初始化且空间足够；user_sid 有效；GENERIC_ALL 是合法访问掩码。
-    let add_ok = unsafe { AddAccessAllowedAce(acl_ptr, ACL_REVISION, GENERIC_ALL, user_sid) };
-    if add_ok == 0 {
-        return Err(format!(
-            "AddAccessAllowedAce failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    // ---- Step 4: 写回文件安全信息 ----
-    let wide_path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // SAFETY: wide_path 是 NUL 终止的 UTF-16，在本调用期间存活；acl_ptr 是已初始化
-    // 的有效 ACL（acl_buffer 仍存活）；owner/group/sacl 传 null 表示不修改这些字段；
-    // PROTECTED_DACL 阻止后续再从父目录继承 ACE。
-    let set_result = unsafe {
-        SetNamedSecurityInfoW(
-            wide_path.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            acl_ptr,
-            std::ptr::null(),
-        )
-    };
-    if set_result != 0 {
-        return Err(format!(
-            "SetNamedSecurityInfoW failed with code {set_result}"
-        ));
-    }
-
-    // 显式持有 buffer / acl_buffer 到此处，防止编译器提前释放栈上 Vec。
-    drop(buffer);
-    drop(acl_buffer);
-
-    Ok(())
-}
-
-/// 删除文件
-pub fn delete_file(path: &Path) -> Result<(), AppError> {
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 共享的环境变量互斥锁：改 `HOME` / `CC_SWITCH_TEST_HOME` 这类进程级
+    /// 状态的测试都必须经它（配合 `#[serial_test::serial]`）。锁必须放在
+    /// 函数里经 `OnceLock` 取用——写成某个测试函数体内的 `static` 只对那一个
+    /// 测试可见，等于没有互斥。
+    ///
+    /// 目前唯一使用者是下面的 Windows 回归测试，故同样 cfg 掉，避免在
+    /// Linux/macOS 的 `clippy -D warnings` 里变成 never-used。
+    #[cfg(windows)]
+    fn env_lock() -> &'static std::sync::Mutex<()> {
+        use std::sync::OnceLock;
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
 
     fn assert_atomic_write_replaces_existing_file(dir: &Path) {
         let path = dir.join("atomic-write-contract.json");
@@ -730,6 +722,24 @@ mod tests {
     fn atomic_write_replaces_existing_file() {
         let dir = tempfile::tempdir().unwrap();
         assert_atomic_write_replaces_existing_file(dir.path());
+    }
+
+    #[test]
+    fn a_failed_replace_keeps_the_staged_file_for_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        // 目标是个非空目录：替换一定失败。
+        let path = dir.path().join("target");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("occupied"), b"x").unwrap();
+        let staged = stage_write(&path, b"new contents", Some(0o600), false).unwrap();
+        let tmp = staged.tmp_path().to_path_buf();
+
+        assert!(commit_staged(&tmp, &path).is_err());
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"new contents");
+
+        // 一次性的原子写不留临时文件。
+        assert!(staged.commit().is_err());
+        assert!(!tmp.exists());
     }
 
     #[cfg(windows)]
@@ -849,6 +859,38 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn derive_wsl_home_dir_from_opencode_config_dir() {
+        let dir = PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis\.config\opencode");
+        let home = derive_wsl_home_dir(&dir).expect("WSL home should be derived");
+        assert_eq!(
+            home,
+            PathBuf::from(r"\\wsl.localhost\Ubuntu-26.04\home\travis")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn derive_wsl_home_dir_supports_wsl_dollar_and_root() {
+        let dir = PathBuf::from(r"\\wsl$\Ubuntu\root\.config\opencode");
+        let home = derive_wsl_home_dir(&dir).expect("WSL root home should be derived");
+        assert_eq!(home, PathBuf::from(r"\\wsl$\Ubuntu\root"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn derive_wsl_home_dir_rejects_non_home_and_non_wsl_paths() {
+        assert_eq!(
+            derive_wsl_home_dir(&PathBuf::from(r"\\wsl$\Ubuntu\etc\opencode")),
+            None
+        );
+        assert_eq!(
+            derive_wsl_home_dir(&PathBuf::from(r"C:\Users\travis\.config\opencode")),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn wsl_unc_custom_dir_uses_nested_mcp_path() {
         let override_dir = PathBuf::from(r"\\wsl$\Ubuntu\opt\claude\.claude");
         assert!(default_mcp_path_for_config_dir(&override_dir).is_none());
@@ -955,64 +997,81 @@ mod tests {
         );
     }
 
-    /// M8 运行时证据：atomic_write_private 在 Windows 上写出的凭据文件，
-    /// 其 DACL 必须是"受保护（不继承）且仅含 1 条 ACE（当前用户）"。
-    /// 读回安全描述符做断言，而非仅编译验证。
+    /// 回归：`CC_SWITCH_TEST_HOME` 必须盖过 v3.10.3 的 `HOME` 兼容回退。
+    ///
+    /// Windows 上回退只看"默认位置有没有 cc-switch.db"，而测试临时目录里通常没有，
+    /// 于是会被引向 `HOME/.cc-switch`——runner 的 HOME 下往往真有一份 db，测试就此
+    /// 读写到真实用户数据（既污染用户库，又让断言读到别人写下的状态）。
     #[cfg(windows)]
     #[test]
-    fn atomic_write_private_restricts_dacl_to_current_user() {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::LocalFree;
-        use windows_sys::Win32::Security::{
-            Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
-            GetSecurityDescriptorControl, DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
-        };
+    #[serial_test::serial]
+    fn test_home_short_circuits_the_home_legacy_fallback() {
+        // 进程级环境变量的读写必须与同样改它们的测试互斥。锁是模块级共享的
+        // （写成测试函数体内的 static 只能锁住自己，等于没锁），见
+        // `proxy::http_client` 里同一套 env_lock() 用法。
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
 
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("cred-test.json");
-        atomic_write_private(&path, b"secret").expect("atomic_write_private");
+        // 假装 HOME 指向另一处，并且那里有一份 db——正是会触发回退的形状
+        let legacy_home = tempfile::tempdir().expect("tempdir");
+        let legacy_dir = legacy_home.path().join(".cc-switch");
+        std::fs::create_dir_all(&legacy_dir).expect("create legacy dir");
+        std::fs::write(legacy_dir.join("cc-switch.db"), b"legacy").expect("seed legacy db");
 
-        let wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let test_home = tempfile::tempdir().expect("tempdir");
+        let saved_home = std::env::var_os("HOME");
+        let saved_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
 
-        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
-        let mut dacl: *mut windows_sys::Win32::Security::ACL = std::ptr::null_mut();
-        // SAFETY: wide 是 NUL 终止 UTF-16 且存活至调用结束；sd/dacl 为有效出参。
-        let rc = unsafe {
-            GetNamedSecurityInfoW(
-                wide.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut dacl,
-                std::ptr::null_mut(),
-                &mut sd,
-            )
-        };
-        assert_eq!(rc, 0, "GetNamedSecurityInfoW failed: {rc}");
+        std::env::set_var("HOME", legacy_home.path());
+        std::env::set_var("CC_SWITCH_TEST_HOME", test_home.path());
 
-        // 断言 DACL 受保护（PROTECTED ⇒ 不从父目录继承 ACE）
-        let mut control: u16 = 0;
-        let mut revision: u32 = 0;
-        // SAFETY: sd 由上一步成功返回，是有效安全描述符；control/revision 为出参。
-        let ok = unsafe { GetSecurityDescriptorControl(sd, &mut control, &mut revision) };
-        assert_ne!(ok, 0, "GetSecurityDescriptorControl failed");
-        assert_ne!(
-            control & SE_DACL_PROTECTED,
-            0,
-            "DACL must be protected (no inheritance)"
+        let dir = get_app_config_dir();
+
+        match saved_test_home {
+            Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+            None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+        }
+        match saved_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let expected = test_home.path().join(".cc-switch");
+        assert_eq!(
+            dir, expected,
+            "测试 home 优先：不得回退到 HOME 下的旧库目录"
         );
+    }
+}
 
-        // 断言仅 1 条 ACE（当前用户）
-        // SAFETY: dacl 由 GetNamedSecurityInfoW 成功返回，是有效 ACL 指针。
-        let ace_count = unsafe { (*dacl).AceCount };
-        assert_eq!(ace_count, 1, "DACL must contain exactly one ACE");
+/// 复制文件
+pub fn copy_file(from: &Path, to: &Path) -> Result<(), AppError> {
+    fs::copy(from, to).map_err(|e| AppError::IoContext {
+        context: format!("复制文件失败 ({} -> {})", from.display(), to.display()),
+        source: e,
+    })?;
+    Ok(())
+}
 
-        // SAFETY: sd 由 GetNamedSecurityInfoW 经 LocalAlloc 分配，LocalFree 配对释放。
-        unsafe { LocalFree(sd) };
+/// 删除文件
+pub fn delete_file(path: &Path) -> Result<(), AppError> {
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| AppError::io(path, e))?;
+    }
+    Ok(())
+}
+
+/// 检查 Claude Code 配置状态
+#[derive(Serialize, Deserialize)]
+pub struct ConfigStatus {
+    pub exists: bool,
+    pub path: String,
+}
+
+/// 获取 Claude Code 配置状态
+pub fn get_claude_config_status() -> ConfigStatus {
+    let path = get_claude_settings_path();
+    ConfigStatus {
+        exists: path.exists(),
+        path: path.to_string_lossy().to_string(),
     }
 }

@@ -155,21 +155,28 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
     let mut apps = McpApps {
         claude: false,
         codex: false,
+        gemini: false,
+        grokbuild: false,
+        opencode: false,
+        hermes: false,
+        mcode: false,
+        pi: false,
     };
 
     for app in apps_str.split(',') {
         match app.trim() {
             "claude" => apps.claude = true,
             "codex" => apps.codex = true,
-            // 已裁剪应用（gemini/grokbuild/opencode/openclaw/hermes/mcode）：
-            // 旧 deeplink 可能仍携带这些名字，静默忽略以保持向前兼容
-            _ if matches!(
-                app.trim(),
-                "gemini" | "grokbuild" | "grok" | "opencode" | "openclaw" | "hermes" | "mcode"
-            ) =>
-            {
-                log::debug!("trimmed app {:?} ignored in apps parameter", app.trim());
+            "gemini" => apps.gemini = true,
+            "grokbuild" | "grok" => apps.grokbuild = true,
+            "opencode" => apps.opencode = true,
+            "openclaw" => {
+                // OpenClaw doesn't support MCP, ignore silently
+                log::debug!("OpenClaw doesn't support MCP, ignoring in apps parameter");
             }
+            "hermes" => apps.hermes = true,
+            "mcode" => apps.mcode = true,
+            "pi" => apps.pi = true,
             other => {
                 return Err(AppError::InvalidInput(format!(
                     "Invalid app in 'apps': {other}"
@@ -179,9 +186,9 @@ pub(crate) fn parse_mcp_apps(apps_str: &str) -> Result<McpApps, AppError> {
     }
 
     if apps.is_empty() {
-        return Err(AppError::InvalidInput(format!(
-            "No supported app in 'apps': '{apps_str}' (supported: claude, codex)"
-        )));
+        return Err(AppError::InvalidInput(
+            "At least one app must be specified in 'apps'".to_string(),
+        ));
     }
 
     Ok(apps)
@@ -207,11 +214,19 @@ mod tests {
         };
         let target = McpApps {
             codex: true,
+            gemini: true,
+            grokbuild: true,
+            opencode: true,
+            hermes: true,
             ..McpApps::default()
         };
         let merged = merge_mcp_apps(&existing, &target);
 
         assert!(merged.claude);
         assert!(merged.codex);
+        assert!(merged.gemini);
+        assert!(merged.grokbuild);
+        assert!(merged.opencode);
+        assert!(merged.hermes);
     }
 }

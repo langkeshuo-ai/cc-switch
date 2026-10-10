@@ -20,7 +20,8 @@ export interface CodingPlanProviderEntry {
     | "minimax"
     | "zenmux"
     | "volcengine"
-    | "opencode_go";
+    | "opencode_go"
+    | "command_code";
   /** UsageScriptModal 下拉显示用 */
   label: string;
   /** base_url 匹配规则 */
@@ -70,12 +71,19 @@ export const CODING_PLAN_PROVIDERS: readonly CodingPlanProviderEntry[] = [
     // OpenCode Go（$10/月订阅，三时间窗口美元额度）。用量端点
     // GET /zen/go/v1/usage 是官方第一方但未文档化的路由，只认
     // Authorization: Bearer（与推理侧 /messages 只认 x-api-key 相反）。
-    // base 分两档：/zen/go（claude 直连 /messages）与
-    // /zen/go/v1（codex/pi 走 Chat），子串同时覆盖；
+    // base 分两档：/zen/go（claude/claude-desktop 直连 /messages）与
+    // /zen/go/v1（codex/opencode/pi 走 Chat），子串同时覆盖；
     // Zen 按量版（/zen/v1）没有用量 API，刻意不命中。
     id: "opencode_go",
     label: "OpenCode Go",
     pattern: /opencode\.ai\/zen\/go/i,
+  },
+  {
+    // Command Code 的余额与窗口接口由官方 CLI 使用，当前未公开文档化。
+    // Claude 使用 /provider，Codex 使用 /provider/v1。
+    id: "command_code",
+    label: "Command Code",
+    pattern: /api\.commandcode\.ai\/provider(?:[/?#]|$)/i,
   },
 ] as const;
 
@@ -103,6 +111,7 @@ export function extractBaseUrlForUsageDetection(
   let raw: unknown;
   switch (appId) {
     case "claude":
+    case "claude-desktop":
       raw = settingsConfig.env?.ANTHROPIC_BASE_URL;
       break;
     case "codex":
@@ -111,6 +120,9 @@ export function extractBaseUrlForUsageDetection(
           ? settingsConfig.config
           : null,
       );
+      break;
+    case "opencode":
+      raw = settingsConfig.options?.baseURL;
       break;
     case "pi":
       raw = settingsConfig.baseUrl;
@@ -127,8 +139,9 @@ export function extractBaseUrlForUsageDetection(
  *
  * - 仅在 `meta.usage_script` 完全缺失时注入，不覆盖用户/UsageScriptModal 已有配置
  * - Claude app 保持既有行为：命中任意 Coding Plan 供应商都注入；
- *   其余 app（codex/pi）仅对 OpenCode Go 注入——
- *   三个 app 各有一份 OpenCode Go 预设、凭据形态后端全部支持，而智谱/Kimi
+ *   其余 app 仅对已验证预设注入：Codex 支持 Command Code，其他非 Claude
+ *   Coding Plan 保持既有行为——
+ *   五个 app 各有一份 OpenCode Go 预设、凭据形态后端全部支持，而智谱/Kimi
  *   等在其他 app 的自动注入未逐一验证过，不随手扩大
  * - code 置空：Rust 端走专用 `coding_plan::get_coding_plan_quota`，不执行 JS 脚本
  */
@@ -146,7 +159,13 @@ export function injectCodingPlanUsageScript<
   );
   const codingPlanProvider = detectCodingPlanProvider(baseUrl);
   if (!codingPlanProvider) return provider;
-  if (appId !== "claude" && codingPlanProvider !== "opencode_go") {
+  const isCommandCodeForCodex =
+    appId === "codex" && codingPlanProvider === "command_code";
+  if (
+    appId !== "claude" &&
+    codingPlanProvider !== "opencode_go" &&
+    !isCommandCodeForCodex
+  ) {
     return provider;
   }
 
