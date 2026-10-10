@@ -72,6 +72,12 @@ pub(crate) fn open_sqlite_waiting(path: &Path) -> Result<Connection, AppError> {
 /// `schema::normalize_legacy_trim_schema` 在打开时自动降级归一。
 pub(crate) const SCHEMA_VERSION: i32 = 19;
 
+/// fork 历史上到过的最高 `user_version`。v20..=22 的 fork 遗留库可由
+/// `normalize_legacy_trim_schema_on_conn` 无损降级到 [`SCHEMA_VERSION`]，
+/// 不算「版本过新」（见 `stored_user_version_exceeds_supported` 预检）。
+/// 高于此值（或 v20..=22 但缺 `app_snapshots` 表的非 fork 形态）仍按过新拒绝。
+pub(crate) const MAX_NORMALIZABLE_LEGACY_VERSION: i32 = 22;
+
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
     serde_json::to_string(value)
@@ -230,7 +236,13 @@ impl Database {
     }
 
     /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
-    /// 更新时返回 `Some(version)`。
+    /// 更新、且**不是**可归一的 fork 遗留形态时返回 `Some(version)`。
+    ///
+    /// fork 遗留库（v20..=22）以 `app_snapshots` 表为标志（上游从无此表），
+    /// [`Database::init`] 会在任何 schema 写操作前把它无损降级到
+    /// [`SCHEMA_VERSION`]，因此预检必须放行，否则 init 根本没有机会执行
+    /// normalize（2026-10-10 真机安装验证时发现：v22 存量库被预检拦进
+    /// 「版本过新」恢复界面，normalize 分支成死代码）。
     ///
     /// 用于初始化失败后判断是否为「数据库版本过新（应用过旧，需升级应用）」的可恢复
     /// 场景——此时不应反复弹出无效的重试对话框，而应引导用户在应用内升级。
@@ -242,7 +254,12 @@ impl Database {
         }
         let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
         let version = Self::get_user_version(&conn)?;
-        Ok((version > SCHEMA_VERSION).then_some(version))
+        if version <= SCHEMA_VERSION {
+            return Ok(None);
+        }
+        let normalizable_fork_legacy = (20..=MAX_NORMALIZABLE_LEGACY_VERSION).contains(&version)
+            && Self::table_exists(&conn, "app_snapshots")?;
+        Ok((!normalizable_fork_legacy).then_some(version))
     }
 
     /// 创建内存数据库（用于测试）

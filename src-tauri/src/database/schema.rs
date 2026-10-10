@@ -2,7 +2,9 @@
 //!
 //! 负责数据库表结构的创建和版本迁移。
 
-use super::{lock_conn, rollback_savepoint, Database, SCHEMA_VERSION};
+use super::{
+    lock_conn, rollback_savepoint, Database, MAX_NORMALIZABLE_LEGACY_VERSION, SCHEMA_VERSION,
+};
 use crate::error::AppError;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -2676,6 +2678,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn migrate_v12_to_v13_adds_input_token_semantics_columns() -> Result<(), AppError> {
@@ -3081,5 +3084,56 @@ mod tests {
         Database::normalize_legacy_trim_schema_on_conn(&conn, 22)?;
         assert_eq!(Database::get_user_version(&conn)?, 19);
         Ok(())
+    }
+
+    /// 构造一个指定 user_version 的裸库文件（可选带 app_snapshots 表）。
+    fn seed_db_file(version: i32, with_app_snapshots: bool) -> NamedTempFile {
+        let file = NamedTempFile::new().expect("temp db file");
+        let conn = Connection::open(file.path()).expect("open seed db");
+        if with_app_snapshots {
+            conn.execute(
+                "CREATE TABLE app_snapshots (name TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .expect("create app_snapshots");
+        }
+        conn.execute_batch(&format!("PRAGMA user_version = {version};"))
+            .expect("set user_version");
+        file
+    }
+
+    #[test]
+    fn version_precheck_allows_normalizable_fork_legacy_shapes() {
+        // fork 遗留 v20..=22 且带 app_snapshots 标志表 → 放行（返回 None），
+        // 否则 app_setup 预检会抢在 Database::init 的 normalize 之前把
+        // 真实存量库拦进「版本过新」恢复界面（2026-10-10 真机回归）。
+        for version in 20..=MAX_NORMALIZABLE_LEGACY_VERSION {
+            let file = seed_db_file(version, true);
+            let exceeded =
+                Database::stored_user_version_exceeds_supported(file.path()).expect("precheck");
+            assert_eq!(exceeded, None, "v{version} fork 遗留形态必须放行 normalize");
+        }
+    }
+
+    #[test]
+    fn version_precheck_still_blocks_unknown_newer_shapes() {
+        // 同版本但缺 app_snapshots 表（如未来上游 v20 形态）→ 仍判过新
+        let file = seed_db_file(20, false);
+        assert_eq!(
+            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
+            Some(20)
+        );
+        // 超出可归一上限的任何形态 → 过新
+        let file = seed_db_file(MAX_NORMALIZABLE_LEGACY_VERSION + 1, true);
+        assert_eq!(
+            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
+            Some(MAX_NORMALIZABLE_LEGACY_VERSION + 1)
+        );
+        // 支持范围内的版本 → 放行
+        let file = seed_db_file(SCHEMA_VERSION, false);
+        assert_eq!(
+            Database::stored_user_version_exceeds_supported(file.path()).expect("precheck"),
+            None
+        );
     }
 }
