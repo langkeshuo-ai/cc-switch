@@ -489,6 +489,20 @@ experimental_bearer_token = "sk-rightcode"
 }
 
 #[test]
+fn remote_config_url_is_rejected() {
+    let request = DeepLinkImportRequest {
+        config_url: Some("http://127.0.0.1/config.json".to_string()),
+        ..DeepLinkImportRequest::default()
+    };
+    let err = parse_and_merge_config(&request).expect_err("remote config url must be refused");
+    let text = err.to_string();
+    assert!(
+        text.contains("not supported") || text.contains("不支持"),
+        "{text}"
+    );
+}
+
+#[test]
 fn test_parse_and_merge_config_url_override() {
     let config_json = r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-old","ANTHROPIC_BASE_URL":"https://api.anthropic.com/v1"}}"#;
     let config_b64 = BASE64_STANDARD.encode(config_json.as_bytes());

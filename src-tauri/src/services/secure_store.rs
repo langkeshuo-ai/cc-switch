@@ -63,4 +63,11 @@ mod tests {
     fn unseal_plaintext_passthrough_for_legacy_files() {
         assert_eq!(unseal_content("{\"a\":1}").unwrap(), "{\"a\":1}");
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn unseal_rejects_corrupt_dpapi_payload() {
+        let bogus = format!("{}!!!!", crate::settings::DPAPI_MARKER);
+        assert!(unseal_content(&bogus).is_err());
+    }
 }

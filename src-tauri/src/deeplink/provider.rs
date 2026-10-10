@@ -558,7 +558,7 @@ requires_openai_auth = true
 
 /// Parse and merge configuration from Base64 encoded config or remote URL
 ///
-/// Priority: URL params > inline config > remote config
+/// Priority: URL params > inline config. Remote config_url is rejected.
 pub fn parse_and_merge_config(
     request: &DeepLinkImportRequest,
 ) -> Result<DeepLinkImportRequest, AppError> {
@@ -573,10 +573,11 @@ pub fn parse_and_merge_config(
         let decoded = decode_base64_param("config", config_b64)?;
         String::from_utf8(decoded)
             .map_err(|e| AppError::InvalidInput(format!("Invalid UTF-8 in config: {e}")))?
-    } else if let Some(_config_url) = &request.config_url {
-        // Fetch remote config (TODO: implement remote fetching in next phase)
+    } else if request.config_url.is_some() {
+        // 深链里的 URL 由外部页面决定。在这里发请求等于让任意链接触发本机出站访问，
+        // 所以远端配置明确不支持，调用方必须改用内联 config。
         return Err(AppError::InvalidInput(
-            "Remote config URL is not yet supported. Use inline config instead.".to_string(),
+            "Remote config URL is not supported. Use inline config instead.".to_string(),
         ));
     } else {
         return Ok(request.clone());

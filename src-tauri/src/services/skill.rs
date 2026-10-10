@@ -1786,14 +1786,26 @@ impl SkillService {
         restored_skill.content_hash = Self::compute_dir_hash(&restore_path).ok();
 
         if let Err(err) = db.save_skill(&restored_skill) {
-            let _ = fs::remove_dir_all(&restore_path);
+            if let Err(cleanup_err) = fs::remove_dir_all(&restore_path) {
+                log::warn!(
+                    "技能恢复写库失败后，清理已复制目录也失败: {} ({cleanup_err})",
+                    restore_path.display()
+                );
+            }
             return Err(err.into());
         }
 
         if !restored_skill.apps.is_empty() {
             if let Err(err) = Self::sync_to_app_dir(&restored_skill.directory, current_app) {
-                let _ = db.delete_skill(&restored_skill.id);
-                let _ = fs::remove_dir_all(&restore_path);
+                if let Err(cleanup_err) = db.delete_skill(&restored_skill.id) {
+                    log::warn!("技能同步到应用目录失败后，删除数据库记录也失败: {cleanup_err}");
+                }
+                if let Err(cleanup_err) = fs::remove_dir_all(&restore_path) {
+                    log::warn!(
+                        "技能同步到应用目录失败后，清理已复制目录也失败: {} ({cleanup_err})",
+                        restore_path.display()
+                    );
+                }
                 return Err(err);
             }
         }

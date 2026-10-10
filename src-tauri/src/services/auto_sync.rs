@@ -212,3 +212,47 @@ fn emit_auto_sync_status_updated<B: AutoSyncBackend>(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suppress_guard_blocks_until_drop() {
+        static DEPTH: AtomicUsize = AtomicUsize::new(0);
+        assert!(!is_auto_sync_suppressed(&DEPTH));
+        let guard = SuppressGuard::new(&DEPTH);
+        assert!(is_auto_sync_suppressed(&DEPTH));
+        drop(guard);
+        assert!(!is_auto_sync_suppressed(&DEPTH));
+    }
+
+    #[test]
+    fn wait_duration_caps_at_max() {
+        let start = Instant::now();
+        assert!(auto_sync_wait_duration(
+            start,
+            start + Duration::from_millis(MAX_AUTO_SYNC_WAIT_MS)
+        )
+        .is_none());
+        assert_eq!(
+            auto_sync_wait_duration(start, start),
+            Some(Duration::from_millis(1000))
+        );
+    }
+
+    #[test]
+    fn full_or_closed_channel_drops_the_signal() {
+        let (tx, _rx) = channel::<String>(1);
+        assert!(enqueue_change_signal(&tx, "providers"));
+        assert!(!enqueue_change_signal(&tx, "providers"));
+        drop(_rx);
+        assert!(!enqueue_change_signal(&tx, "providers"));
+    }
+
+    #[test]
+    fn table_trigger_matches_the_shared_allow_list() {
+        assert!(should_trigger_for_table("providers"));
+        assert!(!should_trigger_for_table("proxy_request_logs"));
+    }
+}

@@ -292,6 +292,8 @@ export interface WebDavSyncStatus {
   lastRemoteEtag?: string | null;
   lastLocalManifestHash?: string | null;
   lastRemoteManifestHash?: string | null;
+  /** 已应用的加密快照版本。由后端维护，保存设置时不会被前端覆盖。 */
+  lastAppliedRevision?: number | null;
 }
 
 // WebDAV 同步配置

@@ -176,6 +176,8 @@ pub(crate) trait SyncSecuritySettings {
     ///
     /// [`validate`]: crate::settings::WebDavSyncSettings::validate
     fn encryption_password(&self) -> Result<Option<&str>, AppError>;
+    /// 本地已应用的加密快照版本。没有记录时为 0，第一次同步仍接受旧清单。
+    fn last_applied_revision(&self) -> u64;
 }
 
 // ─── Types ───────────────────────────────────────────────────
@@ -189,6 +191,10 @@ pub(crate) struct SyncManifest {
     pub db_compat_version: Option<u32>,
     pub device_name: String,
     pub created_at: String,
+    /// 端到端加密快照的单调版本。旧清单没有该字段。
+    /// 有签名时，比本地已应用版本更小（或在已有版本后仍缺版本号）的清单按重放拒绝。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
     pub artifacts: BTreeMap<String, ArtifactMeta>,
     pub snapshot_id: String,
     /// HMAC-SHA256 over [`manifest_signing_bytes`], keyed from the E2E password.
@@ -211,6 +217,8 @@ pub(crate) struct LocalSnapshot {
     pub skills_zip: Vec<u8>,
     pub manifest_bytes: Vec<u8>,
     pub manifest_hash: String,
+    /// 仅加密快照携带。明文快照为 None，避免未签名的版本号被拿来抬高本地水位。
+    pub revision: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,7 +241,7 @@ impl RemoteLayout {
 pub(crate) fn build_local_snapshot(
     db: &crate::database::Database,
 ) -> Result<LocalSnapshot, AppError> {
-    build_local_snapshot_with_crypto(db, None)
+    build_local_snapshot_with_crypto(db, None, None)
 }
 
 /// Build a snapshot, optionally encrypting each artifact **before** hashing so
@@ -244,6 +252,7 @@ pub(crate) fn build_local_snapshot(
 pub(crate) fn build_local_snapshot_with_crypto(
     db: &crate::database::Database,
     encryption_password: Option<&str>,
+    revision: Option<u64>,
 ) -> Result<LocalSnapshot, AppError> {
     // Keep the DB's skill rows and the filesystem SSOT at one logical point in
     // time. Skill writers take the matching write guard around both mutations.
@@ -280,12 +289,16 @@ pub(crate) fn build_local_snapshot_with_crypto(
         None => (db_sql, skills_zip),
     };
 
+    // 没有口令就签不了名。未签名的版本号不能写入清单，否则远端可以伪造一个很大的
+    // revision，把本地水位抬到永远拒绝后续真快照。
+    let revision = encryption_password.and(revision);
     finalize_snapshot(
         detect_system_device_name().unwrap_or_else(|| "Unknown Device".to_string()),
         Utc::now().to_rfc3339(),
         db_sql,
         skills_zip,
         encryption_password,
+        revision,
     )
 }
 
@@ -299,6 +312,7 @@ fn finalize_snapshot(
     db_sql: Vec<u8>,
     skills_zip: Vec<u8>,
     encryption_password: Option<&str>,
+    revision: Option<u64>,
 ) -> Result<LocalSnapshot, AppError> {
     let mut artifacts = BTreeMap::new();
     artifacts.insert(
@@ -323,6 +337,7 @@ fn finalize_snapshot(
         db_compat_version: Some(DB_COMPAT_VERSION),
         device_name,
         created_at,
+        revision,
         artifacts,
         snapshot_id,
         mac: None,
@@ -345,6 +360,7 @@ fn finalize_snapshot(
         skills_zip,
         manifest_bytes,
         manifest_hash,
+        revision,
     })
 }
 
@@ -535,17 +551,11 @@ pub(crate) fn apply_snapshot(
 /// the recorded `snapshot_id`. Detects a manifest whose contents were edited
 /// without updating its identity.
 ///
-/// # Threat model (what this does *not* cover)
-///
-/// This check — together with [`verify_manifest_artifact`] — only defends
-/// against **naive corruption/manipulation**: transit damage, or content that
-/// was changed without also updating the hash. It does **not** provide
-/// **authenticity**: the manifest is neither signed nor covered by the AEAD
-/// tag, so an actor who controls the remote can recompute a wholly consistent
-/// manifest + artifacts, or replay an older valid snapshot to force a silent
-/// rollback. Authenticity currently relies on transport-layer security; a
-/// future iteration plans to derive a MAC key from the E2E password and HMAC
-/// the manifest (explicitly deferred for now).
+/// 自洽校验不证明这份清单是本机签过的。真实性由 [`verify_manifest_authenticity`]
+/// 的 HMAC 负责；比本地已应用版本更旧的重放由 [`ensure_snapshot_not_replayed`]
+/// 拒绝。没有端到端口令时签不了名，也不拒绝旧包，信任边界仍是传输层。
+/// 没有 `revision` 的旧加密清单在本地水位仍为 0 时可以应用；一旦应用过带版本号的
+/// 快照，再遇到无版本号的旧包也会拒绝，避免升级前的合法签名被永久拿来回滚。
 /// Canonical bytes covered by the manifest MAC: the manifest serialized with
 /// `mac` itself excluded.
 ///
@@ -620,6 +630,29 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+/// 拒绝会把已应用的加密快照回滚到更旧内容的清单。
+///
+/// `incoming == None` 表示升级前的旧清单。本地还没有版本水位时必须放行，否则
+/// 升级后的第一次下载会被自己的历史快照挡住。水位一旦向前走过，旧清单和无更
+/// 小版本号的清单都是重放。
+pub(crate) fn ensure_snapshot_not_replayed(
+    incoming: Option<u64>,
+    last_applied: u64,
+) -> Result<(), AppError> {
+    let stale = match incoming {
+        Some(revision) => revision < last_applied,
+        None => last_applied > 0,
+    };
+    if !stale {
+        return Ok(());
+    }
+    Err(localized(
+        "sync.manifest.replay_rejected",
+        "远端快照比本地已应用的版本更旧，已拒绝覆盖，以免旧包把数据回滚。",
+        "Remote snapshot is older than the version already applied locally; refusing to apply it so an old snapshot cannot roll data back.",
+    ))
 }
 
 pub(crate) fn verify_manifest_integrity(manifest: &SyncManifest) -> Result<(), AppError> {
@@ -711,6 +744,7 @@ pub(crate) fn apply_remote_snapshot(
     stored_db_sql: &[u8],
     stored_skills_zip: &[u8],
     password: Option<&str>,
+    last_applied_revision: u64,
 ) -> Result<(), AppError> {
     // 自洽校验在前（只验自洽，快），真实性校验紧随（要跑 Argon2，慢且只有
     // 开了 E2E 才跑）。顺序有讲究：先花几十毫秒证明"这文件内部没矛盾"，
@@ -718,6 +752,10 @@ pub(crate) fn apply_remote_snapshot(
     // 白白消耗一次 KDF。
     verify_manifest_integrity(manifest)?;
     verify_manifest_authenticity(manifest, password)?;
+    // 只在签名校验通过后看版本。明文快照没有可信的版本号，不在这里拒绝。
+    if password.is_some() {
+        ensure_snapshot_not_replayed(manifest.revision, last_applied_revision)?;
+    }
     verify_manifest_artifact(manifest, REMOTE_DB_SQL, stored_db_sql)?;
     verify_manifest_artifact(manifest, REMOTE_SKILLS_ZIP, stored_skills_zip)?;
 
@@ -785,12 +823,13 @@ pub(crate) fn persist_sync_success_best_effort<S, F>(
     settings: &mut S,
     manifest_hash: String,
     etag: Option<String>,
+    applied_revision: Option<u64>,
     persist_fn: F,
 ) -> bool
 where
-    F: FnOnce(&mut S, String, Option<String>) -> Result<(), AppError>,
+    F: FnOnce(&mut S, String, Option<String>, Option<u64>) -> Result<(), AppError>,
 {
-    match persist_fn(settings, manifest_hash, etag) {
+    match persist_fn(settings, manifest_hash, etag, applied_revision) {
         Ok(()) => true,
         Err(err) => {
             log::warn!("[Sync] Persist sync status failed, keep operation success: {err}");
@@ -827,6 +866,10 @@ impl SyncSecuritySettings for crate::settings::WebDavSyncSettings {
     fn encryption_password(&self) -> Result<Option<&str>, AppError> {
         resolve_encryption_password(self.encryption_enabled, self.encryption_password.as_str())
     }
+
+    fn last_applied_revision(&self) -> u64 {
+        self.status.last_applied_revision.unwrap_or(0)
+    }
 }
 
 impl SyncSecuritySettings for crate::settings::S3SyncSettings {
@@ -836,6 +879,10 @@ impl SyncSecuritySettings for crate::settings::S3SyncSettings {
 
     fn encryption_password(&self) -> Result<Option<&str>, AppError> {
         resolve_encryption_password(self.encryption_enabled, self.encryption_password.as_str())
+    }
+
+    fn last_applied_revision(&self) -> u64 {
+        self.status.last_applied_revision.unwrap_or(0)
     }
 }
 
@@ -877,12 +924,19 @@ pub(crate) fn persist_sync_success_with<S, F>(
     settings: &mut S,
     manifest_hash: String,
     etag: Option<String>,
+    applied_revision: Option<u64>,
     update: F,
 ) -> Result<(), AppError>
 where
     S: SyncStatusHolder,
     F: FnOnce(WebDavSyncStatus) -> Result<(), AppError>,
 {
+    let previous = settings.sync_status_mut().last_applied_revision;
+    // 明文同步不推进水位。未签名的版本号不能被信任。
+    let last_applied_revision = match applied_revision {
+        Some(revision) => Some(previous.unwrap_or(0).max(revision)),
+        None => previous,
+    };
     let status = WebDavSyncStatus {
         last_sync_at: Some(Utc::now().timestamp()),
         last_error: None,
@@ -890,6 +944,7 @@ where
         last_local_manifest_hash: Some(manifest_hash.clone()),
         last_remote_manifest_hash: Some(manifest_hash),
         last_remote_etag: etag,
+        last_applied_revision,
     };
     *settings.sync_status_mut() = status.clone();
     update(status)
@@ -1036,7 +1091,8 @@ mod tests {
             &mut dummy,
             "hash".to_string(),
             Some("etag".to_string()),
-            |_settings, _hash, _etag| Ok(()),
+            None,
+            |_settings, _hash, _etag, _revision| Ok(()),
         );
         assert!(ok);
     }
@@ -1048,9 +1104,19 @@ mod tests {
             &mut dummy,
             "hash".to_string(),
             None,
-            |_settings, _hash, _etag| Err(AppError::Config("boom".to_string())),
+            None,
+            |_settings, _hash, _etag, _revision| Err(AppError::Config("boom".to_string())),
         );
         assert!(!ok);
+    }
+
+    #[test]
+    fn replay_guard_accepts_first_install_and_rejects_rollback() {
+        assert!(ensure_snapshot_not_replayed(None, 0).is_ok());
+        assert!(ensure_snapshot_not_replayed(Some(1), 0).is_ok());
+        assert!(ensure_snapshot_not_replayed(Some(3), 3).is_ok());
+        assert!(ensure_snapshot_not_replayed(Some(2), 3).is_err());
+        assert!(ensure_snapshot_not_replayed(None, 1).is_err());
     }
 
     fn manifest_with(format: &str, version: u32, db_compat_version: Option<u32>) -> SyncManifest {
@@ -1063,6 +1129,7 @@ mod tests {
             db_compat_version,
             device_name: "My MacBook".to_string(),
             created_at: "2026-02-12T00:00:00Z".to_string(),
+            revision: None,
             artifacts,
             snapshot_id: "snap-1".to_string(),
             mac: None,
@@ -1398,6 +1465,7 @@ mod security_tests {
             db_compat_version: Some(DB_COMPAT_VERSION),
             device_name: "device".to_string(),
             created_at: "2026-02-12T00:00:00Z".to_string(),
+            revision: None,
             snapshot_id: compute_snapshot_id(&artifacts),
             artifacts,
             mac: None,
@@ -1617,12 +1685,19 @@ mod security_tests {
         // Tamper with the stored db payload: size/hash no longer matches.
         let mut tampered_db = snapshot.db_sql.clone();
         tampered_db.push(b'x');
-        apply_remote_snapshot(&db, &manifest, &tampered_db, &snapshot.skills_zip, None)
+        apply_remote_snapshot(&db, &manifest, &tampered_db, &snapshot.skills_zip, None, 0)
             .expect_err("hash mismatch must be rejected");
 
         // The intact payload still applies cleanly.
-        apply_remote_snapshot(&db, &manifest, &snapshot.db_sql, &snapshot.skills_zip, None)
-            .expect("verified snapshot applies");
+        apply_remote_snapshot(
+            &db,
+            &manifest,
+            &snapshot.db_sql,
+            &snapshot.skills_zip,
+            None,
+            0,
+        )
+        .expect("verified snapshot applies");
     }
 
     #[test]
@@ -1642,8 +1717,9 @@ mod security_tests {
             )
             .expect("save provider");
 
-        let snapshot =
-            build_local_snapshot_with_crypto(&source, Some("correct horse")).expect("encrypt");
+        let snapshot = build_local_snapshot_with_crypto(&source, Some("correct horse"), Some(2))
+            .expect("encrypt");
+        assert_eq!(snapshot.revision, Some(2));
         assert!(
             sync_crypto::is_encrypted_blob(&snapshot.db_sql),
             "opt-in encryption must encrypt the db artifact before upload"
@@ -1664,6 +1740,7 @@ mod security_tests {
             &snapshot.db_sql,
             &snapshot.skills_zip,
             Some("wrong password"),
+            0,
         )
         .expect_err("wrong password must be rejected");
 
@@ -1674,6 +1751,7 @@ mod security_tests {
             &snapshot.db_sql,
             &snapshot.skills_zip,
             Some("correct horse"),
+            0,
         )
         .expect("correct password restores the snapshot");
         let sql = target
@@ -1683,6 +1761,16 @@ mod security_tests {
             sql.contains("encrypted-provider"),
             "decrypted snapshot must restore the provider rows"
         );
+
+        apply_remote_snapshot(
+            &target,
+            &manifest,
+            &snapshot.db_sql,
+            &snapshot.skills_zip,
+            Some("correct horse"),
+            3,
+        )
+        .expect_err("an older signed snapshot must not roll the database back");
     }
 
     #[test]
@@ -1690,7 +1778,7 @@ mod security_tests {
     fn encrypted_snapshot_without_password_is_rejected() {
         let _home = TestHomeGuard::new();
         let db = crate::database::Database::memory().expect("create memory db");
-        let snapshot = build_local_snapshot_with_crypto(&db, Some("pw")).expect("encrypt");
+        let snapshot = build_local_snapshot_with_crypto(&db, Some("pw"), None).expect("encrypt");
         let manifest: SyncManifest =
             serde_json::from_slice(&snapshot.manifest_bytes).expect("deserialize manifest");
         let target = crate::database::Database::memory().expect("create target db");
@@ -1701,6 +1789,7 @@ mod security_tests {
             &snapshot.db_sql,
             &snapshot.skills_zip,
             None,
+            0,
         )
         .expect_err("encrypted snapshot without a password must be rejected");
         assert!(
@@ -1746,6 +1835,7 @@ mod security_tests {
             &snapshot.db_sql,
             &snapshot.skills_zip,
             Some("correct horse"),
+            0,
         )
         .expect_err("plaintext remote must be rejected once E2E is enabled");
         // 签名校验排在 artifact 解密之前，所以这里报的是"清单缺少签名"而非

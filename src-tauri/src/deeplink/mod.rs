@@ -109,7 +109,7 @@ pub struct DeepLinkImportRequest {
     /// Config format (json/toml)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_format: Option<String>,
-    /// Remote config URL
+    /// 远端配置地址。解析时一律拒绝：深链里的 URL 不能触发本机出站请求。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_url: Option<String>,
 

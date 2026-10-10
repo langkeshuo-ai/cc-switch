@@ -89,6 +89,9 @@ pub struct WebDavSyncStatus {
     pub last_local_manifest_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_remote_manifest_hash: Option<String>,
+    /// 已应用的同步快照单调版本。只在端到端加密快照上推进，用来拒绝更旧的重放。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_revision: Option<u64>,
 }
 
 fn default_remote_root() -> String {
@@ -140,6 +143,7 @@ impl Default for WebDavSyncSettings {
             remote_root: default_remote_root(),
             profile: default_profile(),
             allow_plaintext_http: false,
+            // 默认关。改成 true 会让没有口令的存量同步在下次保存时无法上传。
             encryption_enabled: false,
             encryption_password: String::new(),
             status: WebDavSyncStatus::default(),
@@ -234,6 +238,7 @@ impl Default for S3SyncSettings {
             remote_root: default_remote_root(),
             profile: default_profile(),
             allow_plaintext_http: false,
+            // 与 WebDAV 相同：默认明文，避免无口令时把已开启的同步锁死。
             encryption_enabled: false,
             encryption_password: String::new(),
             status: WebDavSyncStatus::default(),

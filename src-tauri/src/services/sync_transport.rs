@@ -129,12 +129,15 @@ pub(crate) async fn upload_snapshot<T, S, F>(
 where
     T: SyncTransport,
     S: SyncSecuritySettings,
-    F: FnOnce(&mut S, String, Option<String>) -> Result<(), AppError>,
+    F: FnOnce(&mut S, String, Option<String>, Option<u64>) -> Result<(), AppError>,
 {
     enforce_secure_transport(t.remote_endpoint(), settings.allow_plaintext_http())?;
     t.ensure_layout(RemoteLayout::Current).await?;
-    let snapshot = match settings.encryption_password()? {
-        Some(password) => build_local_snapshot_with_crypto(db, Some(password))?,
+    let password = settings.encryption_password()?;
+    // 版本号只在签得了名时递增。明文上传不带 revision，避免未签名数字被当成水位。
+    let revision = password.map(|_| settings.last_applied_revision().saturating_add(1));
+    let snapshot = match password {
+        Some(password) => build_local_snapshot_with_crypto(db, Some(password), revision)?,
         None => build_local_snapshot(db)?,
     };
 
@@ -173,8 +176,13 @@ where
         }
     };
 
-    let _persisted =
-        persist_sync_success_best_effort(settings, snapshot.manifest_hash, etag, persist_fn);
+    let _persisted = persist_sync_success_best_effort(
+        settings,
+        snapshot.manifest_hash,
+        etag,
+        snapshot.revision,
+        persist_fn,
+    );
     Ok(json!({ "status": "uploaded" }))
 }
 
@@ -188,7 +196,7 @@ pub(crate) async fn download_snapshot<T, S, F>(
 where
     T: SyncTransport,
     S: SyncSecuritySettings,
-    F: FnOnce(&mut S, String, Option<String>) -> Result<(), AppError>,
+    F: FnOnce(&mut S, String, Option<String>, Option<u64>) -> Result<(), AppError>,
 {
     enforce_secure_transport(t.remote_endpoint(), settings.allow_plaintext_http())?;
 
@@ -220,19 +228,25 @@ where
     .await?;
 
     // Apply snapshot (verify manifest + artifact hashes, decrypt, then restore)
+    let password = settings.encryption_password()?;
+    let last_applied = settings.last_applied_revision();
     apply_remote_snapshot(
         db,
         &snapshot.manifest,
         &db_sql,
         &skills_zip,
-        settings.encryption_password()?,
+        password,
+        last_applied,
     )?;
 
     let manifest_hash = sha256_hex(&snapshot.manifest_bytes);
+    // 只有验过签名的版本号才能推进水位。明文下载的 revision 不可信。
+    let applied_revision = password.and(snapshot.manifest.revision);
     let _persisted = persist_sync_success_best_effort(
         settings,
         manifest_hash,
         snapshot.manifest_etag,
+        applied_revision,
         persist_fn,
     );
 
@@ -473,9 +487,12 @@ mod tests {
             ..crate::settings::WebDavSyncSettings::default()
         };
 
-        let err = upload_snapshot(&transport, &db, &mut settings, |_settings, _hash, _etag| {
-            Ok::<(), AppError>(())
-        })
+        let err = upload_snapshot(
+            &transport,
+            &db,
+            &mut settings,
+            |_settings, _hash, _etag, _revision| Ok::<(), AppError>(()),
+        )
         .await
         .expect_err("enabled encryption with an empty password must be rejected");
         assert!(

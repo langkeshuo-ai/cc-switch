@@ -76,8 +76,15 @@ fn persist_sync_success(
     settings: &mut WebDavSyncSettings,
     manifest_hash: String,
     etag: Option<String>,
+    applied_revision: Option<u64>,
 ) -> Result<(), AppError> {
-    persist_sync_success_with(settings, manifest_hash, etag, update_webdav_sync_status)
+    persist_sync_success_with(
+        settings,
+        manifest_hash,
+        etag,
+        applied_revision,
+        update_webdav_sync_status,
+    )
 }
 
 // ─── Remote path helpers ─────────────────────────────────────

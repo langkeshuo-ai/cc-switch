@@ -68,8 +68,15 @@ fn persist_sync_success(
     settings: &mut S3SyncSettings,
     manifest_hash: String,
     etag: Option<String>,
+    applied_revision: Option<u64>,
 ) -> Result<(), AppError> {
-    persist_sync_success_with(settings, manifest_hash, etag, update_s3_sync_status)
+    persist_sync_success_with(
+        settings,
+        manifest_hash,
+        etag,
+        applied_revision,
+        update_s3_sync_status,
+    )
 }
 
 // ─── S3 key helpers ──────────────────────────────────────────
