@@ -45,9 +45,7 @@ impl Database {
     pub fn get_all_app_snapshots(&self) -> Result<Vec<AppSnapshot>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
-            .prepare(
-                "SELECT key, value FROM settings WHERE key LIKE ?1 ORDER BY key",
-            )
+            .prepare("SELECT key, value FROM settings WHERE key LIKE ?1 ORDER BY key")
             .map_err(|e| AppError::Database(e.to_string()))?;
 
         let prefix_pattern = format!("{APP_SNAPSHOT_KEY_PREFIX}%");
@@ -65,7 +63,11 @@ impl Database {
                 .unwrap_or(&key)
                 .to_string();
             let created_at = created_at_from_json(&data);
-            snapshots.push(AppSnapshot { name, data, created_at });
+            snapshots.push(AppSnapshot {
+                name,
+                data,
+                created_at,
+            });
         }
         // 快照数量级极小（用户手工命名），内存排序足够
         snapshots.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.name.cmp(&b.name)));
@@ -169,11 +171,7 @@ mod tests {
     fn test_app_snapshot_corrupt_json_sorts_last_with_zero_timestamp() -> Result<(), AppError> {
         let db = Database::memory()?;
         db.save_app_snapshot(&sample("bad", "not-json", 9_999))?;
-        db.save_app_snapshot(&sample(
-            "good",
-            r#"{"created_at":1234,"apps":{}}"#,
-            1_234,
-        ))?;
+        db.save_app_snapshot(&sample("good", r#"{"created_at":1234,"apps":{}}"#, 1_234))?;
         let all = db.get_all_app_snapshots()?;
         assert_eq!(all[0].name, "good");
         assert_eq!(all[0].created_at, 1_234);

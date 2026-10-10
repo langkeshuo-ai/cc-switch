@@ -1517,7 +1517,10 @@ impl Database {
                         .map_err(|e| AppError::Database(e.to_string()))?;
                     let norm_sql = create_sql
                         .replace("proxy_config", "proxy_config_norm")
-                        .replace("('claude','codex','pi')", "('claude','codex','gemini','grokbuild')");
+                        .replace(
+                            "('claude','codex','pi')",
+                            "('claude','codex','gemini','grokbuild')",
+                        );
                     if norm_sql == create_sql {
                         return Err(AppError::Database(
                             "proxy_config 含 'pi' 但未能改写 CHECK 约束（未知建表语句形态）".into(),
@@ -3034,11 +3037,19 @@ mod tests {
         )?;
         assert_eq!(claude_enabled, 1, "归一不能丢 claude 配置");
         assert!(
-            conn.query_row("SELECT 1 FROM proxy_config WHERE app_type = 'pi'", [], |r| r.get::<_, i64>(0))
-                .is_err(),
+            conn.query_row(
+                "SELECT 1 FROM proxy_config WHERE app_type = 'pi'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .is_err(),
             "pi 行必须被删除"
         );
-        assert!(Database::has_column(&conn, "proxy_config", "live_takeover_active")?);
+        assert!(Database::has_column(
+            &conn,
+            "proxy_config",
+            "live_takeover_active"
+        )?);
 
         // mcp_servers / skills 补回 5 列，数据未丢
         for table in ["mcp_servers", "skills"] {

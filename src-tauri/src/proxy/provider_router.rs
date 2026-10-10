@@ -828,5 +828,4 @@ mod tests {
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "a");
     }
-
 }
