@@ -1,4 +1,8 @@
 pub mod backup_storage;
+pub(crate) mod auto_sync;
+pub(crate) mod secure_store;
+pub(crate) mod sync_crypto;
+pub(crate) mod sync_transport;
 pub mod balance;
 pub mod codex_oauth_models;
 pub mod coding_plan;
@@ -8,7 +12,6 @@ pub mod env_manager;
 pub mod mcp;
 pub mod model_fetch;
 pub mod model_pricing;
-pub mod omo;
 pub mod pi_prompt_files;
 pub(crate) mod pi_state;
 pub mod profile;
@@ -19,17 +22,14 @@ pub mod s3;
 pub mod s3_auto_sync;
 pub mod s3_sync;
 pub mod session_usage;
+pub mod snapshots;
 pub mod session_usage_codex;
-pub mod session_usage_gemini;
-pub mod session_usage_grokbuild;
-pub mod session_usage_opencode;
 pub mod session_usage_pi;
 pub mod skill;
 pub mod speedtest;
 pub mod sql_helpers;
 pub mod stream_check;
 pub mod subscription;
-pub mod subscription_grok;
 pub mod sync_protocol;
 pub mod usage_cache;
 pub mod usage_stats;
@@ -53,4 +53,3 @@ pub use usage_stats::{
     RequestLogDetail, UsageSummary, UsageSummaryByApp,
 };
 
-pub mod session_usage_mcode;

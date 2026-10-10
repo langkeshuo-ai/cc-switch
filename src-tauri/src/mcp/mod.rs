@@ -13,10 +13,6 @@
 
 mod claude;
 mod codex;
-mod gemini;
-mod grokbuild;
-mod hermes;
-mod opencode;
 mod validation;
 
 // 重新导出公共 API

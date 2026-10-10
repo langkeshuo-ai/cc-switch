@@ -21,6 +21,11 @@ test-hooks = []
 
 [build-dependencies]
 tauri-build = { version = "2.4.0", features = [] }
+# feature 强制边（必须放 build-dependencies，resolver v2 下与普通依赖分开统一）：
+# tauri-build -> schemars 0.8.22(preserve_order) 以 no-std 形态拉入 indexmap 1.9.3，
+# 其 `IndexMap<K, V>` 两泛型别名在 `#[cfg(not(has_std))]` 下报 E0107。
+# 显式请求 std 使 has_std 进入构建图 feature 并集。
+indexmap-1 = { version = "1.9.3", package = "indexmap", features = ["std"] }
 
 [dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
