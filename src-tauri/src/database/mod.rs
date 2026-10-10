@@ -45,7 +45,21 @@ use crate::config::get_app_config_dir;
 use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// 打开 SQLite，并在锁竞争时最多等待 5 秒。
+///
+/// rusqlite 默认 `busy_timeout = 0`。主库和导入用的暂存库都会在打开后立刻执行
+/// PRAGMA；杀毒扫描或 WSL2 的 drvfs 经常让这条语句立刻返回 `database is locked`。
+/// 5 秒只覆盖瞬时竞争，真死锁仍会失败，而不是一直卡住。
+pub(crate) fn open_sqlite_waiting(path: &Path) -> Result<Connection, AppError> {
+    let conn = Connection::open(path).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(conn)
+}
 
 // DAO 方法通过 impl Database 提供，无需额外导出
 
@@ -131,14 +145,7 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
-        let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 锁竞争时等待而不是立刻失败。rusqlite 默认 busy_timeout=0，
-        // 任何瞬时竞争（另一个进程/测试二进制短暂持锁、WSL2 或网盘等
-        // 锁语义较弱的文件系统）都会直接抛 `database is locked`。
-        // 这里给 5s 上限：足以覆盖瞬时竞争，又不会把真死锁变成无限等待。
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        let conn = open_sqlite_waiting(&db_path)?;
 
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])

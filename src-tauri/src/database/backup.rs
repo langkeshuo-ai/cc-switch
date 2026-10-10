@@ -188,8 +188,7 @@ impl Database {
             source: e,
         })?;
         let temp_path = temp_file.path().to_path_buf();
-        let temp_conn =
-            Connection::open(&temp_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let temp_conn = super::open_sqlite_waiting(&temp_path)?;
         // SQLite Backup copies the source database header into the destination.
         // Configure the empty staging database before creating any tables so a
         // SQL import cannot downgrade the main DB from incremental vacuum to NONE.
@@ -537,8 +536,7 @@ impl Database {
             .map_err(|e| AppError::io(&backup_dir, e))?
             .into_temp_path();
         let temp_db_path: &Path = temp_path.as_ref();
-        let mut dest_conn =
-            Connection::open(temp_db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let mut dest_conn = super::open_sqlite_waiting(temp_db_path)?;
         let backup = Backup::new(source_conn, &mut dest_conn)
             .map_err(|e| AppError::Database(e.to_string()))?;
         Self::complete_backup(&backup, "创建数据库安全备份")?;
@@ -1056,8 +1054,7 @@ impl Database {
             context: "创建数据库恢复暂存文件失败".to_string(),
             source: e,
         })?;
-        let mut staging_conn =
-            Connection::open(temp_file.path()).map_err(|e| AppError::Database(e.to_string()))?;
+        let mut staging_conn = super::open_sqlite_waiting(temp_file.path())?;
         {
             let backup = Backup::new(&source_conn, &mut staging_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
@@ -1188,6 +1185,7 @@ mod tests {
     use crate::settings::{get_settings, update_settings, AppSettings};
     use crate::test_support::TestHomeGuard;
     use rusqlite::Connection;
+    use std::time::Duration;
 
     struct SettingsGuard {
         previous: AppSettings,
@@ -1207,6 +1205,30 @@ mod tests {
         fn drop(&mut self) {
             let _ = update_settings(self.previous.clone());
         }
+    }
+
+    #[test]
+    fn open_sqlite_waiting_sets_busy_timeout_and_survives_a_brief_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("busy.db");
+        let holder = Connection::open(&path).expect("holder");
+        let timeout_ms: i64 = {
+            let conn = super::super::open_sqlite_waiting(&path).expect("open");
+            conn.query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .expect("read busy_timeout")
+        };
+        assert_eq!(timeout_ms, 5_000);
+
+        holder.execute_batch("BEGIN EXCLUSIVE;").expect("lock");
+        let path_for_worker = path.clone();
+        let worker = std::thread::spawn(move || {
+            let conn = super::super::open_sqlite_waiting(&path_for_worker).expect("open waiting");
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS t(x INTEGER);")
+                .expect("write while briefly locked");
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        holder.execute_batch("COMMIT;").expect("unlock");
+        worker.join().expect("worker panicked");
     }
 
     #[test]
@@ -3194,7 +3216,6 @@ mod tests {
     #[test]
     #[ignore = "perf diagnostic, run explicitly"]
     fn perf_import_phases() -> Result<(), AppError> {
-        use rusqlite::Connection;
         use std::time::Instant;
         use tempfile::NamedTempFile;
 
