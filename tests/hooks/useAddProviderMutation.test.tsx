@@ -6,6 +6,7 @@ import { useAddProviderMutation } from "@/lib/query/mutations";
 
 const apiMocks = vi.hoisted(() => ({
   add: vi.fn(),
+  ensureClaudeDesktopOfficialProvider: vi.fn(),
   getAll: vi.fn(),
   updateTrayMenu: vi.fn(),
 }));
@@ -23,6 +24,8 @@ const toastMocks = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({
   providersApi: {
     add: (...args: unknown[]) => apiMocks.add(...args),
+    ensureClaudeDesktopOfficialProvider: (...args: unknown[]) =>
+      apiMocks.ensureClaudeDesktopOfficialProvider(...args),
     getAll: (...args: unknown[]) => apiMocks.getAll(...args),
     updateTrayMenu: (...args: unknown[]) => apiMocks.updateTrayMenu(...args),
   },
@@ -55,6 +58,9 @@ function createWrapper() {
 
 beforeEach(() => {
   apiMocks.add.mockReset().mockResolvedValue(true);
+  apiMocks.ensureClaudeDesktopOfficialProvider
+    .mockReset()
+    .mockResolvedValue(true);
   apiMocks.getAll.mockReset().mockResolvedValue({});
   apiMocks.updateTrayMenu.mockReset().mockResolvedValue(true);
   uuidMocks.generateUUID.mockReset().mockReturnValue("generated-uuid");
@@ -64,6 +70,8 @@ beforeEach(() => {
 });
 
 describe("useAddProviderMutation", () => {
+
+
   it("adds a managed Codex account as a separate official card", async () => {
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useAddProviderMutation("codex"), {
@@ -101,6 +109,7 @@ describe("useAddProviderMutation", () => {
         },
       }),
       "codex",
+      undefined,
       undefined,
     );
     expect(persistedProvider).toEqual(
@@ -151,6 +160,7 @@ describe("useAddProviderMutation", () => {
       }),
       "codex",
       undefined,
+      undefined,
     );
     expect(apiMocks.add).toHaveBeenNthCalledWith(
       2,
@@ -159,6 +169,7 @@ describe("useAddProviderMutation", () => {
         meta: { providerType: "codex_oauth" },
       }),
       "codex",
+      undefined,
       undefined,
     );
     expect(firstProvider.id).toBe("unbound-official-1");
@@ -188,6 +199,7 @@ describe("useAddProviderMutation", () => {
       expect.objectContaining({ id: "pi-provider" }),
       "pi",
       undefined,
+      undefined,
     );
     expect(provider.id).toBe("pi-provider");
   });
@@ -212,6 +224,7 @@ describe("useAddProviderMutation", () => {
     expect(apiMocks.add).toHaveBeenCalledWith(
       expect.objectContaining({ id: "pi-provider" }),
       "pi",
+      undefined,
       undefined,
     );
     expect(toastMocks.error).toHaveBeenCalled();

@@ -59,6 +59,14 @@ pub struct ProxyServer {
     server_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
+#[cfg(test)]
+impl ProxyState {
+    /// 测试用：用这个数据库、其余都是默认值的状态。
+    pub(crate) fn for_test(db: Arc<Database>) -> Self {
+        ProxyServer::new(ProxyConfig::default(), db, None).state
+    }
+}
+
 impl ProxyServer {
     pub fn new(
         config: ProxyConfig,
@@ -68,7 +76,7 @@ impl ProxyServer {
         // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
         // 创建故障转移切换管理器
-        let failover_manager = Arc::new(FailoverSwitchManager::new(db.clone()));
+        let failover_manager = Arc::new(FailoverSwitchManager::new());
 
         let state = ProxyState {
             db,
@@ -313,11 +321,24 @@ impl ProxyServer {
             // OpenAI Models API (Codex CLI reachability check)
             .route("/models", get(handlers::handle_models))
             .route("/v1/models", get(handlers::handle_models))
-            // OpenAI Responses API (Codex CLI，支持带前缀和不带前缀)
-            .route("/responses", post(handlers::handle_responses))
-            .route("/v1/responses", post(handlers::handle_responses))
-            .route("/v1/v1/responses", post(handlers::handle_responses))
-            .route("/codex/v1/responses", post(handlers::handle_responses))
+            // OpenAI Responses API (Codex CLI，支持带前缀和不带前缀)。GET 是 WebSocket
+            // 握手：Codex 内置的 openai（代理的官方路由）会先试 WebSocket。
+            .route(
+                "/responses",
+                post(handlers::handle_responses).get(handlers::handle_responses_websocket),
+            )
+            .route(
+                "/v1/responses",
+                post(handlers::handle_responses).get(handlers::handle_responses_websocket),
+            )
+            .route(
+                "/v1/v1/responses",
+                post(handlers::handle_responses).get(handlers::handle_responses_websocket),
+            )
+            .route(
+                "/codex/v1/responses",
+                post(handlers::handle_responses).get(handlers::handle_responses_websocket),
+            )
             // OpenAI Responses Compact API (Codex CLI 远程压缩，透传)
             .route(
                 "/responses/compact",
@@ -369,12 +390,6 @@ impl ProxyServer {
                 "/codex/v1/images/edits",
                 post(handlers::handle_images_edits),
             )
-            // Gemini API (支持带前缀和不带前缀)
-            //
-            // 用 `any(..)` 覆盖所有 HTTP 方法：除了 POST `:generateContent` /
-            // `:streamGenerateContent` / `:countTokens` 之外，Gemini SDK / CLI 还会发
-            // GET `/models`、GET `/models/<id>` 等只读端点。如果只挂 POST，这些 GET
-            // 请求会在路由层 404，绕过本地代理的统计、整流和故障转移。
             // 提高默认请求体大小限制（避免 413 Payload Too Large）
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024))
             .with_state(self.state.clone())
@@ -419,7 +434,6 @@ impl ProxyServer {
 mod tests {
     use super::*;
     use crate::provider::{Provider, ProviderMeta};
-    use crate::proxy::test_support::local_client;
     use crate::AppError;
     use axum::http::{header, HeaderMap, StatusCode};
     use serde_json::{json, Value};
@@ -432,11 +446,44 @@ mod tests {
         body: Value,
     }
 
+    /// Codex 内置的 openai 先用 WebSocket 连 Responses：握手回 426 它才立刻改走 HTTP。
+    #[tokio::test]
+    async fn responses_websocket_handshake_is_answered_with_upgrade_required() {
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                ..ProxyConfig::default()
+            },
+            db,
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = reqwest::Client::new();
+        for path in [
+            "/responses",
+            "/v1/responses",
+            "/v1/v1/responses",
+            "/codex/v1/responses",
+        ] {
+            let response = client
+                .get(format!("http://127.0.0.1:{}{path}", proxy_info.port))
+                .header(header::CONNECTION, "Upgrade")
+                .header(header::UPGRADE, "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .send()
+                .await
+                .expect("websocket handshake");
+            assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED, "{path}");
+        }
+        proxy.stop().await.expect("stop test proxy");
+    }
+
     /// A base URL pasted as a complete endpoint with the full-URL switch left off
     /// must derive the sibling standalone endpoint instead of having the
     /// standalone path appended to it.
     #[tokio::test]
-    #[serial_test::serial(global_env)]
     async fn codex_standalone_endpoints_derive_from_pasted_full_base_url() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let capture_handler = {
@@ -493,7 +540,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = local_client();
+        let client = reqwest::Client::new();
 
         let cases = [
             (
@@ -597,7 +644,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(global_env)]
     async fn codex_images_generation_aliases_forward_and_record_usage() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(
@@ -670,7 +716,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = local_client();
+        let client = reqwest::Client::new();
         let aliases = [
             "/images/generations",
             "/v1/images/generations",
@@ -803,7 +849,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(global_env)]
     async fn codex_images_edit_aliases_forward_and_record_usage() {
         // Real Images API responses carry `input_tokens_details` with text/image
         // splits; the shared Codex usage parser must tolerate them.
@@ -881,7 +926,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = local_client();
+        let client = reqwest::Client::new();
         let aliases = [
             "/images/edits",
             "/v1/images/edits",
@@ -1025,7 +1070,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial_test::serial(global_env)]
     async fn alpha_search_routes_forward_to_canonical_upstream() {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let mock_app = Router::new().route(
@@ -1107,7 +1151,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = local_client();
+        let client = reqwest::Client::new();
         let aliases = [
             "/alpha/search",
             "/v1/alpha/search",

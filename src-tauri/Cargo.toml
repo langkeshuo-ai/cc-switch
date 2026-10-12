@@ -1,7 +1,7 @@
 [package]
 name = "cc-switch"
-version = "3.20.4-trim.13"
-description = "All-in-One Assistant for Claude Code, Codex & Pi"
+version = "4.0.6-trim.1"
+description = "All-in-One Assistant for Claude Code, Codex & Gemini CLI"
 authors = ["Jason Young"]
 license = "MIT"
 repository = "https://github.com/farion1231/cc-switch"
@@ -25,10 +25,11 @@ test-hooks = []
 
 [build-dependencies]
 tauri-build = { version = "2.4.0", features = [] }
-# 兼容性补丁：schemars 0.8.22（tauri-build 依赖链）使用的 indexmap 1.9.3 在
-# rustc >= 1.96 下 autocfg 的 std 探测失效（has_std 不发射 → 泛型默认参数
-# 丢失 → schemars 编译失败）。显式启用 std 绕过探测，行为与旧 rustc 一致。
-indexmap1 = { package = "indexmap", version = "1.9.3", default-features = false, features = ["std"] }
+# feature 强制边（必须放 build-dependencies，resolver v2 下与普通依赖分开统一）：
+# tauri-build -> schemars 0.8.22(preserve_order) 以 no-std 形态拉入 indexmap 1.9.3，
+# 其 `IndexMap<K, V>` 两泛型别名在 `#[cfg(not(has_std))]` 下报 E0107。
+# 显式请求 std 使 has_std 进入构建图 feature 并集。
+indexmap-1 = { version = "1.9.3", package = "indexmap", features = ["std"] }
 
 [dependencies]
 serde_json = { version = "1.0", features = ["preserve_order"] }
@@ -39,6 +40,7 @@ tauri = { version = "2.8.2", features = ["tray-icon", "protocol-asset", "image-p
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-deep-link = "2"
@@ -46,15 +48,7 @@ tauri-plugin-window-state = "2"
 dirs = "5.0"
 toml = "0.8"
 toml_edit = "0.22"
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "http2",
-    "charset",
-    "macos-system-configuration",
-    "json",
-    "stream",
-    "socks",
-] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream", "socks"] }
 arboard = "3.6"
 flate2 = "1"
 brotli = "7"
@@ -82,6 +76,7 @@ rquickjs = { version = "0.8", features = ["array-buffer", "classes"] }
 thiserror = "2.0"
 anyhow = "1.0"
 zip = "2.2"
+serde_yaml = "0.9"
 tempfile = "3"
 url = "2.5"
 auto-launch = "0.5"
@@ -89,15 +84,10 @@ once_cell = "1.21.3"
 base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 indexmap = { version = "2", features = ["serde"] }
-# 同上：normal 依赖图里如果也出现 indexmap 1.9.3，统一强制 std
-indexmap1 = { package = "indexmap", version = "1.9.3", default-features = false, features = ["std"] }
 rust_decimal = "1.33"
 uuid = { version = "1.11", features = ["v4"] }
 sha2 = "0.10"
 hmac = "0.12"
-# Opt-in end-to-end snapshot encryption: Argon2id password KDF + AES-256-GCM AEAD.
-# Shared by every transport through services/sync_crypto.rs so WebDAV and S3
-# cannot diverge on wire format or cryptographic parameters.
 argon2 = "0.5"
 aes-gcm = "0.10"
 json5 = "0.4"
@@ -108,6 +98,7 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0.1", features = ["v2_16"] }
+gtk = "0.18"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 libc = "0.2"
@@ -116,11 +107,7 @@ libc = "0.2"
 winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Globalization",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
-    "Win32_System_Threading",
     "Win32_UI_Shell",
 ] }
 
@@ -133,7 +120,9 @@ objc2-app-kit = { version = "0.2", features = ["NSColor"] }
 
 # Optimize release binary size to help reduce AppImage footprint
 [profile.release]
-codegen-units = 1
+# 主 crate 体量大，codegen-units = 1 时 LLVM 只能单线程跑，发布编译的大头都在它身上。
+# 16 让主 crate 编译快约 64%，代价是二进制体积增加约 17%（10-05 本机基准）。
+codegen-units = 16
 lto = "thin"
 opt-level = "s"
 # 使用 unwind 以便 panic hook 能捕获 backtrace（abort 会直接终止无法捕获）
@@ -143,18 +132,3 @@ strip = "symbols"
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
-
-# 需要 `commands::*_test_hook` 的集成测试。这些 hook 用真 `#[cfg(feature)]` 门控
-# （原先的 `#[cfg_attr(..., doc(hidden))]` **不阻止编译进生产二进制**，形同虚设），
-# 故必须显式声明 required-features，避免 release/普通构建因缺符号而失败。
-[[test]]
-name = "mcp_commands"
-required-features = ["test-hooks"]
-
-[[test]]
-name = "provider_commands"
-required-features = ["test-hooks"]
-
-[[test]]
-name = "proxy_commands"
-required-features = ["test-hooks"]

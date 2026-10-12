@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { providersApi, sessionsApi, settingsApi, type AppId } from "@/lib/api";
 import type { DeleteSessionOptions } from "@/lib/api/sessions";
-import type { SwitchResult } from "@/lib/api/providers";
+import type { ProviderEditorSave, SwitchResult } from "@/lib/api/providers";
+import { parseLiveEditConflict } from "@/lib/errors/liveEditConflict";
 import type { Provider, SessionMeta, Settings } from "@/types";
 import {
   extractErrorMessage,
@@ -11,6 +12,7 @@ import {
 } from "@/utils/errorUtils";
 import { generateUUID } from "@/utils/uuid";
 import { usageKeys } from "@/lib/query/usage";
+import { sessionKeys } from "@/lib/query/sessions";
 import { invalidatePiProviderCaches } from "@/lib/query/pi";
 
 export const useAddProviderMutation = (appId: AppId) => {
@@ -22,17 +24,27 @@ export const useAddProviderMutation = (appId: AppId) => {
       providerInput: Omit<Provider, "id"> & {
         providerKey?: string;
         addToLive?: boolean;
+        editorSave?: ProviderEditorSave;
       },
     ) => {
-      const { providerKey: _providerKey, addToLive, ...rest } = providerInput;
+      const { providerKey: _providerKey, addToLive, editorSave, ...rest } =
+        providerInput;
 
       let id: string;
 
       if (appId === "pi") {
-        if (!providerInput.providerKey) {
-          throw new Error(`Provider key is required for ${appId}`);
+        if (
+          providerInput.category === "omo" ||
+          providerInput.category === "omo-slim"
+        ) {
+          const prefix = providerInput.category === "omo" ? "omo" : "omo-slim";
+          id = `${prefix}-${generateUUID()}`;
+        } else {
+          if (!providerInput.providerKey) {
+            throw new Error(`Provider key is required for ${appId}`);
+          }
+          id = providerInput.providerKey;
         }
-        id = providerInput.providerKey;
       } else {
         id = generateUUID();
       }
@@ -44,7 +56,7 @@ export const useAddProviderMutation = (appId: AppId) => {
       };
       delete (newProvider as any).providerKey;
 
-      await providersApi.add(newProvider, appId, addToLive);
+      await providersApi.add(newProvider, appId, addToLive, editorSave);
       return newProvider;
     },
     onSuccess: async () => {
@@ -69,6 +81,8 @@ export const useAddProviderMutation = (appId: AppId) => {
       );
     },
     onError: (error: Error) => {
+      // 编辑冲突由对话框让用户选保留哪一边，不弹失败提示。
+      if (parseLiveEditConflict(error)) return;
       const rawDetail = extractErrorMessage(error);
       const detail =
         (appId === "pi"
@@ -99,11 +113,13 @@ export const useUpdateProviderMutation = (appId: AppId) => {
     mutationFn: async ({
       provider,
       originalId,
+      editorSave,
     }: {
       provider: Provider;
       originalId?: string;
+      editorSave?: ProviderEditorSave;
     }) => {
-      await providersApi.update(provider, appId, originalId);
+      await providersApi.update(provider, appId, originalId, editorSave);
       return provider;
     },
     onSuccess: async (provider, variables) => {
@@ -126,6 +142,7 @@ export const useUpdateProviderMutation = (appId: AppId) => {
       );
     },
     onError: (error: Error) => {
+      if (parseLiveEditConflict(error)) return;
       const rawDetail = extractErrorMessage(error);
       const detail =
         (appId === "pi"
@@ -257,6 +274,15 @@ export const useDeleteSessionMutation = () => {
       return input;
     },
     onSuccess: async (input) => {
+      const deleted = queryClient
+        .getQueryData<SessionMeta[]>(["sessions"])
+        ?.find(
+          (session) =>
+            session.providerId === input.providerId &&
+            session.sessionId === input.sessionId &&
+            session.sourcePath === input.sourcePath,
+        );
+      const deletedTitle = deleted?.title?.trim() || deleted?.summary?.trim();
       queryClient.setQueryData<SessionMeta[]>(["sessions"], (current) =>
         (current ?? []).filter(
           (session) =>
@@ -268,15 +294,20 @@ export const useDeleteSessionMutation = () => {
         ),
       );
       queryClient.removeQueries({
-        queryKey: ["sessionMessages", input.providerId, input.sourcePath],
+        queryKey: sessionKeys.messages(input.providerId, input.sourcePath),
+      });
+      queryClient.removeQueries({
+        queryKey: sessionKeys.transcript(input.providerId, input.sourcePath),
       });
 
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
 
       toast.success(
-        t("sessionManager.sessionDeleted", {
-          defaultValue: "会话已删除",
-        }),
+        deletedTitle
+          ? t("sessionManager.sessionDeletedNamed", { title: deletedTitle })
+          : t("sessionManager.sessionDeleted", {
+              defaultValue: "会话已删除",
+            }),
       );
     },
     onError: (error: Error) => {

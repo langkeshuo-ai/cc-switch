@@ -324,13 +324,16 @@ command = "say"
     );
 
     let config_text = std::fs::read_to_string(get_codex_config_path()).expect("read config.toml");
+    // 上游 4.0 只替换关键字段：live 里用户的 MCP 原样留着，行里的 MCP 不投影；
+    // 这张卡没有路由，Key 没有第三方地址可发，不写进 live。
     assert!(
-        config_text.contains("mcp_servers.echo-server"),
-        "config.toml should contain synced MCP servers"
+        config_text.contains("[mcp_servers.legacy]"),
+        "{config_text}"
     );
+    assert!(!config_text.contains("mcp_servers.latest"), "{config_text}");
     assert!(
-        config_text.contains("experimental_bearer_token"),
-        "config.toml should carry the selected provider API key as bearer token"
+        !config_text.contains("experimental_bearer_token"),
+        "{config_text}"
     );
 
     let current_id = app_state
@@ -354,12 +357,6 @@ command = "say"
         .get("config")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    // 供应商配置应该包含在 live 文件中
-    // 注意：live 文件还会包含 MCP 同步后的内容
-    assert!(
-        config_text.contains("mcp_servers.latest"),
-        "live file should contain provider's original config"
-    );
     assert!(
         new_config_text.contains("mcp_servers.latest"),
         "provider snapshot should contain provider's original config"
@@ -368,17 +365,10 @@ command = "say"
     let legacy = providers
         .get("old-provider")
         .expect("legacy provider still exists");
-    let legacy_auth_value = legacy
-        .settings_config
-        .get("auth")
-        .and_then(|v| v.get("OPENAI_API_KEY"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    // 回填机制：切换前会将 live 配置回填到当前供应商
-    // 这保护了用户在 live 文件中的手动修改
     assert_eq!(
-        legacy_auth_value, "legacy-key",
-        "previous provider should be backfilled with live auth"
+        legacy.settings_config,
+        json!({ "auth": {"OPENAI_API_KEY": "stale"}, "config": "stale-config" }),
+        "switching away never writes live content back into the row"
     );
 }
 
@@ -496,11 +486,16 @@ fn switch_provider_updates_claude_live_and_state() {
     let legacy_provider = providers
         .get("old-provider")
         .expect("legacy provider still exists");
-    // 回填机制：切换前会将 live 配置回填到当前供应商
-    // 这保护了用户在 live 文件中的手动修改
+    // 不再回填：用户在 live 里的改动留在 live，上一家的行不变（上游 4.0 语义）。
     assert_eq!(
-        legacy_provider.settings_config, legacy_live,
-        "previous provider should be backfilled with live config"
+        legacy_provider.settings_config,
+        json!({ "env": { "ANTHROPIC_API_KEY": "stale-key" } }),
+        "switching away must not copy live into the previous provider"
+    );
+    assert_eq!(
+        live_after["workspace"],
+        json!({ "path": "/tmp/workspace" }),
+        "non-key settings in live stay where they are"
     );
 
     let new_provider = providers.get("new-provider").expect("new provider exists");

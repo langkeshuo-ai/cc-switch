@@ -230,6 +230,7 @@ fn schema_migration_adds_missing_columns_for_providers() {
         ("providers", "meta"),
         ("providers", "is_current"),
         ("provider_endpoints", "added_at"),
+        ("mcp_servers", "enabled_gemini"),
         ("prompts", "updated_at"),
         ("skills", "installed_at"),
         ("skill_repos", "enabled"),
@@ -237,24 +238,6 @@ fn schema_migration_adds_missing_columns_for_providers() {
         assert!(
             Database::has_column(&conn, table, column).expect("check column"),
             "{table}.{column} should exist after migration"
-        );
-    }
-
-    // schema 回到上游 v19：已裁剪应用的启用标志列按上游形状保留（DEFAULT 0）
-    for column in [
-        "enabled_gemini",
-        "enabled_grokbuild",
-        "enabled_opencode",
-        "enabled_mcode",
-        "enabled_hermes",
-    ] {
-        assert!(
-            Database::has_column(&conn, "mcp_servers", column).expect("check column"),
-            "mcp_servers.{column} should exist (upstream v19 shape)"
-        );
-        assert!(
-            Database::has_column(&conn, "skills", column).expect("check column"),
-            "skills.{column} should exist (upstream v19 shape)"
         );
     }
 
@@ -703,12 +686,10 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     );
 
     // v3.9+ 新增：proxy_config 三行 seed 必须存在（否则 UI 会查不到默认值）
-    // v21 起 migrate_v20_to_v21 曾补一行 Pi 至 5 行；v22 起裁剪应用被清退，
-    // 只保留 claude/codex/pi 三行
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 3);
+    assert_eq!(proxy_rows, 4);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn
@@ -1386,85 +1367,6 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
     );
 }
 
-// ==================== H4: db_blocking ====================
-
-/// db_blocking 基本功能：闭包在 blocking 线程池中拿到已锁定的 &Connection，
-/// 读写结果与内联执行一致。
-#[tokio::test]
-async fn db_blocking_executes_on_conn_and_returns_result() {
-    let db = Database::memory().expect("memory db");
-
-    let inserted = db
-        .db_blocking(|conn| {
-            conn.execute(
-                "INSERT INTO settings (key, value) VALUES ('h4-test', 'ok')",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))
-        })
-        .await
-        .expect("db_blocking insert succeeds");
-    assert_eq!(inserted, 1);
-
-    let value = db
-        .db_blocking(|conn| {
-            conn.query_row(
-                "SELECT value FROM settings WHERE key = 'h4-test'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .map_err(|e| AppError::Database(e.to_string()))
-        })
-        .await
-        .expect("db_blocking query succeeds");
-    assert_eq!(value, "ok");
-}
-
-/// db_blocking 并发语义：多个并发调用共享同一 Mutex<Connection>，
-/// 全部完成且互不交错损坏（Mutex 串行化保持不变）。
-#[tokio::test]
-async fn db_blocking_concurrent_calls_serialize_on_single_connection() {
-    let db = std::sync::Arc::new(Database::memory().expect("memory db"));
-
-    let mut tasks = Vec::new();
-    for i in 0..8u32 {
-        let db = std::sync::Arc::clone(&db);
-        tasks.push(tokio::spawn(async move {
-            db.db_blocking(move |conn| -> Result<u32, AppError> {
-                conn.execute(
-                    "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-                    rusqlite::params![format!("h4-concurrent-{i}"), i],
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-                Ok(i)
-            })
-            .await
-        }));
-    }
-
-    let mut seen = Vec::new();
-    for task in tasks {
-        seen.push(
-            task.await
-                .expect("task not panicked")
-                .expect("db_blocking succeeds"),
-        );
-    }
-    seen.sort_unstable();
-    assert_eq!(seen, (0..8).collect::<Vec<_>>());
-
-    let count: i64 = {
-        let conn = db.conn.lock().expect("conn lock after concurrent inserts");
-        conn.query_row(
-            "SELECT COUNT(*) FROM settings WHERE key LIKE 'h4-concurrent-%'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("count query")
-    };
-    assert_eq!(count, 8);
-}
-
 #[test]
 fn incremental_vacuum_reclaims_entire_freelist() {
     let temp = NamedTempFile::new().expect("create temp db file");
@@ -1490,133 +1392,4 @@ fn incremental_vacuum_reclaims_entire_freelist() {
 
     Database::incremental_vacuum_on_conn(&conn).expect("incremental vacuum");
     assert_eq!(freelist(&conn), 0, "all free pages should be reclaimed");
-}
-
-#[test]
-fn rollback_savepoint_restores_pre_savepoint_state() {
-    let conn = Connection::open_in_memory().expect("open in-memory db");
-    conn.execute_batch("CREATE TABLE t (v INTEGER);")
-        .expect("create table");
-    conn.execute("SAVEPOINT sp;", []).expect("open savepoint");
-    conn.execute("INSERT INTO t VALUES (1);", [])
-        .expect("insert");
-    conn.execute("RELEASE sp;", []).expect("release");
-
-    conn.execute("SAVEPOINT sp2;", [])
-        .expect("open savepoint 2");
-    conn.execute("INSERT INTO t VALUES (2);", [])
-        .expect("insert 2");
-
-    rollback_savepoint(&conn, "sp2");
-
-    let rows: Vec<i64> = conn
-        .prepare("SELECT v FROM t ORDER BY v")
-        .expect("prepare")
-        .query_map([], |row| row.get(0))
-        .expect("query")
-        .collect::<Result<_, _>>()
-        .expect("collect");
-    assert_eq!(rows, vec![1], "rolled-back row must be gone");
-}
-
-#[test]
-fn rollback_savepoint_on_missing_savepoint_is_not_silent() {
-    // 回归防护：旧实现对不存在的 savepoint 直接 `.ok()` 静默吞掉。
-    // 现在走日志分支——关键是**不得 panic**，且调用方的原始错误不被覆盖。
-    let conn = Connection::open_in_memory().expect("open in-memory db");
-    rollback_savepoint(&conn, "never_opened");
-    // 失败后连接仍可用（未被破坏），后续语句可正常执行
-    conn.execute_batch("CREATE TABLE t (v INTEGER);")
-        .expect("connection must stay usable after a failed rollback");
-}
-
-#[test]
-fn schema_migration_rejects_newer_db_and_reports_version() {
-    // 版本过新时必须回滚并返回明确错误，而不是静默。
-    let conn = Connection::open_in_memory().expect("open in-memory db");
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1)
-        .expect("bump user_version");
-
-    let err = Database::apply_schema_migrations_on_conn(&conn)
-        .expect_err("newer schema must be rejected");
-    let msg = err.to_string();
-    assert!(
-        msg.contains(&SCHEMA_VERSION.to_string()) || msg.contains("版本过新"),
-        "error must name the schema version, got: {msg}"
-    );
-}
-
-/// 外置定价表的数据完整性。
-///
-/// 定价表从 1192 行 Rust 源码搬到 `resources/model-pricing.default.json` 后，
-/// 最大的风险是「改 JSON 时手滑删了几条」或「字段名写错被静默忽略」。这个测试
-/// 把三条不变量钉死：
-///   1. JSON 可解析，且条目数与 DB 实际落盘行数一致（不多不少不少条）
-///   2. model_id 无重复（重复会被 INSERT OR IGNORE 静默吃掉，表看着"对"实则少行）
-///   3. 每条 6 个字段都非空——空字符串会进 DB，计费时静默算成 0
-///
-/// 迁移时的等价性由 `tools/verify_pricing.py` 保证（219 条全字段逐一比对）；
-/// 本测试保证的是「往后每次改动 JSON 都还能被校验」。
-#[test]
-fn model_pricing_default_json_matches_seeded_rows() {
-    // 刻意不复用 schema::DefaultPricingEntry：那是 seed 的私有实现细节。
-    // 测试自带最小结构，只声明要断言的字段——schema 将来加/改字段不会牵动这里，
-    // 反过来测试也无法依赖它未声明的部分。
-    #[derive(serde::Deserialize)]
-    struct PricingRow {
-        model_id: String,
-        display_name: String,
-        input_cost_per_million: String,
-        output_cost_per_million: String,
-        cache_read_cost_per_million: String,
-        cache_creation_cost_per_million: String,
-    }
-
-    const PRICING_JSON: &str = include_str!("../resources/model-pricing.default.json");
-    let entries: Vec<PricingRow> =
-        serde_json::from_str(PRICING_JSON).expect("内置定价表必须是合法 JSON");
-    assert!(
-        !entries.is_empty(),
-        "内置定价表为空——外置文件被清空或路径指错"
-    );
-
-    // 不变量 2：model_id 唯一
-    let mut ids: Vec<&str> = entries.iter().map(|e| e.model_id.as_str()).collect();
-    ids.sort_unstable();
-    let before = ids.len();
-    ids.dedup();
-    assert_eq!(
-        ids.len(),
-        before,
-        "内置定价表存在重复 model_id，会被 INSERT OR IGNORE 静默丢弃"
-    );
-
-    // 不变量 3：字段非空
-    for e in &entries {
-        for (label, val) in [
-            ("display_name", &e.display_name),
-            ("input", &e.input_cost_per_million),
-            ("output", &e.output_cost_per_million),
-            ("cache_read", &e.cache_read_cost_per_million),
-            ("cache_creation", &e.cache_creation_cost_per_million),
-        ] {
-            assert!(
-                !val.trim().is_empty(),
-                "{} 的 {label} 为空——空串会进 DB，计费时静默算成 0",
-                e.model_id
-            );
-        }
-    }
-
-    // 不变量 1：DB 落盘行数与 JSON 条数一致
-    let db = Database::memory().expect("create memory db");
-    let conn = db.conn.lock().expect("lock conn");
-    let seeded: i64 = conn
-        .query_row("SELECT COUNT(*) FROM model_pricing", [], |r| r.get(0))
-        .expect("count seeded pricing rows");
-    assert_eq!(
-        seeded,
-        entries.len() as i64,
-        "DB 落盘行数与 JSON 条数不符——seed 逻辑或数据文件被改动过"
-    );
 }

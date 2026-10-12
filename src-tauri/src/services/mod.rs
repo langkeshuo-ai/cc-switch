@@ -1,4 +1,5 @@
 pub(crate) mod auto_sync;
+pub mod backup_storage;
 pub mod balance;
 pub mod codex_oauth_models;
 pub mod coding_plan;

@@ -5,11 +5,13 @@ export { useModelState } from "./useModelState";
 export { useCodexConfigState } from "./useCodexConfigState";
 export { useApiKeyLink } from "./useApiKeyLink";
 export { useTemplateValues } from "./useTemplateValues";
-export { useCommonConfigSnippet } from "./useCommonConfigSnippet";
-export { useCodexCommonConfig } from "./useCodexCommonConfig";
 export { useSpeedTestEndpoints } from "./useSpeedTestEndpoints";
 export { useCodexTomlValidation } from "./useCodexTomlValidation";
 export { useManagedAuth } from "./useManagedAuth";
 export { useCopilotAuth } from "./useCopilotAuth";
 export { useCodexOauth } from "./useCodexOauth";
 export { useXaiOauth } from "./useXaiOauth";
+export {
+  useDraftEditorProjection,
+  type EditorBaseChange,
+} from "./useDraftEditorProjection";

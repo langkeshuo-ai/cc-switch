@@ -67,10 +67,10 @@ const POLLING_SAFETY_MARGIN_SECS: u64 = 3;
 const CODEX_USER_AGENT: &str = "cc-switch-codex-oauth";
 
 // Shared by model discovery and generation: ChatGPT gates models by this
-// client identity. Sol and Luna are exposed to ChatGPT accounts at 0.155.0.
-// Bump together when a new model raises its minimal_client_version.
+// client identity. GPT-6.1 Sol enters the ChatGPT-account catalog at 0.159.0.
+// Bump together when a new model raises its minimal_client_version or catalog gate.
 pub(crate) const CODEX_OAUTH_ORIGINATOR: &str = "codex_cli_rs";
-pub(crate) const CODEX_OAUTH_CLIENT_VERSION: &str = "0.155.0";
+pub(crate) const CODEX_OAUTH_CLIENT_VERSION: &str = "0.159.0";
 
 /// Codex OAuth 错误
 #[derive(Debug, thiserror::Error)]
@@ -228,22 +228,6 @@ impl CodexLiveAuthSwitchGuard {
             )?;
         }
         Ok(())
-    }
-
-    pub(crate) fn clear_outgoing(&self, account_id: &str) -> Result<(), crate::error::AppError> {
-        match self {
-            Self::ExistingAccount(token) => {
-                crate::codex_config::clear_codex_live_auth_for_managed_account_if_unchanged(
-                    account_id,
-                    token.as_deref(),
-                )
-            }
-            Self::MissingAccount => {
-                crate::codex_config::clear_codex_managed_oauth_live_auth_marker_for_account(
-                    account_id,
-                )
-            }
-        }
     }
 }
 
@@ -1554,34 +1538,6 @@ impl CodexOAuthManager {
     }
 
     #[cfg(test)]
-    pub(crate) async fn add_test_account_with_access_token(
-        &self,
-        account_id: &str,
-        access_token: &str,
-        id_token: Option<&str>,
-    ) -> Result<(), CodexOAuthError> {
-        self.add_test_account_with_workspace_and_access_token(
-            account_id,
-            account_id,
-            access_token,
-            id_token,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn add_test_account_with_user_identity(
-        &self,
-        account_id: &str,
-        access_token: &str,
-        subject: &str,
-    ) -> Result<(), CodexOAuthError> {
-        let id_token = crate::codex_config::test_codex_id_token(subject);
-        self.add_test_account_with_access_token(account_id, access_token, Some(&id_token))
-            .await
-    }
-
-    #[cfg(test)]
     pub(crate) async fn add_test_account_with_workspace_and_access_token(
         &self,
         account_id: &str,
@@ -1623,26 +1579,19 @@ impl CodexOAuthManager {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_refresh_token_for_account(&self, account_id: &str) -> Option<String> {
-        self.accounts
-            .read()
-            .await
-            .get(account_id)
-            .map(|account| account.refresh_token.clone())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn test_set_token_updated_at_ms(
+    pub(crate) async fn add_test_account_with_access_token(
         &self,
         account_id: &str,
-        token_updated_at_ms: i64,
-    ) {
-        self.accounts
-            .write()
-            .await
-            .get_mut(account_id)
-            .expect("test account present")
-            .token_updated_at_ms = token_updated_at_ms;
+        access_token: &str,
+        id_token: Option<&str>,
+    ) -> Result<(), CodexOAuthError> {
+        self.add_test_account_with_workspace_and_access_token(
+            account_id,
+            account_id,
+            access_token,
+            id_token,
+        )
+        .await
     }
 
     // ==================== 内部方法 ====================

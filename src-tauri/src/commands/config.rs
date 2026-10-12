@@ -1,13 +1,21 @@
 #![allow(non_snake_case)]
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_config::AppType;
 use crate::codex_config;
-use crate::config::{self, get_claude_settings_path};
+use crate::config::{self, get_claude_settings_path, ConfigStatus};
 use crate::settings;
+use crate::store::AppState;
+
+#[tauri::command]
+pub async fn get_claude_config_status() -> Result<ConfigStatus, String> {
+    Ok(config::get_claude_config_status())
+}
+
+use std::str::FromStr;
 
 fn invalid_json_format_error(error: serde_json::Error) -> String {
     let lang = settings::get_settings()
@@ -55,13 +63,44 @@ fn validate_common_config_snippet(app_type: &str, snippet: &str) -> Result<(), S
 }
 
 #[tauri::command]
+pub async fn get_config_status(
+    _state: State<'_, AppState>,
+    app: String,
+) -> Result<ConfigStatus, String> {
+    match AppType::from_str(&app).map_err(|e| e.to_string())? {
+        AppType::Claude => Ok(config::get_claude_config_status()),
+        AppType::Codex => {
+            let auth_path = codex_config::get_codex_auth_path();
+            let config_text = codex_config::read_codex_config_text().unwrap_or_default();
+            let exists = auth_path.exists() || !config_text.trim().is_empty();
+            let path = codex_config::get_codex_config_dir()
+                .to_string_lossy()
+                .to_string();
+
+            Ok(ConfigStatus { exists, path })
+        }
+        AppType::Pi => {
+            let config_path = crate::pi_config::get_pi_models_path().map_err(|e| e.to_string())?;
+            let path = crate::pi_config::get_pi_agent_dir()
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .to_string();
+            Ok(ConfigStatus {
+                exists: config_path.exists(),
+                path,
+            })
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn get_claude_code_config_path() -> Result<String, String> {
     Ok(get_claude_settings_path().to_string_lossy().to_string())
 }
 
 #[tauri::command]
 pub async fn get_config_dir(app: String) -> Result<String, String> {
-    let dir = match super::parse_app(&app)? {
+    let dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => config::get_claude_config_dir(),
         AppType::Codex => codex_config::get_codex_config_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
@@ -72,7 +111,7 @@ pub async fn get_config_dir(app: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn open_config_folder(handle: AppHandle, app: String) -> Result<bool, String> {
-    let config_dir = match super::parse_app(&app)? {
+    let config_dir = match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => config::get_claude_config_dir(),
         AppType::Codex => codex_config::get_codex_config_dir(),
         AppType::Pi => crate::pi_config::get_pi_agent_dir().map_err(|e| e.to_string())?,
@@ -144,6 +183,40 @@ pub async fn open_app_config_folder(handle: AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn get_claude_common_config_snippet(
+    state: tauri::State<'_, crate::store::AppState>,
+) -> Result<Option<String>, String> {
+    state
+        .db
+        .get_config_snippet("claude")
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_claude_common_config_snippet(
+    snippet: String,
+    state: tauri::State<'_, crate::store::AppState>,
+) -> Result<(), String> {
+    let is_cleared = snippet.trim().is_empty();
+
+    if !snippet.trim().is_empty() {
+        serde_json::from_str::<serde_json::Value>(&snippet).map_err(invalid_json_format_error)?;
+    }
+
+    let value = if is_cleared { None } else { Some(snippet) };
+
+    state
+        .db
+        .set_config_snippet("claude", value)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_config_snippet_cleared("claude", is_cleared)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn get_common_config_snippet(
     app_type: String,
     state: tauri::State<'_, crate::store::AppState>,
@@ -154,23 +227,6 @@ pub async fn get_common_config_snippet(
         .map_err(|e| e.to_string())
 }
 
-/// 对前端编辑器里的 config.toml 文本做通用配置片段的合并/剥离。
-/// 放后端是为了走 toml_edit（保注释、保键序）；前端 smol-toml 的
-/// 整文档重序列化会破坏用户手写格式。
-#[tauri::command]
-pub async fn update_toml_common_config_snippet(
-    config_toml: String,
-    snippet_toml: String,
-    enabled: bool,
-) -> Result<String, String> {
-    crate::services::provider::update_toml_common_config_snippet(
-        &config_toml,
-        &snippet_toml,
-        enabled,
-    )
-    .map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 pub async fn set_common_config_snippet(
     app_type: String,
@@ -178,30 +234,13 @@ pub async fn set_common_config_snippet(
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<(), String> {
     let is_cleared = snippet.trim().is_empty();
-    let old_snippet = state
-        .db
-        .get_config_snippet(&app_type)
-        .map_err(|e| e.to_string())?;
 
     validate_common_config_snippet(&app_type, &snippet)?;
 
     let value = if is_cleared { None } else { Some(snippet) };
 
-    if matches!(app_type.as_str(), "claude" | "codex") {
-        if let Some(legacy_snippet) = old_snippet
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            let app = super::parse_app(&app_type)?;
-            crate::services::provider::ProviderService::migrate_legacy_common_config_usage(
-                state.inner(),
-                app,
-                legacy_snippet,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-    }
-
+    // Claude Code、Codex、Gemini CLI 的片段已冻结：只存库，留给旧版、Lite、CLI 读；新版
+    // 既不按它迁移存量行，也不再用它重写 live（共享设置直接在供应商编辑器底部改）。
     state
         .db
         .set_config_snippet(&app_type, value)
@@ -210,15 +249,6 @@ pub async fn set_common_config_snippet(
         .db
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
-
-    if matches!(app_type.as_str(), "claude" | "codex") {
-        let app = super::parse_app(&app_type)?;
-        crate::services::provider::ProviderService::sync_current_provider_for_app(
-            state.inner(),
-            app,
-        )
-        .map_err(|e| e.to_string())?;
-    }
 
     Ok(())
 }
@@ -250,7 +280,7 @@ pub async fn extract_common_config_snippet(
     settingsConfig: Option<String>,
     state: tauri::State<'_, crate::store::AppState>,
 ) -> Result<String, String> {
-    let app = super::parse_app(&appType)?;
+    let app = AppType::from_str(&appType).map_err(|e| e.to_string())?;
 
     if let Some(settings_config) = settingsConfig.filter(|s| !s.trim().is_empty()) {
         let settings: serde_json::Value =

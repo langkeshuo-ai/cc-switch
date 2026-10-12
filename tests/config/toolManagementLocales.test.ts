@@ -16,6 +16,8 @@ const requiredKeys = [
   "toolActionDone",
   "toolActionPartial",
   "toolActionFailed",
+  "toolActionInProgress",
+  "toolActionInProgressDetail",
   "toolNotRunnable",
   "toolActionVersionUnchangedTitle",
   "toolActionVersionUnchanged",
@@ -37,9 +39,6 @@ const requiredKeys = [
   "toolUpgradeUnanchoredHint",
   "toolUpgradeUnmanagedTitle",
   "toolUpgradeUnmanagedDetail",
-  "toolUpgradeUnmanagedExampleWin",
-  "toolUpgradeUnmanagedExampleMac",
-  "toolUpgradeUnmanagedExampleLinux",
 ] as const;
 
 type SettingsTranslations = Record<string, unknown>;

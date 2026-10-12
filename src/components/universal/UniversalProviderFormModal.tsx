@@ -185,6 +185,7 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
+            pi: false,
           },
           models,
         }
@@ -201,6 +202,7 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
+        pi: false,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -241,6 +243,7 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
+            pi: false,
           },
           models,
         }
@@ -257,6 +260,7 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
+        pi: false,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -323,6 +327,7 @@ requires_openai_auth = true`;
   return (
     <FullScreenPanel
       isOpen={isOpen}
+      trackUnsavedChanges
       title={
         isEditMode
           ? t("universalProvider.edit", { defaultValue: "编辑统一供应商" })
@@ -348,8 +353,8 @@ requires_openai_auth = true`;
                   onClick={() => handlePresetSelect(preset)}
                   className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
                     selectedPreset?.providerType === preset.providerType
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-accent text-muted-foreground hover:bg-accent/80"
+                      ? "bg-surface text-fg-1 shadow-v7-sm ring-1 ring-border-strong"
+                      : "bg-subtle text-fg-2 hover:bg-subtle"
                   }`}
                 >
                   <ProviderIcon
@@ -362,9 +367,7 @@ requires_openai_auth = true`;
               ))}
             </div>
             {selectedPreset?.description && (
-              <p className="text-xs text-muted-foreground">
-                {selectedPreset.description}
-              </p>
+              <p className="text-xs text-fg-2">{selectedPreset.description}</p>
             )}
           </div>
         )}
@@ -587,7 +590,7 @@ requires_openai_auth = true`;
                 defaultValue: "配置 JSON 预览",
               })}
             </Label>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-fg-2">
               {t("universalProvider.configJsonPreviewHint", {
                 defaultValue:
                   "以下是将要同步到各应用的配置内容（仅覆盖显示的字段，保留其他自定义配置）",

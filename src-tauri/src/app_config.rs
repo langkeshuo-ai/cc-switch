@@ -781,6 +781,7 @@ impl MultiAppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
     use std::fs;
     use tempfile::TempDir;
@@ -827,76 +828,6 @@ mod tests {
             serde_json::from_str::<AppType>("\"pi\"").unwrap(),
             AppType::Pi
         );
-        // Vec 场景同样不报错
-        let apps = serde_json::from_str::<Vec<AppType>>(
-            "[\"claude\", \"gemini\", \"codex\", \"opencode\", \"pi\"]",
-        )
-        .unwrap();
-        assert_eq!(apps.len(), 5);
-        assert!(apps.contains(&AppType::Codex));
-        assert!(apps.contains(&AppType::Pi));
-    }
-
-    #[test]
-    fn mcp_apps_deserialize_ignores_removed_app_keys() {
-        // 旧 McpApps JSON 含被裁应用字段：多余 key 被 serde 忽略，剩余字段保留
-        let apps: McpApps = serde_json::from_str(
-            r#"{"claude": true, "codex": false, "gemini": true, "mcode": true, "opencode": true}"#,
-        )
-        .unwrap();
-        assert!(apps.claude);
-        assert!(!apps.codex);
-        assert!(apps.is_enabled_for(&AppType::Claude));
-        assert!(!apps.is_enabled_for(&AppType::Codex));
-    }
-
-    #[test]
-    fn skill_apps_deserialize_ignores_removed_app_keys() {
-        let apps: SkillApps = serde_json::from_str(
-            r#"{"claude": true, "codex": true, "pi": true, "gemini": false, "hermes": true}"#,
-        )
-        .unwrap();
-        assert!(apps.is_enabled_for(&AppType::Claude));
-        assert!(apps.is_enabled_for(&AppType::Codex));
-        assert!(apps.is_enabled_for(&AppType::Pi));
-    }
-
-    #[test]
-    fn mcp_root_deserialize_ignores_removed_app_sections() {
-        let root: McpRoot = serde_json::from_str(
-            r#"{
-                "servers": {},
-                "claude": {"servers": {"a": {"enabled": true}}},
-                "gemini": {"servers": {"g": {}}},
-                "openclaw": {"servers": {"o": {}}}
-            }"#,
-        )
-        .unwrap();
-        assert!(root.servers.is_some());
-        assert_eq!(root.claude.servers.len(), 1);
-        assert_eq!(root.codex.servers.len(), 0);
-    }
-
-    #[test]
-    fn multi_app_config_deserialize_tolerates_legacy_apps_map() {
-        // 旧 config.json 的 apps map 含被裁应用的 key：反序列化必须成功，
-        // claude/codex 数据完好（多余 key 由 HashMap<String, _> 承接，不参与逻辑）
-        let json = r#"{
-            "version": 2,
-            "claude": {"providers": {}, "current": "p1"},
-            "codex": {"providers": {}, "current": "p2"},
-            "gemini": {"providers": {}, "current": "p3"},
-            "mcode": {"providers": {}, "current": "p4"},
-            "mcp": {"servers": {}},
-            "prompts": {"claude": {"prompts": {}}, "codex": {"prompts": {}}, "gemini": {"prompts": {}}}
-        }"#;
-        let config: MultiAppConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.version, 2);
-        assert!(config.apps.contains_key("claude"));
-        assert!(config.apps.contains_key("codex"));
-        assert!(config.get_manager(&AppType::Claude).is_some());
-        assert!(config.get_manager(&AppType::Codex).is_some());
-        assert!(config.get_manager(&AppType::Pi).is_none());
     }
 
     struct TempHome {
@@ -955,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial(global_env)]
     fn auto_imports_existing_prompt_when_config_missing() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "# hello");
@@ -981,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial(global_env)]
     fn skips_empty_prompt_files_during_import() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "   \n  ");
@@ -994,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial(global_env)]
     fn auto_import_happens_only_once() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "first version");
@@ -1031,7 +962,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(global_env)]
+    #[serial(global_env)]
     fn auto_imports_all_apps_prompts() {
         let _home = TempHome::new();
         write_prompt_file(AppType::Claude, "# Claude prompt");

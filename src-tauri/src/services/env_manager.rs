@@ -43,7 +43,7 @@ pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<BackupInfo, String
 /// Create backup file before deletion
 fn create_backup(conflicts: &[EnvConflict]) -> Result<BackupInfo, String> {
     // Get backup directory
-    let backup_dir = get_backup_dir()?;
+    let backup_dir = backup_dir()?;
     fs::create_dir_all(&backup_dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
 
     // Generate backup file name with timestamp
@@ -67,7 +67,7 @@ fn create_backup(conflicts: &[EnvConflict]) -> Result<BackupInfo, String> {
 }
 
 /// Get backup directory path
-fn get_backup_dir() -> Result<PathBuf, String> {
+pub(crate) fn backup_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("无法获取用户主目录")?;
     Ok(home.join(".cc-switch").join("backups"))
 }
@@ -79,7 +79,7 @@ fn get_backup_dir() -> Result<PathBuf, String> {
 /// 读取任意 JSON 并按其中 `source_path` 向任意可写文件追加 `export X=Y`——
 /// 下次开 shell 即执行。canonicalize + `path_is_within` 双重校验阻断该路径。
 fn validate_backup_path(raw: &str) -> Result<PathBuf, String> {
-    let backup_dir = get_backup_dir()?;
+    let backup_dir = backup_dir()?;
     // canonicalize 要求路径存在；backup_dir 本身可能尚未创建，先 ensure。
     fs::create_dir_all(&backup_dir).map_err(|e| format!("创建备份目录失败: {e}"))?;
     let canonical_dir = backup_dir
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_backup_dir_creation() {
-        let backup_dir = get_backup_dir();
+        let backup_dir = backup_dir();
         assert!(backup_dir.is_ok());
     }
 

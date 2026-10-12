@@ -21,12 +21,12 @@ pub(crate) mod json_canonical;
 pub mod log_codes;
 pub mod media_sanitizer;
 pub mod model_mapper;
+pub mod opaque_state_rectifier;
 pub mod provider_router;
 pub mod providers;
 pub mod response_processor;
 pub(crate) mod server;
 pub mod session;
-pub mod session_affinity;
 pub(crate) mod sse;
 pub(crate) mod switch_lock;
 #[cfg(test)]

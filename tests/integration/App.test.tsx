@@ -1,6 +1,12 @@
 import { Suspense, type ComponentType } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  within,
+} from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import {
@@ -13,8 +19,7 @@ import { server } from "../msw/server";
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
 const skillsPanelMocks = vi.hoisted(() => ({
-  checkUpdates: vi.fn(),
-  openDiscovery: vi.fn(),
+  initialViews: [] as string[],
 }));
 
 vi.mock("sonner", () => ({
@@ -85,27 +90,35 @@ vi.mock("@/components/providers/AddProviderDialog", () => ({
     ) : null,
 }));
 
-vi.mock("@/components/providers/EditProviderDialog", () => ({
-  EditProviderDialog: ({ open, provider, onSubmit, onOpenChange }: any) =>
-    open ? (
-      <div data-testid="edit-provider-dialog">
-        <button
-          onClick={() =>
-            onSubmit({
-              provider: {
-                ...provider,
-                name: `${provider.name}-edited`,
-              },
-              originalId: provider.id,
-            })
-          }
-        >
-          confirm-edit
-        </button>
-        <button onClick={() => onOpenChange(false)}>close-edit</button>
-      </div>
-    ) : null,
-}));
+vi.mock("@/components/providers/EditProviderDialog", async () => {
+  const { useUnsavedChangesTracker } = await vi.importActual<
+    typeof import("@/lib/unsavedChanges")
+  >("@/lib/unsavedChanges");
+  // 和真的编辑页一样登记改动（真的由 FullScreenPanel 的 trackUnsavedChanges 负责）
+  const Body = ({ provider, onSubmit, onOpenChange }: any) => (
+    <div data-testid="edit-provider-dialog" {...useUnsavedChangesTracker()}>
+      <input aria-label="edit-field" />
+      <button
+        onClick={() =>
+          onSubmit({
+            provider: {
+              ...provider,
+              name: `${provider.name}-edited`,
+            },
+            originalId: provider.id,
+          })
+        }
+      >
+        confirm-edit
+      </button>
+      <button onClick={() => onOpenChange(false)}>close-edit</button>
+    </div>
+  );
+  return {
+    EditProviderDialog: (props: any) =>
+      props.open ? <Body {...props} /> : null,
+  };
+});
 
 vi.mock("@/components/UsageScriptModal", () => ({
   default: ({ isOpen, provider, onSave, onClose }: any) =>
@@ -129,47 +142,21 @@ vi.mock("@/components/ConfirmDialog", () => ({
     ) : null,
 }));
 
-vi.mock("@/components/AppSwitcher", () => ({
-  AppSwitcher: ({ activeApp, onSwitch }: any) => (
-    <div data-testid="app-switcher">
-      <span>{activeApp}</span>
-      <button onClick={() => onSwitch("claude")}>switch-claude</button>
-      <button onClick={() => onSwitch("codex")}>switch-codex</button>
-      <button onClick={() => onSwitch("openclaw")}>switch-openclaw</button>
-    </div>
-  ),
+vi.mock("@/contexts/UpdateContext", () => ({
+  useUpdate: () => ({ hasUpdate: false, updateInfo: null }),
 }));
 
-vi.mock("@/components/skills/UnifiedSkillsPanel", async () => {
-  const React = await import("react");
-  const MockUnifiedSkillsPanel = React.forwardRef(
-    ({ onCheckUpdatesStateChange }: any, ref) => {
-      React.useEffect(() => {
-        onCheckUpdatesStateChange?.({ isChecking: false, hasSkills: true });
-        return () =>
-          onCheckUpdatesStateChange?.({
-            isChecking: false,
-            hasSkills: false,
-          });
-      }, [onCheckUpdatesStateChange]);
-      React.useImperativeHandle(ref, () => ({
-        openDiscovery: skillsPanelMocks.openDiscovery,
-        openImport: vi.fn(),
-        openInstallFromZip: vi.fn(),
-        openRestoreFromBackup: vi.fn(),
-        checkUpdates: skillsPanelMocks.checkUpdates,
-      }));
-      return <div data-testid="unified-skills-panel" />;
-    },
-  );
-  MockUnifiedSkillsPanel.displayName = "MockUnifiedSkillsPanel";
-  return { default: MockUnifiedSkillsPanel };
-});
+// 设置页要 ThemeProvider，这里只看导航进去时发生了什么
+vi.mock("@/components/settings/SettingsPage", () => ({
+  SettingsPage: () => <div data-testid="settings-page" />,
+}));
 
-vi.mock("@/components/UpdateBadge", () => ({
-  UpdateBadge: ({ onClick }: any) => (
-    <button onClick={onClick}>update-badge</button>
-  ),
+vi.mock("@/components/skills/UnifiedSkillsPanel", () => ({
+  // v7：Skills 的页头（添加 / 检查更新 / 存储与同步）在面板自己里面
+  default: ({ initialView }: { initialView?: string }) => {
+    skillsPanelMocks.initialViews.push(initialView ?? "installed");
+    return <div data-testid="unified-skills-panel">{initialView}</div>;
+  },
 }));
 
 vi.mock("@/components/mcp/McpPanel", () => ({
@@ -182,6 +169,14 @@ vi.mock("@/components/mcp/McpPanel", () => ({
       <button onClick={() => onOpenChange(true)}>open-mcp</button>
     ),
 }));
+
+/** 侧栏里的应用行（v7 侧栏取代了原来页头的应用切换器） */
+const sidebarApp = (name: string) =>
+  // 首次启动提示是模态对话框，会把侧栏标成 aria-hidden，所以带上 hidden
+  within(document.querySelector("nav") as HTMLElement).getByRole("button", {
+    name,
+    hidden: true,
+  });
 
 const renderApp = (AppComponent: ComponentType) => {
   const client = new QueryClient();
@@ -199,8 +194,7 @@ describe("App integration with MSW", () => {
     resetProviderState();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
-    skillsPanelMocks.checkUpdates.mockReset();
-    skillsPanelMocks.openDiscovery.mockReset();
+    skillsPanelMocks.initialViews = [];
     localStorage.removeItem("cc-switch-last-view");
     localStorage.removeItem("cc-switch-last-app");
   });
@@ -215,7 +209,7 @@ describe("App integration with MSW", () => {
       ),
     );
 
-    fireEvent.click(screen.getByText("switch-codex"));
+    fireEvent.click(sidebarApp("Codex"));
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
         "codex-1",
@@ -260,7 +254,7 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
-  }, 30_000);
+  }, 10_000);
 
   it("resets provider view scroll when switching apps", async () => {
     const { default: App } = await import("@/App");
@@ -273,22 +267,19 @@ describe("App integration with MSW", () => {
     );
 
     const mainScrollContainer = container.querySelector("main") as HTMLElement;
-    const providerScrollContainer = Array.from(
-      container.querySelectorAll<HTMLElement>(".overflow-y-auto"),
-    ).find(
-      (element) =>
-        element !== mainScrollContainer && element.className.includes("pb-12"),
-    );
+    // 列表的滚动区在模式行下面（切换式应用每个应用一份）
+    const providerScrollContainer = () =>
+      container.querySelector<HTMLElement>("#main-content");
 
     expect(mainScrollContainer).not.toBeNull();
-    expect(providerScrollContainer).toBeDefined();
+    expect(providerScrollContainer()).not.toBeNull();
 
     mainScrollContainer.scrollTop = 320;
     mainScrollContainer.scrollLeft = 12;
-    providerScrollContainer!.scrollTop = 640;
-    providerScrollContainer!.scrollLeft = 24;
+    providerScrollContainer()!.scrollTop = 640;
+    providerScrollContainer()!.scrollLeft = 24;
 
-    fireEvent.click(screen.getByText("switch-codex"));
+    fireEvent.click(sidebarApp("Codex"));
 
     await waitFor(() =>
       expect(screen.getByTestId("provider-list").textContent).toContain(
@@ -298,9 +289,100 @@ describe("App integration with MSW", () => {
 
     expect(mainScrollContainer.scrollTop).toBe(0);
     expect(mainScrollContainer.scrollLeft).toBe(0);
-    expect(providerScrollContainer!.scrollTop).toBe(0);
-    expect(providerScrollContainer!.scrollLeft).toBe(0);
-  }, 30_000);
+    expect(providerScrollContainer()!.scrollTop).toBe(0);
+    expect(providerScrollContainer()!.scrollLeft).toBe(0);
+  }, 10_000);
+
+  it("closes provider panels when navigating away from the app page", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+
+    // 面板只盖住内容区，侧栏还能点：切应用时编辑面板必须关掉，否则 Claude 的
+    // 供应商会以 appId=codex 保存进 Codex
+    fireEvent.click(screen.getByText("edit"));
+    expect(screen.getByTestId("edit-provider-dialog")).toBeInTheDocument();
+    fireEvent.click(sidebarApp("Codex"));
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "codex-1",
+      ),
+    );
+    expect(
+      screen.queryByTestId("edit-provider-dialog"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("usage"));
+    expect(screen.getByTestId("usage-modal")).toBeInTheDocument();
+    fireEvent.click(sidebarApp("nav.usage"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("usage-modal")).not.toBeInTheDocument(),
+    );
+
+    fireEvent.click(sidebarApp("Codex"));
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "codex-1",
+      ),
+    );
+    fireEvent.click(screen.getByText("create"));
+    expect(screen.getByTestId("add-provider-dialog")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("add-provider-dialog")).not.toBeInTheDocument();
+  }, 10_000);
+
+  it("asks before leaving an editor page with unsaved changes", async () => {
+    const { default: App } = await import("@/App");
+    renderApp(App);
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "claude-1",
+      ),
+    );
+
+    // 没改过：照常离开，不问
+    fireEvent.click(screen.getByText("edit"));
+    fireEvent.click(sidebarApp("Codex"));
+    await waitFor(() =>
+      expect(screen.getByTestId("provider-list").textContent).toContain(
+        "codex-1",
+      ),
+    );
+    expect(screen.queryByTestId("confirm-dialog")).not.toBeInTheDocument();
+
+    // 改过：先问；继续编辑就留在原页
+    // （ConfirmDialog 在这个文件里是 mock：只渲染消息和 confirm-delete / cancel-delete）
+    fireEvent.click(screen.getByText("edit"));
+    fireEvent.input(screen.getByLabelText("edit-field"), {
+      target: { value: "draft" },
+    });
+    fireEvent.click(sidebarApp("Claude Code"));
+    expect(await screen.findByTestId("confirm-message")).toHaveTextContent(
+      "common.unsavedLeaveMessage",
+    );
+    fireEvent.click(screen.getByText("cancel-delete"));
+    expect(screen.getByTestId("edit-provider-dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("provider-list").textContent).toContain(
+      "codex-1",
+    );
+
+    // ⌘, 也问；放弃后才离开
+    fireEvent.keyDown(window, { key: ",", metaKey: true });
+    expect(await screen.findByTestId("confirm-message")).toHaveTextContent(
+      "common.unsavedLeaveMessage",
+    );
+    fireEvent.click(screen.getByText("confirm-delete"));
+    expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("edit-provider-dialog"),
+    ).not.toBeInTheDocument();
+  }, 10_000);
 
   it("shows toast when auto sync fails in background", async () => {
     const { default: App } = await import("@/App");
@@ -343,6 +425,13 @@ describe("App integration with MSW", () => {
       expect(toastErrorMock).toHaveBeenCalled();
     });
   });
+
+
+
+
+
+
+
 
   it("warns without blocking when removing Pi's global default provider", async () => {
     localStorage.setItem("cc-switch-last-app", "pi");
@@ -389,40 +478,24 @@ describe("App integration with MSW", () => {
     );
   });
 
-  it("hosts the Skills check-update action in the App toolbar", async () => {
+
+  it("renders the Skills page with its own header", async () => {
     localStorage.setItem("cc-switch-last-view", "skills");
     const { default: App } = await import("@/App");
     renderApp(App);
 
-    // App 可能为多个视图同时挂载面板实例，用 All 变体断言"至少一个"，
-    // 避免 singular 查询在多实例时抛 "Found multiple elements"。
-    expect(
-      (await screen.findAllByTestId("unified-skills-panel")).length,
-    ).toBeGreaterThan(0);
-    const checkUpdatesButton = await screen.findByRole("button", {
-      name: "skills.checkUpdates",
-    });
-    await waitFor(() => expect(checkUpdatesButton).toBeEnabled());
-
-    fireEvent.click(checkUpdatesButton);
-    expect(skillsPanelMocks.checkUpdates).toHaveBeenCalledTimes(1);
+    expect(await screen.findByTestId("unified-skills-panel")).toHaveTextContent(
+      "installed",
+    );
   });
 
-  it("routes the Skills discover toolbar action through the panel guard", async () => {
-    localStorage.setItem("cc-switch-last-view", "skills");
+  it("opens the old skillsDiscovery view as the Discover segment", async () => {
+    localStorage.setItem("cc-switch-last-view", "skillsDiscovery");
     const { default: App } = await import("@/App");
     renderApp(App);
 
-    expect(
-      (await screen.findAllByTestId("unified-skills-panel")).length,
-    ).toBeGreaterThan(0);
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "skills.discover",
-      }),
+    expect(await screen.findByTestId("unified-skills-panel")).toHaveTextContent(
+      "discover",
     );
-
-    expect(skillsPanelMocks.openDiscovery).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByTestId("unified-skills-panel").length).toBeGreaterThan(0);
   });
 });

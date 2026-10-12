@@ -5,11 +5,13 @@ use crate::app_config::AppType;
 use crate::commands::copilot::CopilotAuthState;
 use crate::commands::xai_oauth::XaiOAuthState;
 use crate::error::AppError;
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderMeta};
+use crate::services::provider::{EditorSave, EditorView};
 use crate::services::{
     EndpointLatency, ProviderService, ProviderSortUpdate, SpeedtestService, SwitchResult,
 };
 use crate::store::AppState;
+use std::str::FromStr;
 
 // 常量定义
 const TEMPLATE_TYPE_GITHUB_COPILOT: &str = "github_copilot";
@@ -24,13 +26,13 @@ pub fn get_providers(
     state: State<'_, AppState>,
     app: String,
 ) -> Result<IndexMap<String, Provider>, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::list(state.inner(), app_type).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn get_current_provider(state: State<'_, AppState>, app: String) -> Result<String, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::current(state.inner(), app_type).map_err(|e| e.to_string())
 }
 
@@ -40,14 +42,15 @@ pub async fn add_provider(
     app: String,
     provider: Provider,
     #[allow(non_snake_case)] addToLive: Option<bool>,
+    #[allow(non_snake_case)] editorSave: Option<EditorSave>,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     let add_to_live = addToLive.unwrap_or(true);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::add(state.inner(), app_type, provider, add_to_live)
+        ProviderService::add_from_editor(state.inner(), app_type, provider, add_to_live, editorSave)
             .map_err(|e| e.to_string())
     })
     .await
@@ -60,17 +63,62 @@ pub async fn update_provider(
     app: String,
     provider: Provider,
     #[allow(non_snake_case)] originalId: Option<String>,
+    #[allow(non_snake_case)] editorSave: Option<EditorSave>,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::update(state.inner(), app_type, originalId.as_deref(), provider)
-            .map_err(|e| e.to_string())
+        ProviderService::update_from_editor(
+            state.inner(),
+            app_type,
+            originalId.as_deref(),
+            provider,
+            editorSave,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?
+}
+
+/// 供应商编辑器底部 JSON 的显示内容：切到这个供应商之后配置文件会是什么样。
+/// `settingsConfig` 是供应商的行（新增时传空对象）。
+/// Codex draft metadata wins over the stored provider's metadata when supplied.
+#[tauri::command]
+pub async fn get_provider_editor_view(
+    app_handle: tauri::AppHandle,
+    app: String,
+    #[allow(non_snake_case)] settingsConfig: serde_json::Value,
+    category: Option<String>,
+    #[allow(non_snake_case)] providerId: Option<String>,
+    meta: Option<ProviderMeta>,
+) -> Result<EditorView, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        let category = ProviderService::editor_category(
+            state.inner(),
+            &app_type,
+            providerId.as_deref(),
+            category,
+        )
+        .map_err(|e| e.to_string())?;
+        ProviderService::editor_view_with_meta(
+            state.inner(),
+            app_type,
+            &settingsConfig,
+            category.as_deref(),
+            providerId.as_deref(),
+            meta.as_ref(),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("读取编辑器内容失败: {e}"))?
 }
 
 #[tauri::command]
@@ -79,7 +127,7 @@ pub fn delete_provider(
     app: String,
     id: String,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::delete(state.inner(), app_type, &id)
         .map(|_| true)
         .map_err(|e| e.to_string())
@@ -91,7 +139,7 @@ pub fn remove_provider_from_live_config(
     app: String,
     id: String,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::remove_from_live_config(state.inner(), app_type, &id)
         .map(|_| true)
         .map_err(|e| e.to_string())
@@ -105,9 +153,7 @@ fn switch_provider_internal(
     ProviderService::switch(state, app_type, id)
 }
 
-/// 仅供集成测试调用：`internal` 版本不做 Tauri 参数反序列化，故测试无法直接触达。
-/// 门控用真`#[cfg]`（`cfg_attr(doc)` 只影响 rustdoc，**不阻止编译进生产二进制**）。
-#[cfg(feature = "test-hooks")]
+#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
 pub fn switch_provider_test_hook(
     state: &AppState,
     app_type: AppType,
@@ -122,15 +168,17 @@ pub async fn switch_provider(
     app: String,
     id: String,
 ) -> Result<SwitchResult, String> {
-    let app_type = super::parse_app(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app_handle
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let handle = app_handle.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
         switch_provider_internal(state.inner(), app_type, &id).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("供应商切换任务执行失败: {e}"))?
+    .map_err(|e| format!("供应商切换任务执行失败: {e}"))??;
+    Ok(result)
 }
 
 fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result<bool, AppError> {
@@ -161,9 +209,7 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
     Ok(imported)
 }
 
-/// 仅供集成测试调用：`internal` 版本不做 Tauri 参数反序列化，故测试无法直接触达。
-/// 门控用真`#[cfg]`（`cfg_attr(doc)` 只影响 rustdoc，**不阻止编译进生产二进制**）。
-#[cfg(feature = "test-hooks")]
+#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
 pub fn import_default_config_test_hook(
     state: &AppState,
     app_type: AppType,
@@ -173,7 +219,7 @@ pub fn import_default_config_test_hook(
 
 #[tauri::command]
 pub fn import_default_config(state: State<'_, AppState>, app: String) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     import_default_config_internal(&state, app_type).map_err(Into::into)
 }
 
@@ -195,7 +241,7 @@ pub async fn queryProviderUsage(
     #[allow(non_snake_case)] providerId: String, // 使用 camelCase 匹配前端
     app: String,
 ) -> Result<crate::provider::UsageResult, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     // inner 可能以两种形式失败：
     //   1) 返回 Ok(UsageResult { success: false, .. }) —— 确定性失败（401、脚本
     //      报错、未知供应商等）。写进 UsageCache 并刷新托盘，让
@@ -511,7 +557,7 @@ pub async fn testUsageScript(
     #[allow(non_snake_case)] userId: Option<String>,
     #[allow(non_snake_case)] templateType: Option<String>,
 ) -> Result<crate::provider::UsageResult, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::test_usage_script(
         state.inner(),
         app_type,
@@ -530,7 +576,7 @@ pub async fn testUsageScript(
 
 #[tauri::command]
 pub fn read_live_provider_settings(app: String) -> Result<serde_json::Value, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::read_live_settings(app_type).map_err(|e| e.to_string())
 }
 
@@ -550,7 +596,7 @@ pub fn get_custom_endpoints(
     app: String,
     #[allow(non_snake_case)] providerId: String,
 ) -> Result<Vec<crate::settings::CustomEndpoint>, String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::get_custom_endpoints(state.inner(), app_type, &providerId)
         .map_err(|e| e.to_string())
 }
@@ -562,7 +608,7 @@ pub fn add_custom_endpoint(
     #[allow(non_snake_case)] providerId: String,
     url: String,
 ) -> Result<(), String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::add_custom_endpoint(state.inner(), app_type, &providerId, url)
         .map_err(|e| e.to_string())
 }
@@ -574,7 +620,7 @@ pub fn remove_custom_endpoint(
     #[allow(non_snake_case)] providerId: String,
     url: String,
 ) -> Result<(), String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::remove_custom_endpoint(state.inner(), app_type, &providerId, url)
         .map_err(|e| e.to_string())
 }
@@ -586,19 +632,24 @@ pub fn update_endpoint_last_used(
     #[allow(non_snake_case)] providerId: String,
     url: String,
 ) -> Result<(), String> {
-    let app_type = super::parse_app(&app)?;
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::update_endpoint_last_used(state.inner(), app_type, &providerId, url)
         .map_err(|e| e.to_string())
 }
 
+/// 排序就是故障转移队列的优先级，托盘按它列队列：改完重建托盘。
 #[tauri::command]
 pub fn update_providers_sort_order(
+    app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     app: String,
     updates: Vec<ProviderSortUpdate>,
 ) -> Result<bool, String> {
-    let app_type = super::parse_app(&app)?;
-    ProviderService::update_sort_order(state.inner(), app_type, updates).map_err(|e| e.to_string())
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    let changed = ProviderService::update_sort_order(state.inner(), app_type, updates)
+        .map_err(|e| e.to_string())?;
+    crate::tray::refresh_tray_menu(&app_handle);
+    Ok(changed)
 }
 
 use crate::provider::UniversalProvider;

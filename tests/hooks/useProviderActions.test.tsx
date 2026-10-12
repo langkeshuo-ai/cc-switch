@@ -58,6 +58,9 @@ const providersApiUpdateTrayMenuMock = vi.fn();
 const piApiUpdateProviderUsageScriptMock = vi.fn();
 const settingsApiGetMock = vi.fn();
 const settingsApiApplyMock = vi.fn();
+const openclawApiGetModelCatalogMock = vi.fn();
+const openclawApiGetDefaultModelMock = vi.fn();
+const openclawApiSetDefaultModelMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   piApi: {
@@ -73,6 +76,14 @@ vi.mock("@/lib/api", () => ({
     get: (...args: unknown[]) => settingsApiGetMock(...args),
     applyClaudePluginConfig: (...args: unknown[]) =>
       settingsApiApplyMock(...args),
+  },
+  openclawApi: {
+    getModelCatalog: (...args: unknown[]) =>
+      openclawApiGetModelCatalogMock(...args),
+    getDefaultModel: (...args: unknown[]) =>
+      openclawApiGetDefaultModelMock(...args),
+    setDefaultModel: (...args: unknown[]) =>
+      openclawApiSetDefaultModelMock(...args),
   },
 }));
 
@@ -110,6 +121,9 @@ beforeEach(() => {
   piApiUpdateProviderUsageScriptMock.mockReset();
   settingsApiGetMock.mockReset();
   settingsApiApplyMock.mockReset();
+  openclawApiGetModelCatalogMock.mockReset();
+  openclawApiGetDefaultModelMock.mockReset();
+  openclawApiSetDefaultModelMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
   toastInfoMock.mockReset();
@@ -190,6 +204,7 @@ describe("useProviderActions", () => {
     );
   });
 
+
   it("warns but still switches providers that require proxy when proxy is not running", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
@@ -200,7 +215,7 @@ describe("useProviderActions", () => {
       },
     });
 
-    const { result } = renderHook(() => useProviderActions("claude", false), {
+    const { result } = renderHook(() => useProviderActions("claude"), {
       wrapper,
     });
 
@@ -222,7 +237,7 @@ describe("useProviderActions", () => {
       },
     });
 
-    const { result } = renderHook(() => useProviderActions("codex", false), {
+    const { result } = renderHook(() => useProviderActions("codex"), {
       wrapper,
     });
 
@@ -242,7 +257,7 @@ describe("useProviderActions", () => {
       meta: { apiFormat: "anthropic" },
     });
 
-    const { result } = renderHook(() => useProviderActions("codex", false), {
+    const { result } = renderHook(() => useProviderActions("codex"), {
       wrapper,
     });
 
@@ -256,6 +271,7 @@ describe("useProviderActions", () => {
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
+
   it("warns for managed OAuth until the current Code app is taken over", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
@@ -267,10 +283,9 @@ describe("useProviderActions", () => {
       },
     });
 
-    const { result } = renderHook(
-      () => useProviderActions("codex", true, false),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useProviderActions("codex", false), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.switchProvider(provider);
@@ -293,10 +308,9 @@ describe("useProviderActions", () => {
       },
     });
 
-    const { result } = renderHook(
-      () => useProviderActions("codex", true, true),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useProviderActions("codex", true), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.switchProvider(provider);
@@ -306,6 +320,7 @@ describe("useProviderActions", () => {
     expect(switchProviderMutateAsync).toHaveBeenCalledWith(provider.id);
   });
 
+
   it("allows the native Codex official provider during takeover", async () => {
     switchProviderMutateAsync.mockResolvedValueOnce(undefined);
     const { wrapper } = createWrapper();
@@ -314,10 +329,9 @@ describe("useProviderActions", () => {
       category: "official",
     });
 
-    const { result } = renderHook(
-      () => useProviderActions("codex", true, true),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useProviderActions("codex", true), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.switchProvider(provider);
@@ -334,10 +348,9 @@ describe("useProviderActions", () => {
       category: "official",
     });
 
-    const { result } = renderHook(
-      () => useProviderActions("claude", true, true),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useProviderActions("claude", true), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.switchProvider(provider);
@@ -363,10 +376,9 @@ describe("useProviderActions", () => {
         },
       },
     });
-    const { result } = renderHook(
-      () => useProviderActions("codex", true, true),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useProviderActions("codex", true), {
+      wrapper,
+    });
 
     await act(async () => {
       await result.current.switchProvider(provider);
@@ -685,6 +697,8 @@ describe("useProviderActions", () => {
 
     expect(result.current.isLoading).toBe(true);
   });
+
+
 });
 it("clears loading flag when all mutations idle", () => {
   addProviderMutation.isPending = false;

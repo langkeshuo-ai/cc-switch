@@ -98,6 +98,27 @@ pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
     Ok(AppState::new(db))
 }
 
+/// 文件库版 AppState，仅供 golden 的 `import_rows` 使用：那批用例要锁「写进 DB 的
+/// 原始字节行」（见 `util::dump_provider_rows` 的只读打开），写入端也必须落在同一个
+/// 文件库上。golden 是单二进制 + `test_mutex` 串行，且没有其他集成二进制再用这个
+/// 固定 home 的文件库，不会复现当年跨进程 `database is locked` 的问题。
+#[allow(dead_code)]
+pub fn create_test_state_file_backed() -> Result<AppState, Box<dyn std::error::Error>> {
+    let db = Arc::new(Database::init()?);
+    Ok(AppState::new(db))
+}
+
+/// 同 [`create_test_state_with_config`]，但落在文件库上：供需要用 SQLite 触发器
+/// 注入写入失败的用例（触发器必须建在 state 实际使用的库上）。
+#[allow(dead_code)]
+pub fn create_test_state_file_backed_with_config(
+    config: &MultiAppConfig,
+) -> Result<AppState, Box<dyn std::error::Error>> {
+    let db = Arc::new(Database::init()?);
+    db.migrate_from_json(config)?;
+    Ok(AppState::new(db))
+}
+
 /// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据。
 /// 与 [`create_test_state`] 同理使用内存库，避免跨测试争用文件锁。
 #[allow(dead_code)]

@@ -4,7 +4,9 @@ export type ProviderCategory =
   | "cloud_provider" // 云服务商（AWS Bedrock 等）
   | "aggregator" // 聚合网站
   | "third_party" // 第三方供应商
-  | "custom"; // 自定义
+  | "custom" // 自定义
+  | "omo" // Oh My OpenCode
+  | "omo-slim"; // Oh My OpenCode Slim
 
 export interface Provider {
   id: string;
@@ -117,6 +119,12 @@ export interface AuthBinding {
   accountId?: string;
 }
 
+export interface ClaudeDesktopModelRoute {
+  model: string;
+  labelOverride?: string;
+  supports1m?: boolean;
+}
+
 export type CodexChatThinkingParam =
   | "none"
   | "thinking"
@@ -171,6 +179,8 @@ export interface ProviderMeta {
   commonConfigEnabled?: boolean;
   // Claude Desktop 3P 配置写入模式
   claudeDesktopMode?: "direct" | "proxy";
+  // Claude Desktop 本地路由模式：Claude-safe route -> upstream model
+  claudeDesktopModelRoutes?: Record<string, ClaudeDesktopModelRoute>;
   // 用量查询脚本配置
   usage_script?: UsageScript;
   // 请求地址管理：测速后自动选择最佳端点
@@ -179,10 +189,6 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（用于后端识别 PackyCode 等）
   partnerPromotionKey?: string;
-  // 供应商成本倍率
-  costMultiplier?: string;
-  // 供应商计费模式来源
-  pricingModelSource?: string;
   // API 格式（Claude / Codex 供应商使用）
   // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
   // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
@@ -193,6 +199,9 @@ export interface ProviderMeta {
     | "openai_chat"
     | "openai_responses"
     | "gemini_native";
+  // Managed Codex Copilot uses this instead of apiFormat. Missing/unknown means auto.
+  // Keep the raw string so selections from newer versions survive an edit/save.
+  codexCopilotApiFormat?: string;
   // 通用认证绑定
   authBinding?: AuthBinding;
   // Claude 认证字段名
@@ -222,10 +231,24 @@ export interface ProviderMeta {
   localProxyRequestOverrides?: LocalProxyRequestOverrides;
   // Whether this provider is currently projected into an additive app's live config.
   liveConfigManaged?: boolean;
+  // Source format is needed for package-less OpenCode built-in overrides.
+  opencodeConfigFormat?: "v1" | "v2";
   // 供应商类型（用于识别 Copilot 等特殊供应商）
   providerType?: string;
   // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
   githubAccountId?: string;
+  // Stack 模式下这家 Claude Code 供应商发布的模型；没有时按模型映射发布，空列表什么都不发布
+  stackModels?: ClaudeStackModel[];
+}
+
+// Stack 模式下 Claude Code 供应商发布的一个模型
+export interface ClaudeStackModel {
+  // 发往上游的模型名（不带 1M 标记）
+  model: string;
+  // 选择器里的显示名，没有时用模型名
+  displayName?: string;
+  // 上游是 1M 窗口
+  oneM?: boolean;
 }
 
 // Skill 同步方式
@@ -250,6 +273,8 @@ export type ClaudeApiFormat =
 // - "openai_chat": OpenAI Chat Completions 格式，需要本地路由转换
 // - "anthropic": native Anthropic Messages format, needs local routing to convert to Responses
 export type CodexApiFormat = "openai_responses" | "openai_chat" | "anthropic";
+
+export type CodexCopilotApiFormat = "auto" | "openai_responses" | "openai_chat";
 
 export interface CodexCatalogModel {
   model: string;
@@ -292,8 +317,6 @@ export interface WebDavSyncStatus {
   lastRemoteEtag?: string | null;
   lastLocalManifestHash?: string | null;
   lastRemoteManifestHash?: string | null;
-  /** 已应用的加密快照版本。由后端维护，保存设置时不会被前端覆盖。 */
-  lastAppliedRevision?: number | null;
 }
 
 // WebDAV 同步配置
@@ -305,13 +328,10 @@ export interface WebDavSyncSettings {
   password?: string;
   remoteRoot?: string;
   profile?: string;
-  /** 显式豁免：允许对非回环/内网 HTTP 端点执行上传/下载。 */
-  allowPlaintextHttp?: boolean;
-  /** 端到端加密开关（默认关闭）。 */
-  encryptionEnabled?: boolean;
-  /** 端到端加密口令（后端下发时脱敏为空）。 */
-  encryptionPassword?: string;
   status?: WebDavSyncStatus;
+  allowPlaintextHttp?: boolean;
+  encryptionEnabled?: boolean;
+  encryptionPassword?: string;
 }
 
 // S3 同步配置
@@ -325,13 +345,10 @@ export interface S3SyncSettings {
   endpoint?: string;
   remoteRoot?: string;
   profile?: string;
-  /** 显式豁免：允许对非回环/内网 HTTP 端点执行上传/下载。 */
-  allowPlaintextHttp?: boolean;
-  /** 端到端加密开关（默认关闭）。 */
-  encryptionEnabled?: boolean;
-  /** 端到端加密口令（后端下发时脱敏为空）。 */
-  encryptionPassword?: string;
   status?: WebDavSyncStatus;
+  allowPlaintextHttp?: boolean;
+  encryptionEnabled?: boolean;
+  encryptionPassword?: string;
 }
 
 export type RemoteSnapshotLayout = "current" | "legacy";
@@ -370,6 +387,8 @@ export interface Settings {
   silentStartup?: boolean;
   // 是否启用主页面本地代理功能（默认关闭）
   enableLocalProxy?: boolean;
+  // 是否在主页面显示 Stack 模式开关（默认关闭）。和 enableLocalProxy 二选一，只影响 Claude Code、Codex
+  enableStackMode?: boolean;
   // User has confirmed the local proxy first-run notice
   proxyConfirmed?: boolean;
   // User has confirmed the usage query first-run notice
@@ -381,6 +400,10 @@ export interface Settings {
   enableFailoverToggle?: boolean;
   // Whether to show the project profile switcher on the main page header
   showProfileSwitcher?: boolean;
+  // 供应商页页头显示搜索按钮（默认开；关掉后 ⌘F 仍可用）
+  showProviderSearch?: boolean;
+  // 启动时检查已安装的命令行应用有没有新版本（默认关）
+  checkToolUpdatesOnStartup?: boolean;
   // Preserve Codex ChatGPT login in auth.json when switching third-party providers
   preserveCodexOfficialAuthOnSwitch?: boolean;
   // Run official Codex under the shared "custom" provider id so future
@@ -388,10 +411,17 @@ export interface Settings {
   unifyCodexSessionHistory?: boolean;
   // User opted in (enable dialog checkbox) to migrate existing official sessions
   unifyCodexMigrateExisting?: boolean;
+  // Codex aggregation: every catalog row uses the classic (v1) sub-agent tools,
+  // so a sub-agent on another provider can read its task (off by default)
+  codexStackClassicSubagents?: boolean;
   // User has confirmed the failover toggle first-run notice
   failoverConfirmed?: boolean;
   // User has confirmed the first-run welcome notice
   firstRunNoticeConfirmed?: boolean;
+  // User has confirmed the one-time "new layout" dialog shown to upgrading users
+  newLayoutNoticeConfirmed?: boolean;
+  // Highest app version whose "what's new" summary the user has seen on this device
+  whatsNewSeenVersion?: string;
   // User has confirmed the auto-sync traffic warning
   autoSyncConfirmed?: boolean;
   // User has confirmed the common config first-run notice
@@ -407,14 +437,28 @@ export interface Settings {
   claudeConfigDir?: string;
   // 覆盖 Codex 配置目录（可选）
   codexConfigDir?: string;
+  // 覆盖 Gemini 配置目录（可选）
+  geminiConfigDir?: string;
+  // 覆盖 Grok Build 配置目录（可选）
+  grokConfigDir?: string;
+  // 覆盖 OpenCode 配置目录（可选）
+  opencodeConfigDir?: string;
+  // 覆盖 OpenClaw 配置目录（可选）
+  openclawConfigDir?: string;
+  // 覆盖 Hermes 配置目录（可选）
+  hermesConfigDir?: string;
   // 覆盖 Pi agent 配置目录（可选）
   piConfigDir?: string;
 
   // ===== 当前供应商 ID（设备级）=====
   // 当前 Claude 供应商 ID（优先于数据库 is_current）
   currentProviderClaude?: string;
+  // 当前 Claude Desktop 供应商 ID（优先于数据库 is_current）
+  currentProviderClaudeDesktop?: string;
   // 当前 Codex 供应商 ID（优先于数据库 is_current）
   currentProviderCodex?: string;
+  // 当前 Gemini 供应商 ID（优先于数据库 is_current）
+  currentProviderGemini?: string;
 
   // ===== Skill 同步设置 =====
   // Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -465,11 +509,211 @@ export interface SessionMeta {
   resumeCommand?: string;
 }
 
+// ─── 会话阅读页数据模型（对应 Rust session_manager/model.rs） ───
+
+export type ToolKind =
+  | "shell"
+  | "read"
+  | "search"
+  | "edit"
+  | "write"
+  | "web"
+  | "mcp"
+  | "agent"
+  | "ask"
+  | "todo"
+  | "other";
+
+export type ToolStatus =
+  | "success"
+  | "error"
+  | "interrupted"
+  | "pending"
+  | "unknown";
+
+export type EventKind =
+  | "aborted"
+  | "compaction"
+  | "model_change"
+  | "thinking_level"
+  | "hook"
+  | "pr_link"
+  | "slash_command"
+  | "info"
+  | "error"
+  | "sub_agent"
+  | "other";
+
+/** 大内容的「按需取」引用：前端不解析，原样回传给后端 */
+export type ContentRef =
+  | { kind: "jsonl"; offset: number; len: number; pointer: string }
+  | {
+      kind: "sqlite";
+      table: string;
+      id: string;
+      column: string;
+      pointer: string;
+    }
+  | { kind: "file"; relPath: string; pointer: string }
+  | { kind: "sidecar"; relPath: string };
+
+export type ImageSource =
+  | { kind: "inline"; content: ContentRef }
+  | { kind: "local_file"; path: string };
+
+export interface ImageRef {
+  source: ImageSource;
+  mediaType: string;
+  /** 解码后的字节数估算 */
+  size: number;
+  alt?: string;
+}
+
+export interface DiffFile {
+  path: string;
+  op: "add" | "update" | "delete" | "rename";
+  added: number;
+  removed: number;
+}
+
+export interface DiffSummary {
+  files: DiffFile[];
+  added: number;
+  removed: number;
+  full?: ContentRef;
+}
+
+export interface TextBlock {
+  type: "text";
+  /** 正文；带 full 时只是预览（超长注入文本） */
+  text: string;
+  full?: ContentRef;
+}
+
+export interface ThinkingBlock {
+  type: "thinking";
+  /** 可见正文的预览；可能为空（加密/只有签名） */
+  text: string;
+  summary?: string;
+  redacted?: boolean;
+  durationMs?: number;
+  full?: ContentRef;
+}
+
+export interface ToolCallBlock {
+  type: "tool_call";
+  /** 与 ToolResultBlock.callId 配对 */
+  id: string;
+  rawName: string;
+  kind: ToolKind;
+  title: string;
+  detail?: string;
+  server?: string;
+  inputPreview: string;
+  inputTotalLen: number;
+  inputFull?: ContentRef;
+  diff?: DiffSummary;
+  byUser?: boolean;
+}
+
+export interface ToolResultBlock {
+  type: "tool_result";
+  /** 为空串表示源数据没有配对信息，显示为通用「工具输出」 */
+  callId: string;
+  status: ToolStatus;
+  preview: string;
+  totalLen: number;
+  lineCount: number;
+  truncated: boolean;
+  full?: ContentRef;
+  exitCode?: number;
+  durationMs?: number;
+  images?: ImageRef[];
+  savedPath?: string;
+}
+
+export interface ImageBlock {
+  type: "image";
+  image: ImageRef;
+}
+
+export interface EventBlock {
+  type: "event";
+  kind: EventKind;
+  /** 说明；带 full 时只是预览（压缩摘要等长文本） */
+  text?: string;
+  url?: string;
+  full?: ContentRef;
+}
+
+export interface StepBlock {
+  type: "step";
+  phase: "start" | "finish";
+  tokens?: number;
+  costUsd?: number;
+  reason?: string;
+}
+
+export type SessionBlock =
+  | TextBlock
+  | ThinkingBlock
+  | ToolCallBlock
+  | ToolResultBlock
+  | ImageBlock
+  | EventBlock
+  | StepBlock;
+
+export interface MessageMeta {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+  costUsd?: number;
+  durationMs?: number;
+  stopReason?: string;
+}
+
 export interface SessionMessage {
   role: string;
-  content: string;
+  /**
+   * 旧格式的纯文本内容：只有 blocks 缺失时（旧后端）才下发，
+   * 有 blocks 时前端一律从 blocks 推导（见 reader/turns.ts `messageText`）
+   */
+  content?: string;
   ts?: number;
+  id?: string;
+  turnId?: string;
+  injected?: boolean;
+  /** 旧后端 / 尚未迁移的解析器会省略 → 前端按 content 兜底 */
+  blocks?: SessionBlock[];
+  meta?: MessageMeta;
 }
+
+export interface TurnIndex {
+  turnId: string;
+  firstMessageIndex: number;
+  lastMessageIndex: number;
+  questionPreview: string;
+  ts?: number;
+  stepCount: number;
+  errorCount: number;
+  hasFinalReply: boolean;
+  aborted: boolean;
+}
+
+export type TranscriptChunk =
+  | {
+      type: "header";
+      total: number;
+      turns: TurnIndex[];
+      cached: boolean;
+      parseMs: number;
+    }
+  | { type: "messages"; start: number; messages: SessionMessage[] }
+  | { type: "done"; payloadBytes: number }
+  | { type: "error"; message: string };
 
 // MCP 服务器连接参数（宽松：允许扩展字段）
 export interface McpServerSpec {
@@ -489,8 +733,16 @@ export interface McpServerSpec {
 
 // v3.7.0: MCP 服务器应用启用状态
 export interface McpApps {
+  mcode?: boolean;
   claude: boolean;
+  "claude-desktop"?: boolean;
   codex: boolean;
+  gemini: boolean;
+  grokbuild?: boolean;
+  opencode: boolean;
+  openclaw: boolean;
+  hermes: boolean;
+  pi?: boolean;
 }
 
 // MCP 服务器条目（v3.7.0 统一结构）
@@ -519,14 +771,21 @@ export interface McpStatus {
   serverCount: number;
 }
 
+// 新：来自 config.json 的 MCP 列表响应
+export interface McpConfigResponse {
+  configPath: string;
+  servers: Record<string, McpServer>;
+}
+
 // ============================================================================
 // 统一供应商（Universal Provider）- 跨应用共享配置
 // ============================================================================
 
-// 统一供应商的应用启用状态（与后端 provider.rs 的 UniversalProviderApps 对应）
+// 统一供应商的应用启用状态
 export interface UniversalProviderApps {
   claude: boolean;
   codex: boolean;
+  pi: boolean;
 }
 
 // Claude 模型配置
@@ -543,10 +802,16 @@ export interface CodexModelConfig {
   reasoningEffort?: string;
 }
 
-// 各应用的模型配置（与后端 provider.rs 的 UniversalProviderModels 对应）
+// Gemini 模型配置
+export interface GeminiModelConfig {
+  model?: string;
+}
+
+// 各应用的模型配置
 export interface UniversalProviderModels {
   claude?: ClaudeModelConfig;
   codex?: CodexModelConfig;
+  gemini?: GeminiModelConfig;
 }
 
 // 统一供应商（跨应用共享配置）
@@ -569,3 +834,152 @@ export interface UniversalProvider {
 
 // 统一供应商映射（id -> UniversalProvider）
 export type UniversalProvidersMap = Record<string, UniversalProvider>;
+
+// ============================================================================
+// OpenCode 专属配置（v3.9.2+）
+// ============================================================================
+
+// OpenCode 模型配置
+export interface OpenCodeModel {
+  name: string;
+  limit?: {
+    context?: number;
+    output?: number;
+  };
+  options?: Record<string, unknown>; // 模型级别额外选项（provider 路由等）
+  // 支持任意额外字段（cost、modalities、thinking、variants 等）
+  [key: string]: unknown;
+}
+
+// OpenCode 供应商选项
+export interface OpenCodeProviderOptions {
+  baseURL?: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  // 支持额外选项（timeout, setCacheKey 等）
+  [key: string]: unknown;
+}
+
+// OpenCode 供应商配置（settings_config 结构）
+export interface OpenCodeProviderConfig {
+  npm: string; // AI SDK 包名，如 "@ai-sdk/openai-compatible"
+  name?: string; // 供应商显示名称
+  options: OpenCodeProviderOptions;
+  models: Record<string, OpenCodeModel>;
+}
+
+// OpenCode MCP 服务器配置（与统一格式不同）
+export interface OpenCodeMcpServerSpec {
+  type: "local" | "remote";
+  // local 类型字段
+  command?: string[]; // 与统一格式不同：命令和参数合并为数组
+  environment?: Record<string, string>; // 与统一格式不同：使用 environment 而非 env
+  // remote 类型字段
+  url?: string;
+  headers?: Record<string, string>;
+  // 通用字段
+  enabled?: boolean;
+}
+
+// ============================================================================
+// OpenClaw 专属配置（v3.11.0+）
+// ============================================================================
+
+// OpenClaw 模型配置
+export interface OpenClawModel {
+  id: string;
+  name: string;
+  alias?: string;
+  reasoning?: boolean; // 是否支持推理模式（如 o1、DeepSeek R1）
+  input?: string[]; // 支持的输入类型（如 ["text"]、["text", "image"]）
+  cost?: {
+    input: number;
+    output: number;
+    cacheRead?: number; // 缓存读取价格
+    cacheWrite?: number; // 缓存写入价格
+  };
+  contextWindow?: number;
+  maxTokens?: number; // 最大输出 token 数
+  compat?: {
+    maxTokensField?: string; // 最大输出 token 请求字段名（如 "max_tokens"）
+  };
+}
+
+// OpenClaw 默认模型配置（agents.defaults.model）
+export interface OpenClawDefaultModel {
+  primary: string;
+  fallbacks?: string[];
+}
+
+// OpenClaw 模型目录条目（agents.defaults.models 中的值）
+export interface OpenClawModelCatalogEntry {
+  alias?: string;
+}
+
+export interface OpenClawHealthWarning {
+  code: string;
+  message: string;
+  path?: string;
+}
+
+export interface OpenClawWriteOutcome {
+  backupPath?: string;
+  warnings: OpenClawHealthWarning[];
+}
+
+export type OpenClawToolsProfile = "minimal" | "coding" | "messaging" | "full";
+
+// OpenClaw 供应商配置（settings_config 结构）
+// 对应 OpenClaw 的 models.providers.<provider-id> 配置
+export interface OpenClawProviderConfig {
+  baseUrl?: string; // API 端点
+  apiKey?: string; // API 密钥
+  api?: string; // API 协议类型（如 "openai-completions"、"anthropic"）
+  models?: OpenClawModel[]; // 可用模型列表
+  headers?: Record<string, string>; // 自定义请求头（如 User-Agent）
+  authHeader?: boolean; // 供应商自定义认证开关（如 Longcat）
+}
+
+// OpenClaw agents.defaults 完整配置
+export interface OpenClawAgentsDefaults {
+  model?: OpenClawDefaultModel;
+  models?: Record<string, OpenClawModelCatalogEntry>;
+  timeoutSeconds?: number;
+  timeout?: number;
+  [key: string]: unknown; // preserve unknown fields
+}
+
+// OpenClaw env 配置（openclaw.json 的 env 节点）
+export interface OpenClawEnvConfig {
+  [key: string]: unknown;
+}
+
+// OpenClaw tools 配置（openclaw.json 的 tools 节点）
+export interface OpenClawToolsConfig {
+  profile?: OpenClawToolsProfile | string;
+  allow?: string[];
+  deny?: string[];
+  [key: string]: unknown; // preserve unknown fields
+}
+
+// ============================================================================
+// Hermes Agent 专属配置
+// ============================================================================
+
+export interface HermesModelConfig {
+  default?: string;
+  provider?: string;
+  base_url?: string;
+  context_length?: number;
+  max_tokens?: number;
+  [key: string]: unknown;
+}
+
+export type HermesMemoryKind = "memory" | "user";
+
+export interface HermesMemoryLimits {
+  memory: number;
+  user: number;
+  memoryEnabled: boolean;
+  userEnabled: boolean;
+}

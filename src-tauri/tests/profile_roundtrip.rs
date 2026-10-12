@@ -166,7 +166,7 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
     PromptService::enable_prompt(&state, AppType::Claude, "pr2").expect("enable pr2");
 
     // ---- 应用项目 A（Claude 组）：只复原 Claude 侧 ----
-    let (warnings, _) = ProfileService::apply(&state, &profile_a.id, ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, &profile_a.id, ProfileScope::Claude)
         .expect("apply profile A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -262,7 +262,7 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
     assert_eq!(payload.mcp.codex, Some(vec![]), "codex side captured");
 
     // 按 Codex 组应用：只动 codex 组的 current 标记，Claude 侧原样不动
-    let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Codex)
+    let warnings = ProfileService::apply(&state, &project.id, ProfileScope::Codex)
         .expect("apply project on codex side");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -298,7 +298,7 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
     );
 
     // 同一共享项目在 Claude 页应用：该侧未拍过快照 → 不动配置、标记 current、返回提示
-    let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
         .expect("apply project on claude side");
     assert_eq!(warnings.len(), 1, "uncaptured side yields one hint");
     assert!(warnings[0].contains("no claude configuration captured"));
@@ -362,7 +362,7 @@ fn profile_apply_reports_dangling_references_and_continues() {
     };
     state.db.save_profile(&profile).expect("save profile");
 
-    let (warnings, _) = ProfileService::apply(&state, "dangling-test", ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, "dangling-test", ProfileScope::Claude)
         .expect("apply succeeds");
     assert_eq!(
         warnings.len(),
@@ -479,7 +479,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     // ---- Project A：状态 X（p1 / m1 / pr1）----
     let project_a = ProfileService::create(&state, "Project A", ProfileScope::Claude)
         .expect("create project A");
-    let (warnings, _) = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
         .expect("apply project A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -493,7 +493,7 @@ fn switching_profile_autosaves_previous_profile_state() {
         .expect("create project B");
 
     // ---- 从 A 切换到 B：自动把当前状态 Y 保存到 A，再加载 B 的 Y ----
-    let (warnings, _) = ProfileService::apply(&state, &project_b.id, ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, &project_b.id, ProfileScope::Claude)
         .expect("switch to project B");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -534,7 +534,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     McpService::toggle_app(&state, "m2", AppType::Claude, false).expect("disable m2");
     PromptService::enable_prompt(&state, AppType::Claude, "pr1").expect("enable pr1");
 
-    let (warnings, _) = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
+    let warnings = ProfileService::apply(&state, &project_a.id, ProfileScope::Claude)
         .expect("switch back to project A");
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -581,109 +581,4 @@ fn switching_profile_autosaves_previous_profile_state() {
     assert_eq!(payload_b.providers.claude.as_deref(), Some("p1"));
     assert_eq!(payload_b.mcp.claude, Some(vec!["m1".to_string()]));
     assert_eq!(payload_b.prompts.claude.as_deref(), Some("pr1"));
-}
-
-#[test]
-fn profile_switch_auto_disables_takeover_before_apply() {
-    let _guard = test_mutex();
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let state = create_test_state().expect("create test state");
-
-    // 使用临时端口，避免测试机器端口冲突
-    futures::executor::block_on(async {
-        let mut proxy_config = state.db.get_proxy_config().await.expect("get proxy config");
-        proxy_config.listen_port = 0;
-        state
-            .db
-            .update_proxy_config(proxy_config)
-            .await
-            .expect("set ephemeral proxy port");
-    });
-
-    // ---- 两个 Claude 供应商：custom1 与 custom2 ----
-    let mut custom1 = claude_provider("custom1", "custom-key-1");
-    custom1.category = Some("custom".to_string());
-    state
-        .db
-        .save_provider(AppType::Claude.as_str(), &custom1)
-        .expect("save custom1 provider");
-
-    let mut custom2 = claude_provider("custom2", "custom-key-2");
-    custom2.category = Some("custom".to_string());
-    state
-        .db
-        .save_provider(AppType::Claude.as_str(), &custom2)
-        .expect("save custom2 provider");
-
-    // 初始状态：custom1 + 代理接管
-    ProviderService::switch(&state, AppType::Claude, "custom1").expect("switch to custom1");
-    let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
-    rt.block_on(state.proxy_service.set_takeover_for_app("claude", true))
-        .expect("enable claude takeover");
-
-    let (proxy_enabled_before, _) = state.db.get_proxy_flags_sync("claude");
-    assert!(
-        proxy_enabled_before,
-        "takeover should be active before apply"
-    );
-
-    // ---- 构造一个目标为 custom2 的项目快照 ----
-    let project = ProfileService::create(&state, "Custom2 Project", ProfileScope::Claude)
-        .expect("create project");
-    let mut project = state
-        .db
-        .get_profile(&project.id)
-        .expect("get project")
-        .expect("project exists");
-    let mut payload: ProfilePayload =
-        serde_json::from_str(&project.payload).expect("parse project payload");
-    payload.providers.claude = Some("custom2".to_string());
-    project.payload = serde_json::to_string(&payload).expect("serialize payload");
-    state
-        .db
-        .save_profile(&project)
-        .expect("save updated project");
-
-    // ---- 应用项目：应无条件自动关闭接管，再切换到 custom2 ----
-    let (warnings, _) = ProfileService::apply(&state, &project.id, ProfileScope::Claude)
-        .expect("apply custom2 project");
-    assert!(
-        warnings.is_empty(),
-        "switching project should not warn: {warnings:?}"
-    );
-
-    // 接管已关闭
-    let (proxy_enabled_after, _) = state.db.get_proxy_flags_sync("claude");
-    assert!(
-        !proxy_enabled_after,
-        "proxy takeover should be auto-disabled before applying profile"
-    );
-
-    // 当前供应商已切到 custom2
-    assert_eq!(
-        state
-            .db
-            .get_current_provider(AppType::Claude.as_str())
-            .expect("get current provider")
-            .as_deref(),
-        Some("custom2"),
-        "current provider should be custom2"
-    );
-
-    // live 配置应指向 custom2 的真实 endpoint，而非代理地址
-    let settings_path = home.join(".claude/settings.json");
-    let settings: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&settings_path).expect("read settings"))
-            .expect("parse settings");
-    let base_url = settings
-        .get("env")
-        .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
-        .and_then(|v| v.as_str());
-    assert_eq!(
-        base_url,
-        Some("https://api.test"),
-        "live config should point to real endpoint after auto-disable"
-    );
 }

@@ -9,7 +9,6 @@ use crate::services::usage_stats::{find_model_pricing_row, is_placeholder_pricin
 use rusqlite::OptionalExtension;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
-use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq)]
 struct UsageSemantic {
@@ -331,14 +330,12 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// 记录失败的请求（带更多上下文信息）
+    /// 记录失败的请求（带更多上下文信息）——同步内联版本。
     ///
-    /// H4：异步上下文专用——错误日志写入移入 blocking 线程池执行，
-    /// 避免阻塞 tokio worker。只能在 tokio runtime 上下文中调用。
-    ///
-    /// 相比 [`UsageLogger::log_error`]，本方法接受更多参数以提供完整的请求上下文。
+    /// 供调用方已身处 blocking 线程池（`spawn_blocking`）的场景使用：
+    /// 直接取 `Database` 的阻塞锁写库，不得在 tokio worker 线程上调用。
     #[allow(clippy::too_many_arguments)]
-    pub async fn log_error_with_context_async(
+    pub fn log_error_with_context(
         &self,
         request_id: String,
         provider_id: String,
@@ -351,23 +348,20 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
     ) -> Result<(), AppError> {
-        self.db
-            .db_blocking(move |conn| {
-                let log = Self::error_request_log(
-                    request_id,
-                    provider_id,
-                    app_type,
-                    model,
-                    status_code,
-                    error_message,
-                    latency_ms,
-                    is_streaming,
-                    session_id,
-                    provider_type,
-                );
-                Self::log_request_on_conn(conn, &log)
-            })
-            .await
+        let log = Self::error_request_log(
+            request_id,
+            provider_id,
+            app_type,
+            model,
+            status_code,
+            error_message,
+            latency_ms,
+            is_streaming,
+            session_id,
+            provider_type,
+        );
+        let conn = crate::database::lock_conn!(self.db.conn);
+        Self::log_request_on_conn(&conn, &log)
     }
 
     /// 查询模型定价的同步核心（H4：供 `db_blocking` 闭包复用）
@@ -386,110 +380,34 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// 获取有效的倍率与计费模式来源（供应商优先，未配置则回退全局默认）
-    pub async fn resolve_pricing_config(
-        &self,
-        provider_id: &str,
-        app_type: &str,
-    ) -> (Decimal, String) {
-        // Claude Desktop 网关没有独立的全局计费配置（proxy_config 的 CHECK 仅
-        // 允许 claude/codex/gemini，前端也只暴露三项），全局默认继承 claude；
-        // 供应商级 meta 覆盖仍按 claude-desktop 查找（providers 表按该 app_type 存）。
+    /// 获取计费模式来源（按请求模型 / 按返回模型），只读应用级全局配置
+    pub async fn resolve_pricing_model_source(&self, app_type: &str) -> String {
+        // Claude Desktop 网关没有独立的全局计费配置（proxy_config 的 CHECK 不含
+        // claude-desktop），继承 claude 的设置。
         let default_app_type = if app_type == "claude-desktop" {
             "claude"
         } else {
             app_type
         };
-        let default_multiplier_raw =
-            match self.db.get_default_cost_multiplier(default_app_type).await {
-                Ok(value) => value,
-                Err(e) => {
-                    log::warn!("[USG-003] 获取默认倍率失败 (app_type={app_type}): {e}");
-                    "1".to_string()
-                }
-            };
-        let default_multiplier = match Decimal::from_str(&default_multiplier_raw) {
-            Ok(value) => value,
+        match self.db.get_pricing_model_source(default_app_type).await {
+            Ok(value) if value == PRICING_SOURCE_RESPONSE || value == PRICING_SOURCE_REQUEST => {
+                value
+            }
+            Ok(value) => {
+                log::warn!("[USG-003] 计费模式无效 (app_type={app_type}): {value}");
+                PRICING_SOURCE_RESPONSE.to_string()
+            }
             Err(e) => {
-                log::warn!(
-                    "[USG-003] 默认倍率解析失败 (app_type={app_type}): {default_multiplier_raw} - {e}"
-                );
-                Decimal::from(1)
+                log::warn!("[USG-003] 获取计费模式失败 (app_type={app_type}): {e}");
+                PRICING_SOURCE_RESPONSE.to_string()
             }
-        };
-
-        let default_pricing_source_raw =
-            match self.db.get_pricing_model_source(default_app_type).await {
-                Ok(value) => value,
-                Err(e) => {
-                    log::warn!("[USG-003] 获取默认计费模式失败 (app_type={app_type}): {e}");
-                    PRICING_SOURCE_RESPONSE.to_string()
-                }
-            };
-        let default_pricing_source = if default_pricing_source_raw == PRICING_SOURCE_RESPONSE
-            || default_pricing_source_raw == PRICING_SOURCE_REQUEST
-        {
-            default_pricing_source_raw
-        } else {
-            log::warn!(
-                "[USG-003] 默认计费模式无效 (app_type={app_type}): {default_pricing_source_raw}"
-            );
-            PRICING_SOURCE_RESPONSE.to_string()
-        };
-
-        let provider = self
-            .db
-            .get_provider_by_id(provider_id, app_type)
-            .ok()
-            .flatten();
-
-        let (provider_multiplier, provider_pricing_source) = provider
-            .as_ref()
-            .and_then(|p| p.meta.as_ref())
-            .map(|meta| {
-                (
-                    meta.cost_multiplier.as_deref(),
-                    meta.pricing_model_source.as_deref(),
-                )
-            })
-            .unwrap_or((None, None));
-
-        let cost_multiplier = match provider_multiplier {
-            Some(value) => match Decimal::from_str(value) {
-                Ok(parsed) => parsed,
-                Err(e) => {
-                    log::warn!(
-                        "[USG-003] 供应商倍率解析失败 (provider_id={provider_id}): {value} - {e}"
-                    );
-                    default_multiplier
-                }
-            },
-            None => default_multiplier,
-        };
-
-        let pricing_model_source = match provider_pricing_source {
-            Some(value) if value == PRICING_SOURCE_RESPONSE || value == PRICING_SOURCE_REQUEST => {
-                value.to_string()
-            }
-            Some(value) => {
-                log::warn!("[USG-003] 供应商计费模式无效 (provider_id={provider_id}): {value}");
-                default_pricing_source.clone()
-            }
-            None => default_pricing_source.clone(),
-        };
-
-        (cost_multiplier, pricing_model_source)
+        }
     }
 
-    /// 计算并记录请求（同步内联版本）
+    /// 计算并记录请求（同步内联版本）。
     ///
-    /// 生产路径请用 [`UsageLogger::log_with_calculation_async`]（H4：把同步 DB
-    /// 工作移入 blocking 线程池）。本同步版**仅供单元测试**——它需要在无 tokio
-    /// runtime 的测试线程里跑。
-    ///
-    /// 用 `#[cfg(test)]` 而非 `#[allow(dead_code)]`：测试支撑代码不该编进生产
-    /// 二进制（`allow` 只是让编译器闭嘴，函数照样进产物）。
-    #[cfg(test)]
+    /// 供调用方已身处 blocking 线程池（`spawn_blocking`）的场景使用：
+    /// 直接取 `Database` 的阻塞锁写库，不得在 tokio worker 线程上调用。
     #[allow(clippy::too_many_arguments)]
     pub fn log_with_calculation(
         &self,
@@ -500,7 +418,6 @@ impl<'a> UsageLogger<'a> {
         request_model: String,
         pricing_model: String,
         usage: TokenUsage,
-        cost_multiplier: Decimal,
         latency_ms: u64,
         first_token_ms: Option<u64>,
         status_code: u16,
@@ -518,7 +435,7 @@ impl<'a> UsageLogger<'a> {
             request_model,
             pricing_model,
             usage,
-            cost_multiplier,
+            Decimal::ONE,
             latency_ms,
             first_token_ms,
             status_code,
@@ -529,7 +446,10 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 计算并记录请求的同步核心（H4：供 `db_blocking` 闭包复用）
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `cost_multiplier` 参数已不再参与本路径的计价（倍率在上游重构中移出），
+    /// 仅为兼容既有调用方签名保留。
+    #[allow(clippy::too_many_arguments, unused_variables)]
     fn log_with_calculation_on_conn(
         conn: &rusqlite::Connection,
         request_id: String,
@@ -562,7 +482,7 @@ impl<'a> UsageLogger<'a> {
             &app_type,
             &usage,
             pricing.as_ref(),
-            cost_multiplier,
+            Decimal::ONE,
         );
 
         let log = RequestLog {
@@ -581,53 +501,10 @@ impl<'a> UsageLogger<'a> {
             session_id,
             provider_type,
             is_streaming,
-            cost_multiplier: cost_multiplier.to_string(),
+            cost_multiplier: "1".to_string(),
         };
 
         Self::log_request_on_conn(conn, &log)
-    }
-
-    /// H4：异步上下文专用——定价查询与日志写入整体移入 blocking 线程池执行，
-    /// 避免阻塞 tokio worker。参数均为 owned 值；只能在 tokio runtime 上下文中调用。
-    #[allow(clippy::too_many_arguments)]
-    pub async fn log_with_calculation_async(
-        &self,
-        request_id: String,
-        provider_id: String,
-        app_type: String,
-        model: String,
-        request_model: String,
-        pricing_model: String,
-        usage: TokenUsage,
-        cost_multiplier: Decimal,
-        latency_ms: u64,
-        first_token_ms: Option<u64>,
-        status_code: u16,
-        session_id: Option<String>,
-        provider_type: Option<String>,
-        is_streaming: bool,
-    ) -> Result<(), AppError> {
-        self.db
-            .db_blocking(move |conn| {
-                Self::log_with_calculation_on_conn(
-                    conn,
-                    request_id,
-                    provider_id,
-                    app_type,
-                    model,
-                    request_model,
-                    pricing_model,
-                    usage,
-                    cost_multiplier,
-                    latency_ms,
-                    first_token_ms,
-                    status_code,
-                    session_id,
-                    provider_type,
-                    is_streaming,
-                )
-            })
-            .await
     }
 }
 
@@ -697,7 +574,6 @@ mod tests {
             "req-model".to_string(),
             "test-model".to_string(),
             usage,
-            Decimal::from(1),
             100,
             None,
             200,

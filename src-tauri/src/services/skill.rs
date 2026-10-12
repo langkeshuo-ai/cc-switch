@@ -5438,7 +5438,7 @@ mod tests {
             .is_none());
     }
 
-    /// CC_SWITCH_TEST_HOME 隔离守卫（serial 测试间互斥由 #[serial] 保证，
+    /// CC_SWITCH_TEST_HOME 隔离守卫（serial 测试间互斥由 #[serial(global_env)] 保证，
     /// 守卫只负责在测试结束后恢复原值）。
     struct TestHomeGuard(Option<std::ffi::OsString>);
     impl TestHomeGuard {

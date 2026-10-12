@@ -33,10 +33,7 @@ mod tests;
 
 // DAO 类型导出供外部使用
 pub(crate) use dao::providers_seed::{is_official_seed_id, CODEX_OFFICIAL_PROVIDER_ID};
-pub(crate) use dao::proxy::{
-    validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
-    PRICING_SOURCE_RESPONSE,
-};
+pub(crate) use dao::proxy::{PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
 pub use dao::snapshots::AppSnapshot;
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
@@ -49,11 +46,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// 打开 SQLite，并在锁竞争时最多等待 5 秒。
+// DAO 方法通过 impl Database 提供，无需额外导出
+
+/// 以 5 秒 busy_timeout 打开 SQLite 连接。
 ///
-/// rusqlite 默认 `busy_timeout = 0`。主库和导入用的暂存库都会在打开后立刻执行
-/// PRAGMA；杀毒扫描或 WSL2 的 drvfs 经常让这条语句立刻返回 `database is locked`。
-/// 5 秒只覆盖瞬时竞争，真死锁仍会失败，而不是一直卡住。
+/// rusqlite 默认 busy_timeout=0：杀毒扫描或 WSL2 drvfs 等场景下，打开后
+/// 立刻执行 PRAGMA 可能瞬时抛 `database is locked`。5 秒等待覆盖瞬时
+/// 竞争，真死锁仍会快速失败（backup.rs 的打开点同样走此函数）。
 pub(crate) fn open_sqlite_waiting(path: &Path) -> Result<Connection, AppError> {
     let conn = Connection::open(path).map_err(|e| AppError::Database(e.to_string()))?;
     conn.busy_timeout(Duration::from_secs(5))
@@ -61,22 +60,9 @@ pub(crate) fn open_sqlite_waiting(path: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
-// DAO 方法通过 impl Database 提供，无需额外导出
-
 /// 当前 Schema 版本号
-///
-/// **schema 不变量（BASELINE.md 第 2 节）**：本值必须等于基线上游
-/// （farion1231/cc-switch v3.20.4）的 `SCHEMA_VERSION`（=19）。
-/// fork 不得自造迁移、不得让本值高于同版本上游——否则每次跟上游都要
-/// 手改数据库，且与官方构建互不兼容。旧版 fork 曾顶到 22，存量库由
-/// `schema::normalize_legacy_trim_schema` 在打开时自动降级归一。
-pub(crate) const SCHEMA_VERSION: i32 = 19;
-
-/// fork 历史上到过的最高 `user_version`。v20..=22 的 fork 遗留库可由
-/// `normalize_legacy_trim_schema_on_conn` 无损降级到 [`SCHEMA_VERSION`]，
-/// 不算「版本过新」（见 `stored_user_version_exceeds_supported` 预检）。
-/// 高于此值（或 v20..=22 但缺 `app_snapshots` 表的非 fork 形态）仍按过新拒绝。
-pub(crate) const MAX_NORMALIZABLE_LEGACY_VERSION: i32 = 22;
+/// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
+pub(crate) const SCHEMA_VERSION: i32 = 20;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -124,6 +110,8 @@ pub(crate) fn rollback_savepoint(conn: &Connection, name: &str) {
 /// 外层 Arc 允许 DAO 方法把连接克隆进 `spawn_blocking` 闭包（见 [`Database::db_blocking`]）。
 pub struct Database {
     pub(crate) conn: Arc<Mutex<Connection>>,
+    /// 请求日志总数缓存，见 `services::usage_stats::LogCountCache`
+    pub(crate) log_count_cache: Mutex<Option<crate::services::usage_stats::LogCountCache>>,
 }
 
 fn register_db_change_hook(conn: &Connection) {
@@ -166,32 +154,9 @@ impl Database {
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;
-
-        // 存量 fork 数据库（曾被顶到 v20/v21/v22）先降级归一到上游 v19 形状，
-        // 否则下方的迁移链会把它当「版本过新」拒绝。必须在备份与迁移之前执行。
-        {
-            let version = {
-                let conn = lock_conn!(db.conn);
-                Self::get_user_version(&conn)?
-            };
-            if (20..=22).contains(&version) {
-                log::info!(
-                    "Detected legacy trim schema v{version}; normalizing down to upstream v{SCHEMA_VERSION}"
-                );
-                // 归一是破坏性操作（DROP app_snapshots、删 'pi' 行），
-                // 先落一份文件级备份，失败可回滚。
-                if let Err(e) = db.backup_database_file() {
-                    log::warn!("Pre-normalization backup failed, aborting normalize: {e}");
-                    return Err(AppError::Database(format!(
-                        "归一旧版数据库前的备份失败，已中止（错误: {e}）。请手动备份数据库后重试"
-                    )));
-                }
-                let conn = lock_conn!(db.conn);
-                Self::normalize_legacy_trim_schema_on_conn(&conn, version)?;
-            }
-        }
 
         // Pre-migration backup: only when upgrading from an existing database
         {
@@ -236,13 +201,7 @@ impl Database {
     }
 
     /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
-    /// 更新、且**不是**可归一的 fork 遗留形态时返回 `Some(version)`。
-    ///
-    /// fork 遗留库（v20..=22）以 `app_snapshots` 表为标志（上游从无此表），
-    /// [`Database::init`] 会在任何 schema 写操作前把它无损降级到
-    /// [`SCHEMA_VERSION`]，因此预检必须放行，否则 init 根本没有机会执行
-    /// normalize（2026-10-10 真机安装验证时发现：v22 存量库被预检拦进
-    /// 「版本过新」恢复界面，normalize 分支成死代码）。
+    /// 更新时返回 `Some(version)`。
     ///
     /// 用于初始化失败后判断是否为「数据库版本过新（应用过旧，需升级应用）」的可恢复
     /// 场景——此时不应反复弹出无效的重试对话框，而应引导用户在应用内升级。
@@ -254,12 +213,7 @@ impl Database {
         }
         let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
         let version = Self::get_user_version(&conn)?;
-        if version <= SCHEMA_VERSION {
-            return Ok(None);
-        }
-        let normalizable_fork_legacy = (20..=MAX_NORMALIZABLE_LEGACY_VERSION).contains(&version)
-            && Self::table_exists(&conn, "app_snapshots")?;
-        Ok((!normalizable_fork_legacy).then_some(version))
+        Ok((version > SCHEMA_VERSION).then_some(version))
     }
 
     /// 创建内存数据库（用于测试）
@@ -275,41 +229,12 @@ impl Database {
 
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;
         db.ensure_model_pricing_seeded()?;
 
         Ok(db)
-    }
-
-    /// H4：在 tokio blocking 线程池上执行同步 DB 操作。
-    ///
-    /// rusqlite 是同步驱动，直接在 async 上下文中执行会阻塞 tokio worker 线程。
-    /// 本 helper 把闭包移交给 `spawn_blocking` 执行；`Mutex<Connection>` 仍然
-    /// 串行化所有访问，并发语义与内联执行完全一致，仅改变执行线程。
-    ///
-    /// # 约束
-    /// - 只能在 tokio runtime 上下文中调用（`spawn_blocking` 的要求；
-    ///   会被 `futures::executor::block_on` 在 runtime 外轮询的方法禁止使用）；
-    /// - 闭包内不得再调用本 helper 或其他内部使用 `spawn_blocking` 的 DAO 方法；
-    /// - 闭包拿到的 `&Connection` 已持有互斥锁，闭包内不要长时间空转。
-    pub(crate) async fn db_blocking<T, F>(&self, f: F) -> Result<T, AppError>
-    where
-        T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T, AppError> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        match tokio::task::spawn_blocking(move || {
-            let conn = lock_conn!(conn);
-            f(&conn)
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(join_err) => Err(AppError::Database(format!(
-                "数据库后台任务执行失败: {join_err}"
-            ))),
-        }
     }
 
     pub(crate) fn get_auto_vacuum_mode(conn: &Connection) -> Result<i32, AppError> {

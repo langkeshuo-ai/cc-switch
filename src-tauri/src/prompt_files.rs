@@ -1,29 +1,39 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::app_config::AppType;
 use crate::codex_config::get_codex_auth_path;
 use crate::config::get_claude_settings_path;
 use crate::error::AppError;
 
-pub(crate) fn validate_prompt_content(_app: &AppType, _content: &str) -> Result<(), AppError> {
+pub(crate) fn validate_prompt_content(app: &AppType, content: &str) -> Result<(), AppError> {
+    let _ = (app, content);
     Ok(())
 }
 
 /// 返回指定应用所使用的提示词文件路径。
 pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
-    let base_dir: PathBuf = match app {
-        AppType::Claude => get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?,
-        AppType::Codex => get_base_dir_with_fallback(get_codex_auth_path(), ".codex")?,
-        AppType::Pi => crate::pi_config::get_pi_agent_dir()?,
-    };
+    match app {
+        AppType::Claude => Ok(
+            get_base_dir_with_fallback(get_claude_settings_path(), ".claude")?.join("CLAUDE.md"),
+        ),
+        AppType::Codex => {
+            Ok(get_base_dir_with_fallback(get_codex_auth_path(), ".codex")?.join("AGENTS.md"))
+        }
+        AppType::Pi => Ok(crate::pi_config::get_pi_agent_dir()?.join("AGENTS.md")),
+    }
+}
 
-    let filename = match app {
-        AppType::Claude => "CLAUDE.md",
-        AppType::Codex => "AGENTS.md",
-        AppType::Pi => "AGENTS.md",
-    };
+/// 把用户主目录前缀换成 `~`，给界面显示用（复制路径仍用完整路径）。
+pub fn display_path(path: &Path) -> String {
+    display_path_with_home(path, &crate::config::get_home_dir())
+}
 
-    Ok(base_dir.join(filename))
+fn display_path_with_home(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 fn get_base_dir_with_fallback(
@@ -46,6 +56,22 @@ fn get_base_dir_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_path_shortens_the_home_prefix_only() {
+        let home = Path::new("/Users/me");
+        let _sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(display_path_with_home(home, home), "~");
+        assert_eq!(
+            display_path_with_home(Path::new("/Users/meow/SOUL.md"), home),
+            "/Users/meow/SOUL.md"
+        );
+        // 只认整段目录前缀，不把 /Users/meow 当成 /Users/me 下面
+        assert_eq!(
+            display_path_with_home(Path::new("/opt/hermes/SOUL.md"), home),
+            "/opt/hermes/SOUL.md"
+        );
+    }
 
     #[test]
     fn pi_prompt_file_uses_agents_md() {
