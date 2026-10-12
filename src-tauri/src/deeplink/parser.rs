@@ -126,7 +126,14 @@ fn parse_provider_deeplink(
         .filter(|v| !v.is_empty());
     let config = params.get("config").cloned();
     let config_format = params.get("configFormat").cloned();
-    let config_url = params.get("configUrl").cloned();
+    // 远程配置还没实现。在解析阶段就拒绝，用户当场看到原因，而不是确认导入之后才失败
+    if params.contains_key("configUrl") {
+        return Err(AppError::InvalidInput(
+            "'configUrl' is not supported yet; pass the config inline with 'config' (Base64)"
+                .to_string(),
+        ));
+    }
+    let config_url = None;
     let enabled = params.get("enabled").and_then(|v| v.parse::<bool>().ok());
 
     // Extract usage script fields (v3.9+)

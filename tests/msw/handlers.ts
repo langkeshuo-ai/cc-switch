@@ -13,6 +13,8 @@ import {
   listSessions,
   resetProviderState,
   setCurrentProviderId,
+  ackPendingDeepLink,
+  peekPendingDeepLink,
   updateProvider,
   updateSortOrder,
   getSettings,
@@ -65,6 +67,14 @@ export const handlers = [
   ),
 
   http.post(`${TAURI_ENDPOINT}/update_tray_menu`, () => success(true)),
+  http.post(`${TAURI_ENDPOINT}/peek_pending_deeplink`, () =>
+    success(peekPendingDeepLink()),
+  ),
+  http.post(`${TAURI_ENDPOINT}/ack_pending_deeplink`, async ({ request }) => {
+    const { id } = await withJson<{ id: number }>(request);
+    ackPendingDeepLink(id);
+    return success(null);
+  }),
 
   http.post(`${TAURI_ENDPOINT}/switch_provider`, async ({ request }) => {
     const { id, app } = await withJson<{ id: string; app: AppId }>(request);
