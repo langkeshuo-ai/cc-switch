@@ -123,35 +123,6 @@ describe("buildTurns · 6 份契约 fixture", () => {
     expect(t3.final?.messageIndex).toBe(30);
   });
 
-  it("Gemini：纯注入轮不出行；同一条消息里调用、结果与最终回复", () => {
-    const turns = turnsOf("gemini");
-    expect(turns[0]).toMatchObject({ key: "t0", injected: [0], steps: [] });
-    expect(turns[0].question).toBeUndefined();
-    expect(turns[1].final?.messageIndex).toBe(2);
-    expect(turns[1].trailingEvents.map((e) => e.block.kind)).toEqual(["error"]);
-    expect(turns[2].final).toBeUndefined();
-    const rows = flattenRows(turns);
-    expect(rows[0].kind).toBe("question");
-    expect(rows.every((row) => row.turn !== 0)).toBe(true);
-  });
-
-  it("OpenCode：step-finish 费用落到该段最后一步，纯文本段落到最终回复", () => {
-    const [t1, t2] = turnsOf("opencode");
-    expect(t1.stepCosts.map((cost) => cost.tokens)).toEqual([
-      18734, 21960, 22410,
-    ]);
-    const tools = t1.steps.filter((step) => step.kind === "tool");
-    expect(tools[0].cost).toMatchObject({ tokens: 18734, costUsd: 0.0123 });
-    expect(tools[1].cost).toBeUndefined();
-    expect(tools[3].cost).toMatchObject({ tokens: 21960 });
-    expect(t1.final?.cost).toMatchObject({ tokens: 22410, reason: "stop" });
-
-    // 提问消息里的 @agent 事件算提问前的事件
-    expect(t2.leadingEvents.map((e) => e.block.kind)).toEqual(["other"]);
-    expect(t2.final).toBeUndefined();
-    expect(t2.steps.at(-1)?.cost).toMatchObject({ tokens: 30112 });
-  });
-
   it("Pi：用户自己跑的命令单步成功直接显示；中断轮也有最终回复", () => {
     const turns = turnsOf("pi");
     expect(turns[0].leadingEvents.map((e) => e.block.kind)).toEqual([
@@ -505,10 +476,6 @@ describe("buildTurnIndex", () => {
       ts: 1791014700000,
     });
     expect(index[2]).toMatchObject({ aborted: true, hasFinalReply: false });
-    expect(buildTurnIndex(turnsOf("gemini")).map((t) => t.turnId)).toEqual([
-      "t1",
-      "t2",
-    ]);
   });
 
   it("提问预览压空白、超过 80 字截断；斜杠命令没有文本时为空", () => {
@@ -763,9 +730,6 @@ describe("flattenRows · 折叠规则 §6.5", () => {
       "question",
     ]);
     expect(rows[0]).toMatchObject({ messageIndex: 0, turn: 0 });
-    // 纯注入轮打开开关后也出行
-    const gemini = flattenRows(turnsOf("gemini"), { showInjected: true });
-    expect(rowKinds(gemini).slice(0, 2)).toEqual(["injected", "turn_divider"]);
   });
 
   it("只看对话：只留提问与最终回复，空轮不出分轮线", () => {

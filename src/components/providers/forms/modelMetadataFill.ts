@@ -3,7 +3,6 @@
 
 import type { KnownModelMetadata } from "@/lib/modelMetadata";
 import type { CodexCatalogModel, OpenClawModel, OpenCodeModel } from "@/types";
-import type { HermesModel } from "@/config/hermesProviderPresets";
 import {
   PI_THINKING_LEVELS,
   type PiThinkingLevelMap,
@@ -76,15 +75,6 @@ export function fillOpenClawModel(
     next.cost = { ...metadata.cost };
   }
   return next;
-}
-
-export function fillHermesModel(
-  model: HermesModel,
-  metadata: KnownModelMetadata,
-): HermesModel {
-  return isBlank(model.context_length) && metadata.contextWindow
-    ? { ...model, context_length: metadata.contextWindow }
-    : model;
 }
 
 export function fillOpenCodeModel(

@@ -2,6 +2,7 @@ use indexmap::IndexMap;
 
 use tauri::State;
 
+use crate::app_config::AppType;
 use crate::prompt::Prompt;
 use crate::services::pi_prompt_files::{
     PiPromptFileKind, PiPromptFileService, PiPromptFileSnapshot, PiPromptTemplate,
@@ -9,6 +10,7 @@ use crate::services::pi_prompt_files::{
 };
 use crate::services::prompt::PromptService;
 use crate::store::AppState;
+use std::str::FromStr;
 
 #[tauri::command]
 pub async fn get_prompts(

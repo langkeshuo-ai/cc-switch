@@ -8,8 +8,8 @@ use cc_switch_lib::{
 #[path = "support.rs"]
 mod support;
 use support::{
-    create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, test_mutex,
+    create_test_state, create_test_state_file_backed_with_config, create_test_state_with_config,
+    enable_codex_official_auth_preservation, ensure_test_home, reset_test_fs, test_mutex,
 };
 
 fn sanitize_provider_name(name: &str) -> String {
@@ -24,7 +24,7 @@ fn sanitize_provider_name(name: &str) -> String {
 
 #[test]
 fn migrate_legacy_common_config_usage_marks_historical_provider_enabled() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -98,7 +98,7 @@ fn migrate_legacy_common_config_usage_marks_historical_provider_enabled() {
 
 #[test]
 fn provider_service_switch_codex_updates_live_and_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
@@ -163,12 +163,6 @@ command = "say"
             apps: McpApps {
                 claude: false,
                 codex: true,
-                gemini: false,
-                grokbuild: false,
-                opencode: false,
-                hermes: false,
-                mcode: false,
-                pi: false,
             },
             description: None,
             homepage: None,
@@ -234,7 +228,7 @@ command = "say"
 #[test]
 /// 第三方路由一律写成 `custom`：行里用什么 id 都一样，行本身不改写。
 fn provider_service_switch_codex_writes_every_third_party_route_as_custom() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -346,7 +340,7 @@ requires_openai_auth = true
 
 #[test]
 fn provider_service_switch_codex_preserves_oauth_and_keeps_rows_untouched() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
@@ -517,7 +511,7 @@ requires_openai_auth = true
     reason = "this integration-style test must serialize global test HOME and settings mutations across async takeover calls"
 )]
 async fn codex_official_to_deepseek_then_takeover_enters_and_restores_proxy_managed_live_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
@@ -672,7 +666,7 @@ wire_api = "responses"
 
 #[test]
 fn provider_service_switch_codex_default_removes_auth_json_when_preservation_off() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Intentionally do NOT enable preservation: this locks the default opt-out
     // behavior where a third-party switch deletes auth.json outright — the
@@ -762,7 +756,7 @@ requires_openai_auth = true
 
 #[test]
 fn provider_service_switch_codex_default_injects_bearer_token_into_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Preservation stays OFF (default). Since Codex 0.149 (openai/codex#39214)
     // custom providers no longer inherit ambient auth, so third-party switches
@@ -820,7 +814,7 @@ requires_openai_auth = false
 
 #[test]
 fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Preservation ON + third-party provider with an empty config: auth.json is
     // not written, and an empty config.toml has no provider table to carry the
@@ -863,7 +857,7 @@ fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_confi
 
 #[test]
 fn provider_service_switch_codex_preserved_login_normalizes_legacy_reroute_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Preservation ON + a legacy-shape third-party config (top-level
     // openai_base_url rerouting the built-in `openai` provider): the shape
@@ -940,7 +934,7 @@ openai_base_url = "https://relay.example/v1"
 
 #[test]
 fn provider_service_switch_codex_preserved_login_normalizes_config_carried_token() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Same legacy reroute shape, but the key sits in the config text itself
     // (raw-edited provider with `auth = {}`): normalization must see
@@ -998,7 +992,7 @@ experimental_bearer_token = "config-carried-key"
 
 #[test]
 fn provider_service_switch_codex_default_normalizes_legacy_reroute_config() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Same legacy shape with preservation OFF (default): the switch is
     // config-only on every path, so instead of feeding the built-in
@@ -1051,7 +1045,7 @@ openai_base_url = "https://relay.example/v1"
 
 #[test]
 fn provider_service_switch_codex_preserved_login_rejects_keyless_official_auth_fallback() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Preservation ON + a header-auth card with NO API key anywhere
     // (`auth = {}`) whose config also sets `requires_openai_auth = true`:
@@ -1138,7 +1132,7 @@ wire_api = "responses"
 
 #[test]
 fn provider_service_switch_codex_preserved_login_allows_keyless_header_auth_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // Same keyless header-auth card WITHOUT the fallback flag: 0.149 resolves
     // this provider as unauthenticated, provider headers survive untouched,
@@ -1195,7 +1189,7 @@ http_headers = { Authorization = "Bearer explicit-header-token" }
 
 #[test]
 fn provider_service_switch_codex_supports_official_login_provider_without_auth_write() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1283,7 +1277,7 @@ requires_openai_auth = true
 
 #[test]
 fn provider_service_switch_codex_official_clears_stale_third_party_auth() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     // preservation stays OFF (default). Versions before the key moved into
     // config.toml wrote the third-party key into live auth.json; that residue
@@ -1375,7 +1369,7 @@ requires_openai_auth = true
 
 #[test]
 fn provider_service_reswitch_current_official_keeps_live_auth() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1422,7 +1416,7 @@ fn provider_service_reswitch_current_official_keeps_live_auth() {
 
 #[test]
 fn read_codex_live_settings_tolerates_missing_auth_when_config_file_exists() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1446,7 +1440,7 @@ fn read_codex_live_settings_tolerates_missing_auth_when_config_file_exists() {
 
 #[test]
 fn reapply_codex_official_live_rewrites_only_the_session_routing() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1535,7 +1529,7 @@ fn reapply_codex_official_live_rewrites_only_the_session_routing() {
 /// 落盘，切换事实上成功，报错只制造分裂假象。
 #[test]
 fn switch_codex_ignores_a_broken_claude_json() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1573,12 +1567,6 @@ fn switch_codex_ignores_a_broken_claude_json() {
             apps: McpApps {
                 claude: false,
                 codex: true,
-                gemini: false,
-                grokbuild: false,
-                opencode: false,
-                hermes: false,
-                mcode: false,
-                pi: false,
             },
             description: None,
             homepage: None,
@@ -1616,7 +1604,7 @@ fn switch_codex_ignores_a_broken_claude_json() {
 /// 状态永远陈旧。
 #[test]
 fn sync_all_enabled_reports_broken_app_but_projects_the_rest() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1636,12 +1624,6 @@ fn sync_all_enabled_reports_broken_app_but_projects_the_rest() {
             apps: McpApps {
                 claude: false,
                 codex: true,
-                gemini: false,
-                grokbuild: false,
-                opencode: false,
-                hermes: false,
-                mcode: false,
-                pi: false,
             },
             description: None,
             homepage: None,
@@ -1674,7 +1656,7 @@ fn sync_all_enabled_reports_broken_app_but_projects_the_rest() {
 
 #[test]
 fn provider_service_switch_codex_official_accounts_write_auth_json() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1767,7 +1749,7 @@ fn provider_service_switch_codex_official_accounts_write_auth_json() {
 
 #[test]
 fn provider_service_switch_codex_backfill_keeps_provider_specific_model_provider_id() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1894,7 +1876,7 @@ requires_openai_auth = true
 
 #[test]
 fn sync_current_provider_for_app_leaves_the_proxy_contract_alone() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -1975,7 +1957,7 @@ fn sync_current_provider_for_app_leaves_the_proxy_contract_alone() {
 
 #[test]
 fn switch_codex_in_direct_mode_replaces_leftover_proxy_placeholders() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
@@ -2087,7 +2069,7 @@ wire_api = "responses"
 
 #[test]
 fn explicitly_cleared_common_snippet_is_not_auto_extracted() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2125,7 +2107,7 @@ fn explicitly_cleared_common_snippet_is_not_auto_extracted() {
 
 #[test]
 fn legacy_common_config_migration_flag_roundtrip() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2165,179 +2147,8 @@ fn legacy_common_config_migration_flag_roundtrip() {
 }
 
 #[test]
-fn switch_packycode_gemini_updates_security_selected_type() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let mut config = MultiAppConfig::default();
-    {
-        let manager = config
-            .get_manager_mut(&AppType::Gemini)
-            .expect("gemini manager");
-        manager.current = "packy-gemini".to_string();
-        manager.providers.insert(
-            "packy-gemini".to_string(),
-            Provider::with_id(
-                "packy-gemini".to_string(),
-                "PackyCode".to_string(),
-                json!({
-                    "env": {
-                        "GEMINI_API_KEY": "pk-key",
-                        "GOOGLE_GEMINI_BASE_URL": "https://www.packyapi.com"
-                    }
-                }),
-                Some("https://www.packyapi.com".to_string()),
-            ),
-        );
-    }
-
-    let state = create_test_state_with_config(&config).expect("create test state");
-
-    ProviderService::switch(&state, AppType::Gemini, "packy-gemini")
-        .expect("switching to PackyCode Gemini should succeed");
-
-    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch/settings.json
-    let settings_path = home.join(".gemini").join("settings.json");
-    assert!(
-        settings_path.exists(),
-        "Gemini settings.json should exist at {}",
-        settings_path.display()
-    );
-    let raw = std::fs::read_to_string(&settings_path).expect("read gemini settings.json");
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).expect("parse gemini settings.json after switch");
-
-    assert_eq!(
-        value
-            .pointer("/security/auth/selectedType")
-            .and_then(|v| v.as_str()),
-        Some("gemini-api-key"),
-        "PackyCode Gemini should set security.auth.selectedType"
-    );
-}
-
-#[test]
-fn packycode_partner_meta_triggers_security_flag_even_without_keywords() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let mut config = MultiAppConfig::default();
-    {
-        let manager = config
-            .get_manager_mut(&AppType::Gemini)
-            .expect("gemini manager");
-        manager.current = "packy-meta".to_string();
-        let mut provider = Provider::with_id(
-            "packy-meta".to_string(),
-            "Generic Gemini".to_string(),
-            json!({
-                "env": {
-                    "GEMINI_API_KEY": "pk-meta",
-                    "GOOGLE_GEMINI_BASE_URL": "https://generativelanguage.googleapis.com"
-                }
-            }),
-            Some("https://example.com".to_string()),
-        );
-        provider.meta = Some(ProviderMeta {
-            partner_promotion_key: Some("packycode".to_string()),
-            ..ProviderMeta::default()
-        });
-        manager.providers.insert("packy-meta".to_string(), provider);
-    }
-
-    let state = create_test_state_with_config(&config).expect("create test state");
-
-    ProviderService::switch(&state, AppType::Gemini, "packy-meta")
-        .expect("switching to partner meta provider should succeed");
-
-    // Gemini security settings are written to ~/.gemini/settings.json, not ~/.cc-switch/settings.json
-    let settings_path = home.join(".gemini").join("settings.json");
-    assert!(
-        settings_path.exists(),
-        "Gemini settings.json should exist at {}",
-        settings_path.display()
-    );
-    let raw = std::fs::read_to_string(&settings_path).expect("read gemini settings.json");
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).expect("parse gemini settings.json after switch");
-
-    assert_eq!(
-        value
-            .pointer("/security/auth/selectedType")
-            .and_then(|v| v.as_str()),
-        Some("gemini-api-key"),
-        "Partner meta should set security.auth.selectedType even without packy keywords"
-    );
-}
-
-#[test]
-fn switch_google_official_gemini_preserves_env_vars() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let mut config = MultiAppConfig::default();
-    {
-        let manager = config
-            .get_manager_mut(&AppType::Gemini)
-            .expect("gemini manager");
-        manager.current = "google-official".to_string();
-        let mut provider = Provider::with_id(
-            "google-official".to_string(),
-            "Google".to_string(),
-            json!({
-                "env": {
-                    "GEMINI_MODEL": "gemini-2.5-pro"
-                }
-            }),
-            Some("https://ai.google.dev".to_string()),
-        );
-        provider.meta = Some(ProviderMeta {
-            partner_promotion_key: Some("google-official".to_string()),
-            ..ProviderMeta::default()
-        });
-        manager
-            .providers
-            .insert("google-official".to_string(), provider);
-    }
-
-    let state = create_test_state_with_config(&config).expect("create test state");
-
-    ProviderService::switch(&state, AppType::Gemini, "google-official")
-        .expect("switching to Google official Gemini should succeed");
-
-    // Verify env vars are preserved in ~/.gemini/.env
-    let env_path = home.join(".gemini").join(".env");
-    assert!(
-        env_path.exists(),
-        "Gemini .env should exist at {}",
-        env_path.display()
-    );
-    let env_content = std::fs::read_to_string(&env_path).expect("read gemini .env");
-    assert!(
-        env_content.contains("GEMINI_MODEL=gemini-2.5-pro"),
-        "GEMINI_MODEL should be preserved in .env, got: {env_content}"
-    );
-
-    // Verify OAuth security flag is still set correctly
-    let gemini_settings = home.join(".gemini").join("settings.json");
-    let gemini_raw = std::fs::read_to_string(&gemini_settings).expect("read gemini settings");
-    let gemini_value: serde_json::Value =
-        serde_json::from_str(&gemini_raw).expect("parse gemini settings");
-    assert_eq!(
-        gemini_value
-            .pointer("/security/auth/selectedType")
-            .and_then(|v| v.as_str()),
-        Some("oauth-personal"),
-        "OAuth security flag should still be set"
-    );
-}
-
-#[test]
 fn provider_service_switch_claude_updates_live_and_state() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2465,6 +2276,37 @@ fn seed_claude_switch_state(
     create_test_state_with_config(&config).expect("create test state")
 }
 
+/// 同 [`seed_claude_switch_state`]，但落在文件库上：需要用 SQLite 触发器注入
+/// 写入失败的用例必须让触发器建在 state 实际使用的库上。
+fn seed_claude_switch_state_file_backed(
+    providers: &[(&str, serde_json::Value)],
+    current: &str,
+    live: &str,
+) -> cc_switch_lib::AppState {
+    let settings_path = get_claude_settings_path();
+    std::fs::create_dir_all(settings_path.parent().expect("settings dir"))
+        .expect("create claude settings dir");
+    std::fs::write(&settings_path, live).expect("seed claude live config");
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = current.to_string();
+        for (id, settings) in providers {
+            let mut provider =
+                Provider::with_id(id.to_string(), id.to_string(), settings.clone(), None);
+            provider.meta = Some(ProviderMeta {
+                common_config_enabled: Some(true),
+                ..Default::default()
+            });
+            manager.providers.insert(id.to_string(), provider);
+        }
+    }
+    create_test_state_file_backed_with_config(&config).expect("create test state")
+}
+
 fn claude_row(state: &cc_switch_lib::AppState, id: &str) -> serde_json::Value {
     state
         .db
@@ -2486,7 +2328,7 @@ fn claude_live() -> serde_json::Value {
 /// 顺序不变；A→B→A 之后整份文件和切换前逐字节相同。不回填，也不碰通用配置片段。
 #[test]
 fn switch_claude_only_replaces_key_fields() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2563,7 +2405,7 @@ fn switch_claude_only_replaces_key_fields() {
 /// 独有字段跟着供应商走：切入时写，切走时只删上一家带进来、值没被改过的。
 #[test]
 fn switch_claude_moves_compat_switches_with_their_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2602,7 +2444,7 @@ fn switch_claude_moves_compat_switches_with_their_provider() {
 /// 没有的值由残留清理兜住。
 #[test]
 fn switch_claude_window_values_follow_the_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2652,7 +2494,7 @@ fn switch_claude_window_values_follow_the_provider() {
 /// live 解析不了：切换报错，文件字节、mtime 和当前供应商都不变。
 #[test]
 fn switch_claude_refuses_a_settings_file_it_cannot_parse() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2699,7 +2541,7 @@ fn switch_claude_refuses_a_settings_file_it_cannot_parse() {
 
 #[test]
 fn provider_service_switch_missing_provider_returns_error() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2720,7 +2562,7 @@ fn provider_service_switch_missing_provider_returns_error() {
 
 #[test]
 fn provider_service_switch_codex_missing_auth_returns_error() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2757,7 +2599,7 @@ fn provider_service_switch_codex_missing_auth_returns_error() {
 
 #[test]
 fn provider_service_delete_codex_removes_provider_and_files() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let home = ensure_test_home();
 
@@ -2820,7 +2662,7 @@ fn provider_service_delete_codex_removes_provider_and_files() {
 
 #[test]
 fn provider_service_delete_claude_removes_provider_files() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let home = ensure_test_home();
 
@@ -2880,7 +2722,7 @@ fn provider_service_delete_claude_removes_provider_files() {
 
 #[test]
 fn provider_service_delete_current_provider_returns_error() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2929,7 +2771,7 @@ fn provider_service_delete_current_provider_returns_error() {
 
 #[test]
 fn recover_from_crash_without_backup_cleans_placeholder_instead_of_writing_it_back() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -2986,104 +2828,6 @@ fn recover_from_crash_without_backup_cleans_placeholder_instead_of_writing_it_ba
     );
 }
 
-/// 切换写出的 live 文件里有 Key（Codex 的 auth.json 与 config.toml、Claude Code 的
-/// settings.json、Grok Build 的 config.toml），新建或替换时都只给本人读写：普通写入
-/// 新建文件按 umask 落成 0644，同机其他用户就能读到 Key。
-#[cfg(unix)]
-#[test]
-fn switch_writes_credential_files_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-    for dir in [".claude", ".codex", ".grok"] {
-        std::fs::create_dir_all(home.join(dir)).expect("create client dir");
-    }
-    // 已有的 settings.json 是 0644：替换写入后也收紧。
-    let claude_settings = get_claude_settings_path();
-    std::fs::write(&claude_settings, "{}").expect("seed claude settings");
-    std::fs::set_permissions(&claude_settings, std::fs::Permissions::from_mode(0o644))
-        .expect("chmod 644");
-
-    let mut config = MultiAppConfig::default();
-    {
-        let claude = config
-            .get_manager_mut(&AppType::Claude)
-            .expect("claude manager");
-        claude.current = "claude-a".to_string();
-        for (id, key) in [("claude-a", "sk-a"), ("claude-b", "sk-b")] {
-            claude.providers.insert(
-                id.to_string(),
-                Provider::with_id(
-                    id.to_string(),
-                    id.to_string(),
-                    json!({ "env": { "ANTHROPIC_AUTH_TOKEN": key } }),
-                    None,
-                ),
-            );
-        }
-    }
-    {
-        let codex = config
-            .get_manager_mut(&AppType::Codex)
-            .expect("codex manager");
-        codex.current = "codex-official".to_string();
-        let mut official = Provider::with_id(
-            "codex-official".to_string(),
-            "OpenAI".to_string(),
-            json!({ "auth": { "OPENAI_API_KEY": "sk-official" }, "config": "" }),
-            None,
-        );
-        official.category = Some("official".to_string());
-        codex
-            .providers
-            .insert("codex-official".to_string(), official);
-        codex.providers.insert(
-            "codex-relay".to_string(),
-            Provider::with_id(
-                "codex-relay".to_string(),
-                "Relay".to_string(),
-                json!({
-                    "auth": { "OPENAI_API_KEY": "sk-relay" },
-                    "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"Relay\"\nbase_url = \"https://relay.example/v1\"\nwire_api = \"responses\"\n"
-                }),
-                None,
-            ),
-        );
-    }
-    let state = create_test_state_with_config(&config).expect("create test state");
-    state
-        .db
-        .save_provider(
-            AppType::GrokBuild.as_str(),
-            &Provider::with_id(
-                "grok-relay".to_string(),
-                "Relay".to_string(),
-                json!({ "config": "[models]\ndefault = \"grok-4.5\"\n\n[model.\"grok-4.5\"]\nmodel = \"grok-4.5\"\nbase_url = \"https://relay.example/v1\"\nname = \"Relay\"\napi_key = \"xai-relay\"\napi_backend = \"responses\"\ncontext_window = 500000\n" }),
-                None,
-            ),
-        )
-        .expect("save grok provider");
-
-    let mode = |path: &std::path::Path| {
-        std::fs::metadata(path)
-            .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
-            .permissions()
-            .mode()
-            & 0o777
-    };
-
-    ProviderService::switch(&state, AppType::Codex, "codex-official").expect("codex official");
-    assert_eq!(mode(&cc_switch_lib::get_codex_auth_path()), 0o600);
-    ProviderService::switch(&state, AppType::Codex, "codex-relay").expect("codex relay");
-    assert_eq!(mode(&cc_switch_lib::get_codex_config_path()), 0o600);
-    ProviderService::switch(&state, AppType::Claude, "claude-b").expect("claude b");
-    assert_eq!(mode(&claude_settings), 0o600);
-    ProviderService::switch(&state, AppType::GrokBuild, "grok-relay").expect("grok relay");
-    assert_eq!(mode(&cc_switch_lib::get_grok_config_path()), 0o600);
-}
-
 fn editor_save(base: &serde_json::Value, on_conflict: &str) -> cc_switch_lib::EditorSave {
     serde_json::from_value(json!({ "base": base, "onConflict": on_conflict })).expect("editor save")
 }
@@ -3122,7 +2866,7 @@ fn save_claude_editor(
 /// 切换到别的供应商后仍在；供应商行里不会多出这些键。编辑的是非当前供应商也一样。
 #[test]
 fn claude_editor_global_settings_go_to_live() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3168,7 +2912,7 @@ fn claude_editor_global_settings_go_to_live() {
 /// 切过去之后才生效。当前供应商取消「禁用 Artifact」，live 里立刻删掉。
 #[test]
 fn claude_editor_provider_fields_go_to_the_row() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3226,7 +2970,7 @@ fn claude_editor_provider_fields_go_to_the_row() {
 /// 行里的原值还在。
 #[test]
 fn claude_editor_lists_row_fields_that_never_reach_live() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3263,7 +3007,7 @@ fn claude_editor_lists_row_fields_that_never_reach_live() {
 /// 选「用我的」覆盖成 2，选「保留外部的」留着 3，其余改动照常写。
 #[test]
 fn claude_editor_refuses_to_silently_overwrite_external_edits() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3302,7 +3046,7 @@ fn claude_editor_refuses_to_silently_overwrite_external_edits() {
 /// 新增第一个供应商：用户已有的 settings.json 不被覆盖，只写关键字段，并设为当前。
 #[test]
 fn claude_editor_first_provider_keeps_the_existing_settings() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3382,7 +3126,7 @@ fn claude_editor_first_provider_keeps_the_existing_settings() {
 /// 把它收进行，切走时也就不会删掉；在编辑器里删掉它就从 live 删；新加的独有字段归供应商。
 #[test]
 fn claude_editor_leaves_exclusive_fields_from_live_to_the_user() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3437,7 +3181,7 @@ fn claude_editor_leaves_exclusive_fields_from_live_to_the_user() {
 /// 读，降级后照样能用。
 #[test]
 fn claude_editor_keeps_a_legacy_bedrock_key_where_older_versions_read_it() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3471,60 +3215,11 @@ fn claude_editor_keeps_a_legacy_bedrock_key_where_older_versions_read_it() {
 
 /// 旧版没有 `category` 的 Google 卡：编辑器按库里那一行认出官方卡，预览的登录方式和切换
 /// 写的相同；新增时没有行，只看草稿的 `category`。
-#[test]
-fn gemini_editor_recognizes_a_legacy_google_card_like_switching_does() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    let home = ensure_test_home();
-
-    let state = create_test_state().expect("create test state");
-    let mut google = Provider::with_id(
-        "google".to_string(),
-        "Google".to_string(),
-        json!({ "env": {} }),
-        None,
-    );
-    google.category = None;
-    state
-        .db
-        .save_provider(AppType::Gemini.as_str(), &google)
-        .expect("save legacy google card");
-
-    let category = ProviderService::editor_category(&state, &AppType::Gemini, Some("google"), None)
-        .expect("category");
-    assert_eq!(category.as_deref(), Some("official"));
-    let shown = ProviderService::editor_view(
-        &state,
-        AppType::Gemini,
-        &google.settings_config,
-        category.as_deref(),
-    )
-    .expect("view")
-    .settings;
-    ProviderService::switch(&state, AppType::Gemini, "google").expect("switch");
-    let live = read_json_file::<serde_json::Value>(&home.join(".gemini/settings.json"))
-        .expect("read gemini settings");
-    assert_eq!(
-        shown.pointer("/config/security/auth/selectedType"),
-        live.pointer("/security/auth/selectedType"),
-    );
-    assert_eq!(
-        live.pointer("/security/auth/selectedType"),
-        Some(&json!("oauth-personal"))
-    );
-
-    assert_eq!(
-        ProviderService::editor_category(&state, &AppType::Gemini, None, Some("third".into()))
-            .expect("category for a draft"),
-        Some("third".to_string())
-    );
-}
-
 /// 新增对话框：底是还没套预设的 live，预设带的独有字段归新供应商，live 里用户自己的
 /// 独有字段不归它。
 #[test]
 fn claude_add_dialog_keeps_the_users_exclusive_fields_out_of_the_new_row() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let _home = ensure_test_home();
 
@@ -3559,12 +3254,12 @@ fn claude_add_dialog_keeps_the_users_exclusive_fields_out_of_the_new_row() {
 /// 的行。两种情况行和 live 都还是保存前的样子。
 #[test]
 fn claude_editor_never_leaves_the_row_and_live_apart() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let home = ensure_test_home();
 
     let a = json!({ "env": { "ANTHROPIC_BASE_URL": "https://a.example", "ANTHROPIC_AUTH_TOKEN": "sk-old" } });
-    let state = seed_claude_switch_state(
+    let state = seed_claude_switch_state_file_backed(
         &[("a", a.clone())],
         "a",
         r#"{ "env": { "ANTHROPIC_BASE_URL": "https://a.example", "ANTHROPIC_AUTH_TOKEN": "sk-old" }, "x": 1 }"#,

@@ -11,7 +11,6 @@ import { toast } from "@/lib/toast";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ExternalLink,
   KeyRound,
   MoreHorizontal,
   Plus,
@@ -36,9 +35,6 @@ import {
 } from "@/lib/api";
 import { checkAllEnvConflicts, checkEnvConflicts } from "@/lib/api/env";
 import { useProviderActions } from "@/hooks/useProviderActions";
-import { openclawKeys, useOpenClawHealth } from "@/hooks/useOpenClaw";
-import { hermesKeys, useOpenHermesWebUI } from "@/hooks/useHermes";
-import { hermesApi } from "@/lib/api/hermes";
 import type { ProviderEditorSave } from "@/lib/api/providers";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { useUsageCacheBridge } from "@/hooks/useUsageCacheBridge";
@@ -67,7 +63,6 @@ import {
   type View,
 } from "@/lib/navigation";
 import { Sidebar } from "@/components/shell/Sidebar";
-import { useUpdate } from "@/contexts/UpdateContext";
 import { NewLayoutDialog } from "@/components/shell/NewLayoutDialog";
 import {
   AppPageHeader,
@@ -78,10 +73,6 @@ import { APP_DISPLAY_NAME, AppGlyph } from "@/components/shell/AppGlyph";
 import { ProfileSwitcher } from "@/components/profiles/ProfileSwitcher";
 import { ProviderList } from "@/components/providers/ProviderList";
 import { AddProviderDialog } from "@/components/providers/AddProviderDialog";
-import {
-  hasOpencodeDefinition,
-  isNativeOpencodeConfig,
-} from "@/components/providers/forms/helpers/opencodeFormUtils";
 import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { discardUnsavedChanges, hasUnsavedChanges } from "@/lib/unsavedChanges";
@@ -95,7 +86,6 @@ import {
 import { UsagePage } from "@/components/usage/UsagePage";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { SwitchModePanel } from "@/components/providers/mode/SwitchModePanel";
-import { DesktopAccessBar } from "@/components/providers/mode/DesktopAccessBar";
 import { proxyApi } from "@/lib/api/proxy";
 import type { AppMode, StartupAttachFailure } from "@/types/proxy";
 import UsageScriptModal from "@/components/UsageScriptModal";
@@ -110,7 +100,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { HoverTip } from "@/components/ui/hover-tip";
 import { HelpTip } from "@/components/ui/help-tip";
-import { PageTabs } from "@/components/ui/page-tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -120,18 +109,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
 import {
-  useDisableCurrentOmo,
-  useDisableCurrentOmoSlim,
-} from "@/lib/query/omo";
-import { invalidatePiProviderCaches, usePiCurrentState } from "@/lib/query/pi";
-import WorkspaceFilesPanel from "@/components/workspace/WorkspaceFilesPanel";
-import EnvPanel from "@/components/openclaw/EnvPanel";
-import ToolsPanel from "@/components/openclaw/ToolsPanel";
-import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
-import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
-import HermesMemoryPanel, {
-  HermesMemorySaveButton,
-} from "@/components/hermes/HermesMemoryPanel";
+  invalidatePiProviderCaches,
+  usePiCurrentState,
+} from "@/lib/query/pi";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
@@ -144,8 +124,6 @@ interface SyncStatusUpdatedPayload {
   error?: string;
 }
 
-type OpenClawConfigTab = "env" | "tools" | "agents";
-
 const getInitialApp = (): AppId => {
   const saved = localStorage.getItem(APP_STORAGE_KEY) as AppId | null;
   if (saved && APP_IDS.includes(saved)) {
@@ -157,7 +135,6 @@ const getInitialApp = (): AppId => {
 function App() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { hasUpdate } = useUpdate();
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
   const sharedFeatureApp = sharedFeatureAppOf(activeApp);
@@ -166,8 +143,6 @@ function App() {
     useState<SettingsSection>("general");
   // 进设置前停留的页面：设置目录里的「← 返回」回到这里
   const settingsReturnViewRef = useRef<View>("providers");
-  const [openclawConfigTab, setOpenclawConfigTab] =
-    useState<OpenClawConfigTab>("env");
   const [promptsApp, setPromptsApp] = useState<AppId>(() =>
     PROMPT_APP_IDS.includes(sharedFeatureApp) ? sharedFeatureApp : "claude",
   );
@@ -306,8 +281,7 @@ function App() {
     setFormModeView(modeView);
     setIsAddOpen(true);
   };
-  const currentAppUsesProxy =
-    proxyAppId !== null || activeApp === "claude-desktop";
+  const currentAppUsesProxy = proxyAppId !== null;
   const isCurrentAppTakeoverActive = proxyAppId
     ? takeoverStatus?.[proxyAppId] || false
     : false;
@@ -318,16 +292,12 @@ function App() {
   const { data: piCurrentState } = usePiCurrentState(activeApp === "pi");
   const providers = useMemo(() => data?.providers ?? {}, [data]);
   const currentProviderId = data?.currentProviderId ?? "";
-  const isOpenClawView = activeApp === "openclaw" && isAppPage(currentView);
-  const { data: openclawHealthWarnings = [] } =
-    useOpenClawHealth(isOpenClawView);
   const {
     addProvider,
     updateProvider,
     switchProvider,
     deleteProvider,
     saveUsageScript,
-    setAsDefaultModel,
   } = useProviderActions(
     activeApp,
     isProxyRunning && isCurrentAppTakeoverActive,
@@ -361,40 +331,6 @@ function App() {
         },
       );
     }
-  };
-
-  const disableOmoMutation = useDisableCurrentOmo();
-  const handleDisableOmo = () => {
-    disableOmoMutation.mutate(undefined, {
-      onSuccess: () => {
-        toast.success(t("omo.disabled", { defaultValue: "OMO 已停用" }));
-      },
-      onError: (error: Error) => {
-        toast.error(
-          t("omo.disableFailed", {
-            defaultValue: "停用 OMO 失败: {{error}}",
-            error: extractErrorMessage(error),
-          }),
-        );
-      },
-    });
-  };
-
-  const disableOmoSlimMutation = useDisableCurrentOmoSlim();
-  const handleDisableOmoSlim = () => {
-    disableOmoSlimMutation.mutate(undefined, {
-      onSuccess: () => {
-        toast.success(t("omo.disabled", { defaultValue: "OMO 已停用" }));
-      },
-      onError: (error: Error) => {
-        toast.error(
-          t("omo.disableFailed", {
-            defaultValue: "停用 OMO 失败: {{error}}",
-            error: extractErrorMessage(error),
-          }),
-        );
-      },
-    });
   };
 
   useEffect(() => {
@@ -449,9 +385,6 @@ function App() {
       queryKey: proxyKeys.takeoverStatus,
     });
     await queryClient.invalidateQueries({ queryKey: proxyKeys.status });
-    await queryClient.invalidateQueries({
-      queryKey: ["providers", "claude-desktop"],
-    });
   });
 
   useTauriEvent<SyncStatusUpdatedPayload | null | undefined>(
@@ -587,7 +520,6 @@ function App() {
   useEffect(() => {
     const checkEnvOnSwitch = async () => {
       try {
-        if (activeApp === "mcode") return;
         const conflicts = await checkEnvConflicts(activeApp);
 
         if (conflicts.length > 0) {
@@ -711,10 +643,6 @@ function App() {
   // 侧栏、⌘K 进用量统计看全部应用；只有应用页 ⋯ 进来时带应用筛选
   const openPageFromNav = (page: GlobalPage | "settings") => {
     // 「设置」上的绿点说的是 CC Switch 有新版本，点进去直接到「关于」里的更新按钮
-    if (page === "settings" && hasUpdate) {
-      openSettings("about");
-      return;
-    }
     if (page === "usage") setUsageAppFilter("all");
     openPage(page);
   };
@@ -752,11 +680,6 @@ function App() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
-
-  const [launchDashboardOpen, setLaunchDashboardOpen] = useState(false);
-  const openHermesWebUI = useOpenHermesWebUI(() =>
-    setLaunchDashboardOpen(true),
-  );
 
   const handleOpenWebsite = async (url: string) => {
     try {
@@ -812,25 +735,8 @@ function App() {
         await invalidatePiProviderCaches(queryClient);
       }
       // Invalidate queries to refresh the isInConfig state
-      if (activeApp === "opencode") {
-        await queryClient.invalidateQueries({
-          queryKey: ["opencodeLiveProviderIds"],
-        });
-      } else if (activeApp === "openclaw") {
-        await queryClient.invalidateQueries({
-          queryKey: openclawKeys.liveProviderIds,
-        });
-        await queryClient.invalidateQueries({
-          queryKey: openclawKeys.health,
-        });
-      } else if (activeApp === "hermes") {
-        await queryClient.invalidateQueries({
-          queryKey: hermesKeys.liveProviderIds,
-        });
-      } else if (activeApp === "mcode") {
-        await queryClient.invalidateQueries({
-          queryKey: ["providers", "mcode"],
-        });
+      if (activeApp === "pi") {
+        await invalidatePiProviderCaches(queryClient);
       }
       toast.success(
         activeApp === "pi"
@@ -870,34 +776,6 @@ function App() {
   };
 
   const handleDuplicateProvider = async (provider: Provider) => {
-    if (
-      activeApp === "opencode" &&
-      provider.category !== "omo" &&
-      provider.category !== "omo-slim"
-    ) {
-      // A copy gets a new ID, so it cannot inherit a built-in definition.
-      // Native V2 declarations name their package in `package`, not `npm`.
-      const isNative = isNativeOpencodeConfig(
-        JSON.stringify(provider.settingsConfig),
-        provider.meta?.opencodeConfigFormat,
-      );
-      if (
-        !hasOpencodeDefinition(
-          provider.settingsConfig,
-          isNative ? "package" : "npm",
-        )
-      ) {
-        toast.error(
-          t(
-            isNative
-              ? "opencode.duplicateRequiresNativeDefinition"
-              : "opencode.duplicateRequiresDefinition",
-          ),
-        );
-        return;
-      }
-    }
-
     const newSortIndex =
       provider.sortIndex !== undefined ? provider.sortIndex + 1 : undefined;
 
@@ -915,36 +793,15 @@ function App() {
       iconColor: provider.iconColor,
     };
 
-    if (
-      activeApp === "opencode" ||
-      activeApp === "openclaw" ||
-      activeApp === "hermes" ||
-      activeApp === "pi"
-    ) {
+    if (activeApp === "pi") {
       let liveProviderIds: string[] = [];
       try {
-        liveProviderIds =
-          activeApp === "opencode"
-            ? await queryClient.ensureQueryData({
-                queryKey: ["opencodeLiveProviderIds"],
-                queryFn: () => providersApi.getOpenCodeLiveProviderIds(),
-              })
-            : activeApp === "openclaw"
-              ? await queryClient.ensureQueryData({
-                  queryKey: openclawKeys.liveProviderIds,
-                  queryFn: () => providersApi.getOpenClawLiveProviderIds(),
-                })
-              : activeApp === "hermes"
-                ? await queryClient.ensureQueryData({
-                    queryKey: hermesKeys.liveProviderIds,
-                    queryFn: () => providersApi.getHermesLiveProviderIds(),
-                  })
-                : (
-                    await queryClient.ensureQueryData({
-                      queryKey: ["pi", "currentState"],
-                      queryFn: () => piApi.getCurrentState(),
-                    })
-                  ).enabledProviderIds;
+        liveProviderIds = (
+          await queryClient.ensureQueryData({
+            queryKey: ["pi", "currentState"],
+            queryFn: () => piApi.getCurrentState(),
+          })
+        ).enabledProviderIds;
       } catch (error) {
         console.error(
           "[App] Failed to load live provider IDs for duplication",
@@ -966,13 +823,6 @@ function App() {
         existingKeys,
       );
       duplicatedProvider.addToLive = false;
-    } else if (activeApp === "mcode") {
-      // The MCode list already includes its live custom nodes; the backend
-      // rejects a key that MCode itself owns.
-      duplicatedProvider.providerKey = generateUniqueProviderCopyKey(
-        provider.id,
-        Object.keys(providers),
-      );
     }
 
     if (provider.sortIndex !== undefined) {
@@ -1093,9 +943,9 @@ function App() {
 
   // ─── 应用页 ─────────────────────────────────────────────────────────────
 
-  // 应用页 ⋯ →「查看此应用的用量」：带上这个应用的筛选（Claude Desktop 的流量并在 Claude 里）
+  // 应用页 ⋯ →「查看此应用的用量」：带上这个应用的筛选
   const usageAppOf = (app: AppId): AppTypeFilter | null => {
-    const type = app === "claude-desktop" ? "claude" : app;
+    const type = app;
     return (KNOWN_APP_TYPES as ReadonlyArray<string>).includes(type)
       ? (type as AppTypeFilter)
       : null;
@@ -1149,42 +999,20 @@ function App() {
     </DropdownMenu>
   );
 
-  const appPageName =
-    currentView === "workspace"
-      ? t("appPage.workspace")
-      : currentView === "openclawConfig"
-        ? t("appPage.openclawConfig")
-        : currentView === "hermesMemory"
-          ? t("appPage.memory")
-          : t("appPage.providers");
+  const appPageName = t("appPage.providers");
 
   const renderAppPageHeader = () => (
     <AppPageHeader
       variant="app"
       icon={<AppGlyph app={activeApp} size={20} badgeClassName="bg-app" />}
       title={APP_DISPLAY_NAME[activeApp]}
-      subtitle={
-        activeApp === "openclaw" || activeApp === "hermes"
-          ? undefined
-          : appPageName
-      }
+      subtitle={appPageName}
       actions={
         <>
           {currentView === "providers" &&
-            activeApp !== "mcode" &&
             (settingsData?.showProfileSwitcher ?? false) && (
               <ProfileSwitcher activeApp={activeApp} />
             )}
-          {activeApp === "hermes" && (
-            <Button
-              variant="quiet"
-              size="regular"
-              onClick={() => void openHermesWebUI()}
-            >
-              {t("appPage.webUi")}
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Button>
-          )}
           {currentView === "providers" &&
             (settingsData?.showProviderSearch ?? true) && (
               <HoverTip
@@ -1214,51 +1042,11 @@ function App() {
               {t("provider.addProvider")}
             </Button>
           )}
-          {currentView === "hermesMemory" && <HermesMemorySaveButton />}
           {appMenu}
         </>
       }
     />
   );
-
-  // OpenClaw / Hermes 没有模式 tab，那一行放它们自己的页面导航。
-  // 换整块内容的是页面导航，用下划线页签；分段控件只留给模式和页内筛选。
-  const renderAppSegments = () => {
-    if (activeApp === "openclaw") {
-      return (
-        <div className="shrink-0 px-6 pt-2">
-          <PageTabs
-            aria-label={APP_DISPLAY_NAME.openclaw}
-            idPrefix="openclaw-page"
-            value={currentView}
-            onValueChange={(view) => setCurrentView(view)}
-            items={[
-              { value: "providers", label: t("appPage.providers") },
-              { value: "workspace", label: t("appPage.workspace") },
-              { value: "openclawConfig", label: t("appPage.openclawConfig") },
-            ]}
-          />
-        </div>
-      );
-    }
-    if (activeApp === "hermes") {
-      return (
-        <div className="shrink-0 px-6 pt-2">
-          <PageTabs
-            aria-label={APP_DISPLAY_NAME.hermes}
-            idPrefix="hermes-page"
-            value={currentView}
-            onValueChange={(view) => setCurrentView(view)}
-            items={[
-              { value: "providers", label: t("appPage.providers") },
-              { value: "hermesMemory", label: t("appPage.memory") },
-            ]}
-          />
-        </div>
-      );
-    }
-    return null;
-  };
 
   const listCallbacks = {
     onEdit: (provider: Provider) => {
@@ -1314,12 +1102,6 @@ function App() {
         className="min-h-0 flex-1 overflow-y-auto scroll-stable overflow-x-hidden px-6 pb-12 pt-4"
       >
         <div className="space-y-4">
-          {activeApp === "claude-desktop" && (
-            <DesktopAccessBar
-              current={providers[currentProviderId]}
-              onOpenRoutingSettings={() => openSettings("routing")}
-            />
-          )}
           <ProviderList
             {...listCallbacks}
             providers={providers}
@@ -1332,27 +1114,9 @@ function App() {
                 : switchProvider(provider))
             }
             onRemoveFromConfig={
-              activeApp === "opencode" ||
-              activeApp === "openclaw" ||
-              activeApp === "hermes" ||
-              activeApp === "pi" ||
-              activeApp === "mcode"
+              activeApp === "pi"
                 ? (provider) => setConfirmAction({ provider, action: "remove" })
                 : undefined
-            }
-            onDisableOmo={
-              activeApp === "opencode" ? handleDisableOmo : undefined
-            }
-            onDisableOmoSlim={
-              activeApp === "opencode" ? handleDisableOmoSlim : undefined
-            }
-            onSetAsDefault={
-              activeApp === "openclaw"
-                ? (provider, modelId) =>
-                    void setAsDefaultModel(provider, modelId)
-                : activeApp === "hermes"
-                  ? (provider) => void switchProvider(provider)
-                  : undefined
             }
           />
         </div>
@@ -1361,66 +1125,11 @@ function App() {
   };
 
   const renderAppPage = () => {
-    const body = (() => {
-      switch (currentView) {
-        case "workspace":
-          return <WorkspaceFilesPanel />;
-        case "openclawConfig":
-          return (
-            <>
-              {/* 二级页签：小一号、不画整行底线，挂在一级页签下面 */}
-              <div className="shrink-0 px-6 pt-1">
-                <PageTabs
-                  size="sm"
-                  aria-label={t("appPage.openclawConfig")}
-                  idPrefix="openclaw-config"
-                  controls="main-content"
-                  value={openclawConfigTab}
-                  onValueChange={setOpenclawConfigTab}
-                  items={[
-                    { value: "env", label: t("openclaw.env.title") },
-                    { value: "tools", label: t("openclaw.tools.title") },
-                    { value: "agents", label: t("openclaw.agents.title") },
-                  ]}
-                />
-              </div>
-              <div
-                id="main-content"
-                role="tabpanel"
-                aria-labelledby={`openclaw-config-${openclawConfigTab}`}
-                className="min-h-0 flex-1 overflow-y-auto scroll-stable"
-              >
-                {openclawConfigTab === "env" ? (
-                  <EnvPanel />
-                ) : openclawConfigTab === "tools" ? (
-                  <ToolsPanel />
-                ) : (
-                  <AgentsDefaultsPanel />
-                )}
-              </div>
-            </>
-          );
-        case "hermesMemory":
-          return (
-            <div
-              id="main-content"
-              className="min-h-0 flex-1 overflow-y-auto scroll-stable"
-            >
-              <HermesMemoryPanel onOpenWebUI={openHermesWebUI} />
-            </div>
-          );
-        default:
-          return renderProviderList();
-      }
-    })();
+    const body = renderProviderList();
 
     return (
       <>
         {renderAppPageHeader()}
-        {renderAppSegments()}
-        {isOpenClawView && openclawHealthWarnings.length > 0 && (
-          <OpenClawHealthBanner warnings={openclawHealthWarnings} />
-        )}
         {body}
       </>
     );
@@ -1488,10 +1197,7 @@ function App() {
             <PromptPanel
               appId={promptsApp}
               apps={PROMPT_APP_IDS.filter(
-                (app) =>
-                  visibleApps[app] ||
-                  (app === "claude" && visibleApps["claude-desktop"]) ||
-                  app === promptsApp,
+                (app) => visibleApps[app] || app === promptsApp,
               )}
               onAppChange={setPromptsApp}
               onNavigationBlockedChange={setPromptNavigationBusy}
@@ -1657,28 +1363,6 @@ function App() {
           proceed?.();
         }}
         onCancel={() => setPendingLeave(null)}
-      />
-
-      <ConfirmDialog
-        isOpen={launchDashboardOpen}
-        title={t("hermes.webui.launchConfirmTitle")}
-        message={t("hermes.webui.launchConfirmMessage")}
-        confirmText={t("hermes.webui.launchConfirmAction")}
-        variant="info"
-        onConfirm={() => {
-          setLaunchDashboardOpen(false);
-          void (async () => {
-            try {
-              await hermesApi.launchDashboard();
-              toast.success(t("hermes.webui.launching"));
-            } catch (error) {
-              toast.error(t("hermes.webui.launchFailed"), {
-                description: extractErrorMessage(error) || undefined,
-              });
-            }
-          })();
-        }}
-        onCancel={() => setLaunchDashboardOpen(false)}
       />
 
       <DeepLinkImportDialog />

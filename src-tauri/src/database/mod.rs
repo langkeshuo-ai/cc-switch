@@ -32,11 +32,9 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
-pub(crate) use dao::providers_seed::{
-    is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
-};
+pub(crate) use dao::providers_seed::{is_official_seed_id, CODEX_OFFICIAL_PROVIDER_ID};
 pub(crate) use dao::proxy::{PRICING_SOURCE_REQUEST, PRICING_SOURCE_RESPONSE};
+pub use dao::snapshots::AppSnapshot;
 pub use dao::FailoverQueueItem;
 pub use dao::Profile;
 
@@ -45,7 +43,7 @@ use crate::error::AppError;
 use rusqlite::{hooks::Action, Connection};
 use serde::Serialize;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 // DAO 方法通过 impl Database 提供，无需额外导出
@@ -84,12 +82,34 @@ macro_rules! lock_conn {
 // 导出宏供子模块使用
 pub(crate) use lock_conn;
 
+/// 回滚到 savepoint 并释放它，失败时**记录日志而非静默**。
+///
+/// 背景：迁移/裁剪这类"部分步骤失败仍要继续跑完"的事务，用 savepoint 隔离。
+/// 收尾时若 `ROLLBACK TO` 自身失败（磁盘满、锁冲突），savepoint 状态即被破坏，
+/// 后续 DDL 会连带失败；旧代码用 `.ok()` 吞掉，表现为"某功能突然报
+/// no such table"却无任何日志可查。
+///
+/// 为什么不直接 `?` 传播：调用方此时已有原始错误要返回（那才是根因），
+/// 回滚失败是次生信息，覆盖它反而会丢掉真正的失败原因。
+pub(crate) fn rollback_savepoint(conn: &Connection, name: &str) {
+    if let Err(e) = conn.execute(&format!("ROLLBACK TO {name}"), []) {
+        log::error!(
+            "回滚 savepoint '{name}' 失败：{e}。该事务内后续语句可能连带失败，\
+             schema 可能停在半迁移状态。"
+        );
+    }
+    if let Err(e) = conn.execute(&format!("RELEASE {name}"), []) {
+        log::error!("释放 savepoint '{name}' 失败：{e}。连接可能残留未释放的保存点。");
+    }
+}
+
 /// 数据库连接封装
 ///
 /// 使用 Mutex 包装 Connection 以支持在多线程环境（如 Tauri State）中共享。
 /// rusqlite::Connection 本身不是 Sync 的，因此需要这层包装。
+/// 外层 Arc 允许 DAO 方法把连接克隆进 `spawn_blocking` 闭包（见 [`Database::db_blocking`]）。
 pub struct Database {
-    pub(crate) conn: Mutex<Connection>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
     /// 请求日志总数缓存，见 `services::usage_stats::LogCountCache`
     pub(crate) log_count_cache: Mutex<Option<crate::services::usage_stats::LogCountCache>>,
 }
@@ -133,7 +153,7 @@ impl Database {
         register_db_change_hook(&conn);
 
         let db = Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;
@@ -208,7 +228,7 @@ impl Database {
         register_db_change_hook(&conn);
 
         let db = Self {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
             log_count_cache: Mutex::new(None),
         };
         db.create_tables()?;

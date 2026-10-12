@@ -652,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn records_only_changes_and_trims() {
         let scope = Scope::new();
         let store = scope.store();
@@ -668,7 +668,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn fingerprint_follows_the_catalog_pointer() {
         let _scope = Scope::new();
         assert_eq!(current_fingerprint(), NO_CATALOG);
@@ -689,7 +689,7 @@ mod tests {
     /// 进 Stack → 守护进程启动 → 退出 CC Switch（撤掉指针）→ 再打开（写回同一份目录）：守护进程
     /// 读到的正是现在这份，不提示。退出期间重启过的守护进程读到的是没有目录的配置，要提示。
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn quitting_and_reopening_cc_switch_is_not_stale() {
         let scope = Scope::new();
         let store = scope.store();
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn desktop_app_servers_are_reported_separately() {
         let scope = Scope::new();
         let store = scope.store();
@@ -791,7 +791,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn account_switch_is_reported_without_a_catalog_and_refresh_is_not() {
         let scope = Scope::new();
         let store = scope.store();
@@ -870,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn file_login_fingerprint_separates_users_in_the_same_workspace() {
         use base64::Engine;
         let scope = Scope::new();
@@ -900,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn restart_skips_when_the_daemon_is_not_running() {
         let _scope = Scope::new();
         let restarted = Arc::new(AtomicBool::new(false));

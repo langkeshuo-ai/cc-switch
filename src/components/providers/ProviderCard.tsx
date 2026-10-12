@@ -134,15 +134,7 @@ function isOfficialProvider(provider: Provider, appId: AppId): boolean {
       (!apiKey || (typeof apiKey === "string" && apiKey.trim() === ""))
     );
   }
-  if (appId === "gemini") {
-    // 无 GEMINI_API_KEY 且无 GOOGLE_GEMINI_BASE_URL → Google OAuth 官方模式
-    const apiKey = config?.env?.GEMINI_API_KEY;
-    const baseUrl = config?.env?.GOOGLE_GEMINI_BASE_URL;
-    return (
-      (!apiKey || (typeof apiKey === "string" && apiKey.trim() === "")) &&
-      (!baseUrl || (typeof baseUrl === "string" && baseUrl.trim() === ""))
-    );
-  }
+
   return false;
 }
 
@@ -320,7 +312,7 @@ export function ProviderCard({
         )}
 
         <ProviderIconBox
-          icon={resolveProviderIcon(appId, provider.icon, provider.iconColor)}
+          icon={resolveProviderIcon(provider.icon)}
           name={provider.name}
           color={provider.iconColor}
           className={cn(
@@ -526,7 +518,7 @@ export function ProviderCard({
             onTest={
               // 连通检测对第三方/自定义/Copilot/Codex-OAuth 供应商开放。官方供应商一律不给：
               // 它们 base_url 故意留空、走客户端默认/OAuth 端点，没有可靠的探测目标。
-              onTest && appId !== "mcode" && provider.category !== "official"
+              onTest && provider.category !== "official"
                 ? () => onTest(provider)
                 : undefined
             }

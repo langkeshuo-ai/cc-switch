@@ -125,6 +125,8 @@ mod tests {
         "settings.rs",
         "database/dao/providers.rs",
         "mode/current.rs",
+        // 纯测试支持文件（经 #[cfg(test)] #[path] 引入），造数据允许直接读写直连指针
+        "services/proxy/tests.rs",
     ];
 
     fn scan(dir: &Path, root: &Path, hits: &mut Vec<String>) {

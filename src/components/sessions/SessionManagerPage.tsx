@@ -135,7 +135,6 @@ interface SessionManagerPageProps {
 
 export function SessionManagerPage({
   appId,
-  fromApp,
   onOpenTerminalSettings,
 }: SessionManagerPageProps) {
   const { t } = useTranslation();
@@ -197,10 +196,7 @@ export function SessionManagerPage({
   const availableApps = useMemo(() => {
     const visible = { ...DEFAULT_VISIBLE_APPS, ...settings?.visibleApps };
     return SESSION_APP_IDS.filter(
-      (app) =>
-        visible[app] ||
-        (app === "claude" && visible["claude-desktop"]) ||
-        app === appFilter,
+      (app) => visible[app] || app === appFilter,
     );
   }, [settings?.visibleApps, appFilter]);
 
@@ -1195,14 +1191,6 @@ export function SessionManagerPage({
             />
           </div>
 
-          {fromApp === "claude-desktop" && appFilter === "claude" && (
-            <p className="m-0 mx-6 mt-2 shrink-0 text-caption text-fg-2">
-              {t("sessionManager.desktopNote", {
-                defaultValue:
-                  "Claude Desktop 没有单独的会话记录，这里显示 Claude Code 的会话。",
-              })}
-            </p>
-          )}
 
           {appFilter === "pi" && piStatus === "requires_project_context" && (
             <div role="status" className="mx-6 mt-3 shrink-0">
@@ -1312,13 +1300,6 @@ export function SessionManagerPage({
               >
                 {renderList()}
               </div>
-              {appFilter === "hermes" && (
-                <p className="m-0 mx-6 mt-2 shrink-0 text-caption text-fg-3">
-                  {t("sessionManager.hermesLimit", {
-                    defaultValue: "Hermes 只显示最近 500 个会话",
-                  })}
-                </p>
-              )}
               <div className="flex-1" />
             </>
           )}

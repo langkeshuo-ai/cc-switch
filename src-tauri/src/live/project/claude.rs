@@ -413,10 +413,8 @@ pub(crate) fn env_string<'a>(env: &'a Map<String, Value>, key: &str) -> Option<&
 }
 
 pub(crate) fn has_one_m_marker(model: &str) -> bool {
-    model
-        .trim_end()
-        .to_ascii_lowercase()
-        .ends_with(crate::claude_desktop_config::ONE_M_CONTEXT_MARKER)
+    // 原 `crate::claude_desktop_config::ONE_M_CONTEXT_MARKER`（裁剪域）内联为字面量。
+    model.trim_end().to_ascii_lowercase().ends_with("[1m]")
 }
 
 fn is_truthy(value: &Value) -> bool {

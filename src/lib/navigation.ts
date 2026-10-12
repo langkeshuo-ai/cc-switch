@@ -8,11 +8,7 @@ import type { AppId } from "@/lib/api";
  * - 设置：侧栏换成设置目录，6 个分组。
  */
 
-export type AppPage =
-  | "providers"
-  | "workspace"
-  | "openclawConfig"
-  | "hermesMemory";
+export type AppPage = "providers";
 
 export type GlobalPage =
   | "usage"
@@ -43,12 +39,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "about",
 ];
 
-const APP_PAGES: AppPage[] = [
-  "providers",
-  "workspace",
-  "openclawConfig",
-  "hermesMemory",
-];
+const APP_PAGES: AppPage[] = ["providers"];
 
 const GLOBAL_PAGES: GlobalPage[] = [
   "usage",
@@ -64,12 +55,8 @@ const GLOBAL_PAGES: GlobalPage[] = [
 export const VIEW_STORAGE_KEY = "cc-switch-last-view";
 export const APP_STORAGE_KEY = "cc-switch-last-app";
 
-/** 旧版视图名 → 新视图（OpenClaw 的三个配置页合成了一个）。 */
-const LEGACY_VIEWS: Record<string, View> = {
-  openclawEnv: "openclawConfig",
-  openclawTools: "openclawConfig",
-  openclawAgents: "openclawConfig",
-};
+/** 旧版视图名 → 新视图。 */
+const LEGACY_VIEWS: Record<string, View> = {};
 
 export function isAppPage(view: View): view is AppPage {
   return (APP_PAGES as string[]).includes(view);
@@ -89,16 +76,8 @@ export function parseView(value: string | null | undefined): View | null {
 }
 
 /** 应用专属页只对它所属的应用成立；换了应用就回到供应商页。 */
-export function appPageBelongsTo(page: AppPage, app: AppId): boolean {
-  switch (page) {
-    case "providers":
-      return true;
-    case "workspace":
-    case "openclawConfig":
-      return app === "openclaw";
-    case "hermesMemory":
-      return app === "hermes";
-  }
+export function appPageBelongsTo(page: AppPage, _app: AppId): boolean {
+  return page === "providers";
 }
 
 export function readStoredView(): View {
@@ -140,7 +119,6 @@ export function normalizeSettingsSection(
   }
 }
 
-/** 提示词、会话页在 Claude Desktop 上看的是 Claude Code 的内容（两者共用）。 */
 export function sharedFeatureAppOf(app: AppId): AppId {
-  return app === "claude-desktop" ? "claude" : app;
+  return app;
 }

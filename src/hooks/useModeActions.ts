@@ -11,7 +11,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
 
 /** 这几个客户端只在启动时读配置：改写了客户端文件要提示重启（Claude Code 会自己重读）。 */
-const RESTART_TO_APPLY = new Set<AppId>(["codex", "gemini", "grokbuild"]);
+const RESTART_TO_APPLY = new Set<AppId>(["codex"]);
 
 export interface ModeSnapshot {
   mode: AppMode;

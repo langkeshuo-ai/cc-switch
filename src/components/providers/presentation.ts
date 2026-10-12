@@ -594,79 +594,6 @@ function buildSwitchSectionsByView(input: SwitchModeInput): ProviderSection[] {
   ];
 }
 
-// ─── Claude Desktop ─────────────────────────────────────────────────────────
-
-export function buildDesktopSections({
-  t,
-  providers,
-  currentId,
-  onSwitch,
-}: {
-  t: TFunction;
-  providers: Provider[];
-  currentId: string;
-  onSwitch: (provider: Provider) => void;
-}): ProviderSection[] {
-  return [
-    {
-      key: "all",
-      items: providers.map((p) => {
-        const mapping = providerNeedsRouting("claude-desktop", p);
-        const chips: CardChip[] = [];
-        if (isOfficialAccount("claude-desktop", p)) {
-          chips.push({
-            key: "official",
-            label: t("providerCard.chip.official"),
-            tone: "outline",
-          });
-        }
-        const current = p.id === currentId;
-        chips.push(
-          mapping
-            ? {
-                key: "mapping",
-                label: t("providerCard.chip.mapping"),
-                tone: current ? "outline" : "route",
-              }
-            : {
-                key: "direct",
-                label: t("providerCard.chip.direct"),
-                tone: current ? "outline" : "direct",
-              },
-        );
-        if (current) {
-          return {
-            provider: p,
-            presentation: {
-              tone: mapping ? "route" : "direct",
-              status: {
-                label: t("providerCard.status.inUse"),
-                dot: mapping ? "route" : "direct",
-              },
-              chips,
-              buttons: [],
-              deleteDisabledReason: t("providerCard.reason.inUseCannotDelete"),
-            },
-          };
-        }
-        return {
-          provider: p,
-          presentation: {
-            chips,
-            buttons: [
-              {
-                key: "switch",
-                label: t("providerCard.action.switch"),
-                onClick: () => onSwitch(p),
-              },
-            ],
-          },
-        };
-      }),
-    },
-  ];
-}
-
 // ─── 共存式应用（OpenCode / OpenClaw / Hermes / Pi / MiniMax Code）───────────
 
 export interface AdditiveInput {
@@ -674,23 +601,11 @@ export interface AdditiveInput {
   t: TFunction;
   providers: Provider[];
   isInConfig: (provider: Provider) => boolean;
-  /** OpenCode：当前启用的 OMO / OMO Slim */
-  currentOmoId?: string | null;
-  currentOmoSlimId?: string | null;
-  /** OpenClaw：默认模型属于哪家、它的模型名 */
-  openclawDefault?: { providerId: string; model: string } | null;
-  /** OpenClaw：每家可选的模型 */
-  openclawModels?: (provider: Provider) => { id: string; name?: string }[];
-  /** Hermes：model.provider 指向的那家 */
-  hermesCurrentId?: string | null;
-  isHermesManaged?: (provider: Provider) => boolean;
   /** Pi：读不到当前配置时一律不能改 */
   piStateUnavailable?: boolean;
   actions: {
     add: (provider: Provider) => void;
     remove: (provider: Provider) => void;
-    disableOmo: (provider: Provider) => void;
-    setDefault: (provider: Provider, modelId?: string) => void;
   };
 }
 
@@ -705,70 +620,13 @@ export function buildAdditiveSections(input: AdditiveInput): ProviderSection[] {
 
   for (const p of providers) {
     const chips: CardChip[] = [];
-    const isOmo = p.category === "omo";
-    const isOmoSlim = p.category === "omo-slim";
-    if (isOmo) chips.push({ key: "omo", label: "OMO", tone: "outline" });
-    if (isOmoSlim) chips.push({ key: "slim", label: "Slim", tone: "outline" });
-
-    // OMO / Slim：插件配置，同一时间只启用一个
-    if (isOmo || isOmoSlim) {
-      const enabled = isOmo
-        ? p.id === input.currentOmoId
-        : p.id === input.currentOmoSlimId;
-      if (enabled) {
-        // 分组标题已经写了「已添加」，按钮是「停用」，卡上不再重复写状态
-        added.push({
-          provider: p,
-          presentation: {
-            chips,
-            buttons: [
-              {
-                key: "disable",
-                label: t("providerCard.action.disable"),
-                onClick: () => actions.disableOmo(p),
-              },
-            ],
-          },
-        });
-      } else {
-        available.push({
-          provider: p,
-          presentation: {
-            chips,
-            buttons: [
-              {
-                key: "enable",
-                label: t("providerCard.action.enable"),
-                onClick: () => actions.add(p),
-              },
-            ],
-          },
-        });
-      }
-      continue;
-    }
-
-    const managed = app === "hermes" && (input.isHermesManaged?.(p) ?? false);
-    if (managed) {
-      chips.push({
-        key: "managed",
-        label: t("providerCard.chip.hermesManaged"),
-        tone: "outline",
-        title: t("provider.managedByHermesHint"),
-      });
-    }
-    const readOnlyReason = managed
-      ? t("provider.managedByHermesHint")
-      : undefined;
 
     if (!input.isInConfig(p)) {
       available.push({
         provider: p,
         presentation: {
           chips,
-          dim: managed,
-          editDisabledReason: readOnlyReason,
-          deleteDisabledReason: readOnlyReason ?? piBlocked,
+          deleteDisabledReason: piBlocked,
           buttons: [
             {
               key: "add",
@@ -785,80 +643,24 @@ export function buildAdditiveSections(input: AdditiveInput): ProviderSection[] {
       continue;
     }
 
-    // 已添加：白底、不写「● 已添加」（分组标题和「移除」已经说清楚）；灰底只给默认那一家
+    // 已添加：白底、不写「● 已添加」（分组标题和「移除」已经说清楚）
     const buttons: CardButton[] = [];
-    let status: CardPresentation["status"];
-    let isDefault = false;
-    let removeReason: string | undefined = piBlocked;
-
-    if (app === "openclaw") {
-      isDefault = input.openclawDefault?.providerId === p.id;
-      if (isDefault) {
-        status = { label: t("providerCard.status.default"), dot: "muted" };
-        chips.push({
-          key: "defaultModel",
-          label: t("providerCard.chip.defaultModel", {
-            model: input.openclawDefault?.model ?? "",
-          }),
-          tone: "outline",
-        });
-        removeReason = t("providerCard.reason.defaultCannotRemove");
-      } else {
-        const models = input.openclawModels?.(p) ?? [];
-        buttons.push({
-          key: "setDefault",
-          label: t("providerCard.action.setDefault"),
-          onClick: () => actions.setDefault(p, models[0]?.id),
-          menu:
-            models.length > 1
-              ? {
-                  title: t("openclaw.selectDefaultModel"),
-                  options: models.map((model) => ({
-                    key: model.id,
-                    label: model.name?.trim() || model.id,
-                    detail:
-                      model.name?.trim() && model.name.trim() !== model.id
-                        ? model.id
-                        : undefined,
-                    onSelect: () => actions.setDefault(p, model.id),
-                  })),
-                }
-              : undefined,
-        });
-      }
-    }
-
-    if (app === "hermes") {
-      if (p.id === input.hermesCurrentId) {
-        isDefault = true;
-        status = { label: t("providerCard.status.current"), dot: "muted" };
-        removeReason = t("providerCard.reason.currentCannotRemove");
-      } else {
-        buttons.push({
-          key: "use",
-          label: t("providerCard.action.enable"),
-          onClick: () => actions.setDefault(p),
-          disabledReason: readOnlyReason,
-        });
-      }
-    }
+    const status: CardPresentation["status"] = undefined;
+    const removeReason: string | undefined = piBlocked;
 
     buttons.push({
       key: "remove",
       label: t("providerCard.action.remove"),
       onClick: () => actions.remove(p),
-      disabledReason: removeReason ?? readOnlyReason,
+      disabledReason: removeReason,
     });
 
     added.push({
       provider: p,
       presentation: {
-        tone: isDefault ? "neutral" : undefined,
         status,
         chips,
-        dim: managed,
-        editDisabledReason: readOnlyReason,
-        deleteDisabledReason: readOnlyReason ?? piBlocked,
+        deleteDisabledReason: piBlocked,
         buttons,
       },
     });

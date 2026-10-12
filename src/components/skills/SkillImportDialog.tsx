@@ -93,13 +93,7 @@ export function SkillImportDialog({
             apps: {
               claude: chosen.has("claude"),
               codex: chosen.has("codex"),
-              gemini: chosen.has("gemini"),
-              grokbuild: chosen.has("grokbuild"),
-              opencode: chosen.has("opencode"),
-              openclaw: false,
-              hermes: chosen.has("hermes"),
               pi: false,
-              mcode: chosen.has("mcode"),
             },
           };
         }),

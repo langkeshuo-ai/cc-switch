@@ -329,6 +329,9 @@ export interface WebDavSyncSettings {
   remoteRoot?: string;
   profile?: string;
   status?: WebDavSyncStatus;
+  allowPlaintextHttp?: boolean;
+  encryptionEnabled?: boolean;
+  encryptionPassword?: string;
 }
 
 // S3 同步配置
@@ -343,6 +346,9 @@ export interface S3SyncSettings {
   remoteRoot?: string;
   profile?: string;
   status?: WebDavSyncStatus;
+  allowPlaintextHttp?: boolean;
+  encryptionEnabled?: boolean;
+  encryptionPassword?: string;
 }
 
 export type RemoteSnapshotLayout = "current" | "legacy";
@@ -779,7 +785,7 @@ export interface McpConfigResponse {
 export interface UniversalProviderApps {
   claude: boolean;
   codex: boolean;
-  gemini: boolean;
+  pi: boolean;
 }
 
 // Claude 模型配置

@@ -329,10 +329,6 @@ describe("SkillsPage (Discover)", () => {
         apps: {
           claude: true,
           codex: true,
-          gemini: false,
-          opencode: false,
-          openclaw: false,
-          hermes: false,
           pi: false,
         },
         installedAt: 1,

@@ -22,35 +22,16 @@ import {
 const DIRECTORY_FIELD: Record<DirectoryAppId, keyof Settings> = {
   claude: "claudeConfigDir",
   codex: "codexConfigDir",
-  gemini: "geminiConfigDir",
-  grokbuild: "grokConfigDir",
-  opencode: "opencodeConfigDir",
-  openclaw: "openclawConfigDir",
-  hermes: "hermesConfigDir",
   pi: "piConfigDir",
 };
 
 const DIRECTORY_PLACEHOLDER: Record<DirectoryAppId, string> = {
   claude: "settings.browsePlaceholderClaude",
   codex: "settings.browsePlaceholderCodex",
-  gemini: "settings.browsePlaceholderGemini",
-  grokbuild: "settings.browsePlaceholderGrok",
-  opencode: "settings.browsePlaceholderOpencode",
-  openclaw: "settings.browsePlaceholderOpenclaw",
-  hermes: "settings.browsePlaceholderHermes",
   pi: "settings.browsePlaceholderPi",
 };
 
-const DIRECTORY_APPS: DirectoryAppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "opencode",
-  "openclaw",
-  "hermes",
-  "pi",
-];
+const DIRECTORY_APPS: DirectoryAppId[] = ["claude", "codex", "pi"];
 
 const normalizeDir = (value: unknown) =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;

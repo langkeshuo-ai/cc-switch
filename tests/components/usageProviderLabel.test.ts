@@ -15,8 +15,8 @@ describe("getUsageProviderLabel", () => {
       shortLabel: "usage.sessionProvider.short",
       hint: "usage.sessionProvider.hint",
     });
-    expect(getUsageProviderLabel("Gemini (Session)", t).label).toBe(
-      "usage.sessionProvider.label:Gemini CLI",
+    expect(getUsageProviderLabel("Pi (Session)", t).label).toBe(
+      "usage.sessionProvider.label:Pi",
     );
   });
 

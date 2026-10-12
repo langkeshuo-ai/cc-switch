@@ -27,8 +27,6 @@ import { isOfficialAccount } from "@/utils/providerCapabilities";
 const CLIENT_FILE: Partial<Record<AppId, string>> = {
   claude: "~/.claude/settings.json",
   codex: "~/.codex/config.toml",
-  gemini: "~/.gemini/.env",
-  grokbuild: "~/.grok/config.toml",
 };
 
 export type ModeDialogState =

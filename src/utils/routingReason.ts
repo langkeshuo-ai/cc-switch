@@ -21,7 +21,7 @@ export function getRoutingReason(
   const isCopilotProvider =
     app === "claude" && provider.meta?.providerType === "github_copilot";
   const isCodexChatFormat =
-    (app === "codex" || app === "grokbuild") &&
+    app === "codex" &&
     (provider.meta?.apiFormat === "openai_chat" ||
       (typeof (provider.settingsConfig as Record<string, any>)?.config ===
         "string" &&
@@ -31,7 +31,7 @@ export function getRoutingReason(
           ),
         )));
   const isCodexAnthropicFormat =
-    (app === "codex" || app === "grokbuild") &&
+    app === "codex" &&
     (provider.meta?.apiFormat === "anthropic" ||
       (typeof (provider.settingsConfig as Record<string, any>)?.config ===
         "string" &&
@@ -75,10 +75,7 @@ export function getRoutingReason(
       proxyRequiredReason = t("notifications.proxyReasonAnthropicMessages", {
         defaultValue: "使用 Anthropic Messages 接口格式",
       });
-    } else if (
-      provider.meta?.isFullUrl &&
-      (app === "claude" || app === "codex" || app === "grokbuild")
-    ) {
+    } else if (provider.meta?.isFullUrl && (app === "claude" || app === "codex")) {
       proxyRequiredReason = t("notifications.proxyReasonFullUrl", {
         defaultValue: "开启了完整 URL 连接模式",
       });

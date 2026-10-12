@@ -29,13 +29,7 @@ pub async fn start_proxy_server(
 #[tauri::command]
 pub async fn stop_proxy_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let takeover = state.proxy_service.get_takeover_status().await?;
-    if takeover.claude
-        || takeover.codex
-        || takeover.gemini
-        || takeover.grokbuild
-        || takeover.opencode
-        || takeover.openclaw
-    {
+    if takeover.claude || takeover.codex {
         return Err(
             "仍有应用处于代理接管状态，请先在设置中关闭对应应用接管后再停止本地路由。".to_string(),
         );
@@ -243,29 +237,11 @@ pub async fn update_global_proxy_config(
         if let Err(error) = crate::mode::controller::resync_routes(state.inner()).await {
             failures.push(error);
         }
-        if let Err(error) = resync_claude_desktop_gateway(&state.db) {
-            failures.push(format!("claude-desktop: {error}"));
-        }
         if !failures.is_empty() {
             return Err(failures.join("; "));
         }
     }
     Ok(())
-}
-
-/// Claude Desktop 的模型映射卡把本地网关地址写死在 profile 里，不在 `resync_routes` 的
-/// 四个路由应用之内：服务换了地址就按当前那张卡重写一遍。
-fn resync_claude_desktop_gateway(db: &crate::database::Database) -> Result<(), String> {
-    if !crate::claude_desktop_config::current_provider_uses_proxy(db) {
-        return Ok(());
-    }
-    let Some(provider) =
-        crate::mode::current::direct_provider(db, &crate::app_config::AppType::ClaudeDesktop)
-            .map_err(|e| e.to_string())?
-    else {
-        return Ok(());
-    };
-    crate::claude_desktop_config::apply_provider(db, &provider).map_err(|e| e.to_string())
 }
 
 /// 获取指定应用的代理配置

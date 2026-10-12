@@ -11,8 +11,6 @@ import { SESSION_APP_IDS } from "@/components/sessions/utils";
 const STYLE_IDS: ReaderStyleId[] = [
   "claude",
   "codex",
-  "gemini",
-  "opencode",
   "pi",
   "generic",
 ];
@@ -63,8 +61,7 @@ describe("agentStyles", () => {
   });
 
   it("关键取值（§6.6 表）", () => {
-    const { claude, codex, gemini, opencode, pi, generic } =
-      AGENT_READER_STYLES;
+    const { claude, codex, pi, generic } = AGENT_READER_STYLES;
     expect(claude).toMatchObject({
       assistantGlyph: "⏺",
       resultConnector: "⎿",
@@ -78,17 +75,8 @@ describe("agentStyles", () => {
       monoTitles: false,
       merge: { readSearchRuns: true, mcpSameServerRuns: false },
     });
-    expect(gemini.step).toEqual({
-      success: "✓",
-      error: "x",
-      pending: "o",
-      interrupted: "-",
-    });
-    expect(gemini.resultFrame).toBe("box");
-    expect(opencode).toMatchObject({ titleFormat: "icon", showStepCost: true });
     expect(pi.resultFrame).toBe("none");
-    // 只有 OpenCode 显示每步费用（D13）
-    STYLE_IDS.filter((id) => id !== "opencode").forEach((id) =>
+    STYLE_IDS.forEach((id) =>
       expect(AGENT_READER_STYLES[id].showStepCost).toBe(false),
     );
     // generic 的动词全部是 i18n key，覆盖所有工具类别

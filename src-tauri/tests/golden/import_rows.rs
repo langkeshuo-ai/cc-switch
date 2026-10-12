@@ -7,7 +7,7 @@ use cc_switch_lib::{
     import_default_config_test_hook, import_provider_from_deeplink, parse_deeplink_url, AppType,
 };
 
-use crate::support::{create_test_state, reset_test_fs, test_mutex};
+use crate::support::{create_test_state_file_backed, reset_test_fs, test_mutex};
 use crate::util::{assert_golden, dump_provider_rows, write_home_file};
 
 /// 深链生成的 id 是「名称-毫秒时间戳」，快照里换成固定写法。
@@ -19,9 +19,9 @@ fn stable_deeplink_id(id: &str) -> String {
 }
 
 fn import_deeplinks(app: AppType, urls: &[&str], snapshot: &str) {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
-    let state = create_test_state().expect("create test state");
+    let state = create_test_state_file_backed().expect("create test state");
     for url in urls {
         let request = parse_deeplink_url(url).expect("parse deeplink url");
         import_provider_from_deeplink(&state, request).expect("import provider from deeplink");
@@ -52,35 +52,13 @@ fn deeplink_codex_rows() {
     );
 }
 
-#[test]
-fn deeplink_gemini_rows() {
-    import_deeplinks(
-        AppType::Gemini,
-        &[
-            "ccswitch://v1/import?resource=provider&app=gemini&name=Relay%20Gemini&homepage=https%3A%2F%2Frelay.example&endpoint=https%3A%2F%2Fapi.relay.example&apiKey=g-relay&model=gemini-2.5-pro",
-        ],
-        "rows/deeplink-gemini.txt",
-    );
-}
-
-#[test]
-fn deeplink_grokbuild_rows() {
-    import_deeplinks(
-        AppType::GrokBuild,
-        &[
-            "ccswitch://v1/import?resource=provider&app=grokbuild&name=Relay%20Grok&homepage=https%3A%2F%2Frelay.example&endpoint=https%3A%2F%2Fapi.relay.example%2Fv1&apiKey=xai-relay&model=grok-4.5",
-        ],
-        "rows/deeplink-grokbuild.txt",
-    );
-}
-
 /// 首启：先把 live 导入成 `default`，再 seed 官方预设（顺序同 `lib.rs` 的启动流程）。
 /// live 里供应商以外的部分进了通用配置片段，片段也一起锁。关键字段（模型名、推理档位
 /// 等）不进片段、留在 `default` 行里：片段已冻结，收进去就再也写不回 live。
 ///
 /// `settings_sort` 见 [`crate::util::sort_objects`]：Gemini 的 `.env` 解析顺序不稳定。
 fn first_run_import(app: AppType, snapshot: &str, settings_sort: &[&str]) {
-    let state = create_test_state().expect("create test state");
+    let state = create_test_state_file_backed().expect("create test state");
     import_default_config_test_hook(&state, app.clone()).expect("import live config");
     state
         .db
@@ -100,7 +78,7 @@ fn first_run_import(app: AppType, snapshot: &str, settings_sort: &[&str]) {
 
 #[test]
 fn first_run_claude_rows() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     write_home_file(
         ".claude/settings.json",
@@ -129,7 +107,7 @@ fn first_run_claude_rows() {
 
 #[test]
 fn first_run_codex_rows() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     write_home_file(".codex/auth.json", r#"{"OPENAI_API_KEY":"sk-live"}"#);
     write_home_file(
@@ -151,43 +129,4 @@ command = "external"
 "#,
     );
     first_run_import(AppType::Codex, "rows/first-run-codex.txt", &[]);
-}
-
-#[test]
-fn first_run_gemini_rows() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    write_home_file(
-        ".gemini/.env",
-        "GEMINI_API_KEY=g-live\nGOOGLE_GEMINI_BASE_URL=https://relay.example\nGEMINI_MODEL=gemini-2.5-pro\n",
-    );
-    write_home_file(
-        ".gemini/settings.json",
-        r#"{
-  "security": { "auth": { "selectedType": "gemini-api-key" } },
-  "ui": { "theme": "GitHub" }
-}"#,
-    );
-    first_run_import(AppType::Gemini, "rows/first-run-gemini.txt", &["/env"]);
-}
-
-#[test]
-fn first_run_grokbuild_rows() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
-    reset_test_fs();
-    write_home_file(
-        ".grok/config.toml",
-        r#"[models]
-default = "grok-4.5"
-
-[model."grok-4.5"]
-model = "grok-4.5"
-base_url = "https://relay.example/v1"
-name = "Relay"
-api_key = "xai-live"
-api_backend = "responses"
-context_window = 500000
-"#,
-    );
-    first_run_import(AppType::GrokBuild, "rows/first-run-grokbuild.txt", &[]);
 }

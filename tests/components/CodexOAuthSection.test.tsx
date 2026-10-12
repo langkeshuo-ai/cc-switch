@@ -162,7 +162,7 @@ describe("CodexOAuthSection", () => {
               viaDefault: false,
             },
             {
-              appId: "claude-desktop",
+              appId: "codex",
               providerId: "p3",
               name: "ChatGPT Desktop",
               viaDefault: true,
@@ -191,7 +191,7 @@ describe("CodexOAuthSection", () => {
     expect(dialog).toHaveTextContent(
       "这些供应商用的是默认账号，删除后改用新的默认账号：",
     );
-    expect(dialog).toHaveTextContent("Claude Desktop：ChatGPT Desktop");
+    expect(dialog).toHaveTextContent("Codex：ChatGPT Desktop");
 
     const confirm = screen.getByRole("button", { name: "删除账号" });
     expect(confirm.className).toContain("bg-danger");

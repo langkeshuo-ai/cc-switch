@@ -12,15 +12,8 @@ const UNDO_TOAST_DURATION = 10_000;
 
 const PROMPT_FILE_NAME: Partial<Record<AppId, string>> = {
   claude: "CLAUDE.md",
-  "claude-desktop": "CLAUDE.md",
   codex: "AGENTS.md",
-  gemini: "GEMINI.md",
-  grokbuild: "AGENTS.md",
-  opencode: "AGENTS.md",
-  openclaw: "AGENTS.md",
-  hermes: "SOUL.md",
   pi: "AGENTS.md",
-  mcode: "AGENTS.md",
 };
 
 export function promptFileName(app: AppId): string {

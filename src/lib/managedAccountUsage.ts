@@ -5,11 +5,7 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
 
 /** 能用托管账号（授权中心里的账号）的应用；其他应用的供应商不走代理注入的托管凭据。 */
-export const MANAGED_ACCOUNT_APPS = [
-  "claude",
-  "claude-desktop",
-  "codex",
-] as const;
+export const MANAGED_ACCOUNT_APPS = ["claude", "codex"] as const;
 
 export type ManagedAccountApp = (typeof MANAGED_ACCOUNT_APPS)[number];
 

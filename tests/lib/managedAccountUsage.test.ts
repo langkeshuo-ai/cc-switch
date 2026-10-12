@@ -107,20 +107,13 @@ describe("findManagedAccountUsers", () => {
         { auth: {}, config: "" },
       ),
     );
-    const desktop = byId(
-      provider("desktop-chatgpt", { meta: { providerType: "codex_oauth" } }),
-    );
-
     const users = findManagedAccountUsers("codex_oauth", ["c1"], "c1", {
       codex,
-      "claude-desktop": desktop,
     });
     expect(users.map((u) => [u.appId, u.providerId])).toEqual([
-      ["claude-desktop", "desktop-chatgpt"],
       ["codex", "codex-managed"],
     ]);
     expect(groupUsersByApp(users)).toEqual([
-      { appId: "claude-desktop", names: ["desktop-chatgpt"] },
       { appId: "codex", names: ["codex-managed"] },
     ]);
   });

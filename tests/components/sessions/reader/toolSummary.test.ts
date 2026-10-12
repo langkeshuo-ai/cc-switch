@@ -104,9 +104,9 @@ describe("状态", () => {
   });
 
   it("statusGlyph：unknown 用成功符号", () => {
-    const gemini = AGENT_READER_STYLES.gemini;
-    expect(statusGlyph("unknown", gemini)).toBe("✓");
-    expect(statusGlyph("pending", gemini)).toBe("o");
+    const generic = AGENT_READER_STYLES.generic;
+    expect(statusGlyph("unknown", generic)).toBe("•");
+    expect(statusGlyph("pending", generic)).toBe("•");
   });
 });
 
@@ -250,30 +250,7 @@ describe("formatStepTitle · 五家 fixture", () => {
     ]);
   });
 
-  it("Gemini：Shell / ReadFile / GoogleSearch", () => {
-    expect(fixtureTitles("gemini")).toEqual([
-      "ReadFile src/main.ts",
-      "Shell npm run build",
-      "Edit src/config.ts",
-      "GoogleSearch Node 22 top-level await ESM pitfalls",
-      "Todos 2 项",
-      "Shell npm run build",
-    ]);
-  });
 
-  it("OpenCode：符号前缀", () => {
-    expect(fixtureTitles("opencode")).toEqual([
-      "$ bunx biome --version",
-      "→ Read package.json",
-      '✱ Grep "lint" in .',
-      "← Edit package.json",
-      "│ Task Find conflicting lint configs",
-      "% WebFetch https://biomejs.dev/recipes/continuous-integration/",
-      "⚙ Todos 2 项",
-      "→ Asked 要删除 .eslintrc 吗？",
-      "⚙ invalid",
-    ]);
-  });
 
   it("Pi：小写动词，read 带行范围", () => {
     expect(fixtureTitles("pi")).toEqual([
@@ -357,26 +334,6 @@ describe("formatStepTitle · 分支", () => {
     ).toBe("Added x.md");
   });
 
-  it("OpenCode：websearch 用 ◈，glob 用 Glob，MCP 用 ⚙ + 原名", () => {
-    expect(
-      titleOf(
-        "opencode",
-        call("w", "web", { rawName: "websearch", title: "q" }),
-      ).text,
-    ).toBe("◈ WebSearch q");
-    expect(
-      titleOf(
-        "opencode",
-        call("g", "search", { rawName: "glob", title: "*.ts" }),
-      ).text,
-    ).toBe("✱ Glob *.ts");
-    expect(
-      titleOf(
-        "opencode",
-        call("m", "mcp", { rawName: "github_search", title: "github.search" }),
-      ).text,
-    ).toBe("⚙ github_search github.search");
-  });
 });
 
 describe("formatMergedTitle", () => {
@@ -466,21 +423,6 @@ describe("formatStepMeta", () => {
     });
   });
 
-  it("OpenCode 显示每步 tokens / 费用，其它风格不显示", () => {
-    const step = toolStep(call("a"), {
-      cost: { tokens: 28500, costUsd: 0.012 },
-    });
-    expect(formatStepMeta(step, AGENT_READER_STYLES.opencode)).toMatchObject({
-      tokens: 28500,
-      costUsd: 0.012,
-    });
-    expect(formatStepMeta(step, AGENT_READER_STYLES.claude).tokens).toBe(
-      undefined,
-    );
-    expect(
-      formatStepMeta(toolStep(call("b")), AGENT_READER_STYLES.opencode).tokens,
-    ).toBe(undefined);
-  });
 
   it("合并步骤：子步骤耗时之和；都没有耗时则不给", () => {
     const merged: MergedStep = {
@@ -551,12 +493,6 @@ describe("summarizeTurn", () => {
       tokens: undefined,
       costUsd: undefined,
     });
-    const opencode = buildTurns(fixtures.opencode, {
-      style: AGENT_READER_STYLES.opencode,
-    });
-    const summary = summarizeTurn(opencode[0]);
-    expect(summary.tokens).toBe(63104);
-    expect(summary.costUsd).toBeCloseTo(0.0246);
   });
 
   it("没有时间戳用各步耗时之和；都没有则不给；失败改动不计文件；无 diff 的改动按标题计；合并步骤展开计数", () => {

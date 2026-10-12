@@ -131,7 +131,7 @@ const createPrompts = (): Record<string, Prompt> => ({
   },
 });
 
-const APPS: AppId[] = ["claude", "codex", "gemini", "hermes"];
+const APPS: AppId[] = ["claude", "codex", "pi"];
 
 function Harness(props: Partial<PromptPanelProps> & { client: QueryClient }) {
   const { client, ...rest } = props;
@@ -168,8 +168,6 @@ function searchFor(value: string) {
 
 const enableButton = (name: string) =>
   screen.getByRole("button", { name: `prompts.enableAria:${name}` });
-const disableButton = (name: string) =>
-  screen.getByRole("button", { name: `prompts.disableAria:${name}` });
 const editButton = (name: string) =>
   screen.getByRole("button", { name: `prompts.editAria:${name}` });
 
@@ -378,28 +376,6 @@ describe("PromptPanel", () => {
     expect(within(menu).getByText("prompts.deleteBlocked")).toBeInTheDocument();
   });
 
-  it("disabling says the file was emptied and undo re-enables it", async () => {
-    renderPanel({ appId: "hermes" });
-    await waitForPanelReady();
-
-    fireEvent.click(disableButton("Aurora Prompt"));
-
-    await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith(
-        "prompts.toast.disabled:Aurora Prompt",
-        expect.objectContaining({
-          description: "prompts.toast.hermesOff",
-        }),
-      ),
-    );
-    act(() => lastUndo()?.());
-    await waitFor(() =>
-      expect(promptsApi.enablePrompt).toHaveBeenCalledWith(
-        "hermes",
-        "record-index-47",
-      ),
-    );
-  });
 
   it("enabling reports a backup of the file and undo switches back", async () => {
     mocks.state.latest = {
@@ -456,34 +432,6 @@ describe("PromptPanel", () => {
     expect(lastUndo()).toBeUndefined();
   });
 
-  it("imports the existing file from the empty state with an undo", async () => {
-    mocks.state.prompts = {};
-    mocks.state.currentFileContent = "# Rules\n\nBe brief.";
-    renderPanel({ appId: "grokbuild" });
-
-    expect(
-      await screen.findByText("prompts.emptyTitle:Grok Build"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/# Rules\s+Be brief\./)).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", { name: "prompts.importExisting" }),
-    );
-
-    await waitFor(() => expect(mocks.importFromFile).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(mocks.toastSuccess).toHaveBeenCalledWith(
-        "prompts.toast.imported:~/.grokbuild/CLAUDE.md",
-        expect.anything(),
-      ),
-    );
-    act(() => lastUndo()?.());
-    await waitFor(() =>
-      expect(promptsApi.deletePrompt).toHaveBeenCalledWith(
-        "grokbuild",
-        "imported-1",
-      ),
-    );
-  });
 
   it("hides the import entry on an empty file", async () => {
     mocks.state.prompts = {};
@@ -496,7 +444,7 @@ describe("PromptPanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("copies a prompt to other apps, leaving Hermes unchecked by default", async () => {
+  it("copies a prompt to other apps, leaving conflicting apps unchecked by default", async () => {
     vi.mocked(promptsApi.getPrompts).mockImplementation(
       async (app): Promise<Record<string, Prompt>> =>
         app === "codex"
@@ -520,10 +468,9 @@ describe("PromptPanel", () => {
 
     const dialog = await screen.findByRole("dialog");
     await waitFor(() =>
-      expect(within(dialog).getByLabelText(/Gemini CLI/)).toBeChecked(),
+      expect(within(dialog).getByLabelText(/Pi/)).toBeChecked(),
     );
     expect(within(dialog).getByLabelText(/Codex/)).not.toBeChecked();
-    expect(within(dialog).getByLabelText(/Hermes/)).not.toBeChecked();
     expect(
       within(dialog).getByText("prompts.copyDialog.sameName"),
     ).toBeInTheDocument();
@@ -534,7 +481,7 @@ describe("PromptPanel", () => {
 
     await waitFor(() =>
       expect(promptsApi.upsertPrompt).toHaveBeenCalledWith(
-        "gemini",
+        "pi",
         expect.any(String),
         expect.objectContaining({
           name: "Harbor Prompt",
@@ -819,14 +766,6 @@ describe("PromptPanel", () => {
     });
   });
 
-  it("uses the Hermes rule in the page help", async () => {
-    renderPanel({ appId: "hermes" });
-    await waitForPanelReady();
-
-    expect(
-      screen.getByRole("button", { name: "prompts.helpHermesTitle" }),
-    ).toBeInTheDocument();
-  });
 
   it("switches apps from the picker", async () => {
     const onAppChange = vi.fn();
@@ -835,8 +774,8 @@ describe("PromptPanel", () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: /Claude Code/ }));
-    await user.click(await screen.findByRole("button", { name: /Hermes/ }));
+    await user.click(await screen.findByRole("button", { name: /Codex/ }));
 
-    expect(onAppChange).toHaveBeenCalledWith("hermes");
+    expect(onAppChange).toHaveBeenCalledWith("codex");
   });
 });

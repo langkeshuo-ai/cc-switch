@@ -29,12 +29,8 @@ pub const EVENT_PREVIEW_CHARS: usize = 400;
 pub enum ToolSource {
     Claude,
     Codex,
-    Gemini,
-    OpenCode,
     /// Pi 与 OpenClaw（同构）
     Pi,
-    /// Hermes / Grok Build 等：按名称关键字推断
-    Generic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,40 +99,6 @@ pub fn normalize_tool(
             name if name.starts_with("web.") => Web,
             _ => Other,
         },
-        ToolSource::Gemini => match raw_name {
-            "run_shell_command" => Shell,
-            "read_file" | "read_many_files" => Read,
-            "grep_search" | "glob" | "list_directory" | "search_file_content" => Search,
-            "replace" | "edit" => Edit,
-            "write_file" => Write,
-            "web_fetch" | "google_web_search" => Web,
-            "ask_user" => Ask,
-            "write_todos" => Todo,
-            // 待核实：Gemini CLI 的 MCP 工具名形如 `server/tool`
-            name if name.contains('/') => {
-                let server = name.split('/').next().unwrap_or_default();
-                return NormalizedTool::mcp(server);
-            }
-            _ => Other,
-        },
-        ToolSource::OpenCode => match raw_name {
-            "bash" => Shell,
-            "read" => Read,
-            "grep" | "glob" | "list" | "ast_grep_search" | "codesearch" => Search,
-            "edit" | "patch" => Edit,
-            "write" => Write,
-            "webfetch" | "websearch" => Web,
-            "task" | "background_output" | "background_cancel" => Agent,
-            "question" => Ask,
-            "todowrite" | "todoread" => Todo,
-            "invalid" => Other,
-            // 待核实：OpenCode 的 MCP 工具名形如 `server_tool`（内置表之外含 `_` 的名字）
-            name if name.contains('_') => {
-                let server = name.split('_').next().unwrap_or_default();
-                return NormalizedTool::mcp(server);
-            }
-            _ => Other,
-        },
         ToolSource::Pi => match raw_name {
             "bash" | "bashExecution" => Shell,
             "read" => Read,
@@ -146,30 +108,8 @@ pub fn normalize_tool(
             "fetch" => Web,
             _ => Other,
         },
-        ToolSource::Generic => generic_kind(raw_name),
     };
     NormalizedTool::of(kind)
-}
-
-/// Hermes / Grok Build：没有固定工具表，按名称关键字推断。
-fn generic_kind(raw_name: &str) -> ToolKind {
-    let name = raw_name.to_ascii_lowercase();
-    let has = |keys: &[&str]| keys.iter().any(|k| name.contains(k));
-    if name.starts_with("web") {
-        ToolKind::Web
-    } else if has(&["shell", "bash", "exec", "terminal"]) {
-        ToolKind::Shell
-    } else if name.starts_with("read") {
-        ToolKind::Read
-    } else if has(&["grep", "glob", "search"]) {
-        ToolKind::Search
-    } else if has(&["edit", "patch"]) {
-        ToolKind::Edit
-    } else if name.starts_with("write") {
-        ToolKind::Write
-    } else {
-        ToolKind::Other
-    }
 }
 
 /// 拆 `mcp__<server>__<tool>`；不是这种形式返回 `None`。
@@ -567,37 +507,6 @@ fn str_field_allow_empty<'a>(input: &'a Value, keys: &[&str]) -> Option<&'a str>
         .find_map(|key| input.get(*key).and_then(Value::as_str))
 }
 
-/// OpenAI 形状的 `tool_calls[]`（`{id, function{name, arguments}}`，也兼容扁平 `{id, name, arguments}`）
-/// → ToolCall。`arguments_ref(pointer)` 为参数全文生成引用，`pointer` 是参数在 `tool_calls`
-/// 数组内的 JSON Pointer（`/{i}/function/arguments` 或扁平形状的 `/{i}/arguments`）。
-pub(super) fn openai_tool_calls(
-    calls: Option<&Value>,
-    arguments_ref: impl Fn(String) -> Option<ContentRef>,
-) -> Vec<SessionBlock> {
-    calls
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-        .map(|(i, call)| {
-            let name = call
-                .pointer("/function/name")
-                .or_else(|| call.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
-            let (pointer, raw) = match call.pointer("/function/arguments") {
-                Some(raw) => (format!("/{i}/function/arguments"), Some(raw)),
-                None => (format!("/{i}/arguments"), call.get("arguments")),
-            };
-            let input = raw.map(parse_arguments).unwrap_or(Value::Null);
-            tool_call_block(ToolSource::Generic, id, name, &input, || {
-                arguments_ref(pointer)
-            })
-        })
-        .collect()
-}
-
 /// 由参数构造 `ToolCall`：归一化 kind、提炼标题、参数预览；参数超长时调用 `input_full` 生成引用。
 /// Edit/Write 先按参数估算 diff，解析器拿到更准的数据再覆盖。
 pub fn tool_call_block(
@@ -851,43 +760,12 @@ mod tests {
     }
 
     #[test]
-    fn normalize_tool_gemini_opencode_pi_generic() {
+    fn normalize_tool_pi() {
         use ToolKind::*;
-        assert_eq!(kind(ToolSource::Gemini, "run_shell_command"), Shell);
-        assert_eq!(kind(ToolSource::Gemini, "read_many_files"), Read);
-        assert_eq!(kind(ToolSource::Gemini, "list_directory"), Search);
-        assert_eq!(kind(ToolSource::Gemini, "replace"), Edit);
-        assert_eq!(kind(ToolSource::Gemini, "google_web_search"), Web);
-        assert_eq!(kind(ToolSource::Gemini, "write_todos"), Todo);
-        assert_eq!(
-            normalize_tool(ToolSource::Gemini, "github/search_issues", None),
-            NormalizedTool::mcp("github")
-        );
-
-        assert_eq!(kind(ToolSource::OpenCode, "bash"), Shell);
-        assert_eq!(kind(ToolSource::OpenCode, "ast_grep_search"), Search);
-        assert_eq!(kind(ToolSource::OpenCode, "patch"), Edit);
-        assert_eq!(kind(ToolSource::OpenCode, "background_output"), Agent);
-        assert_eq!(kind(ToolSource::OpenCode, "question"), Ask);
-        assert_eq!(kind(ToolSource::OpenCode, "todowrite"), Todo);
-        assert_eq!(kind(ToolSource::OpenCode, "invalid"), Other);
-        assert_eq!(
-            normalize_tool(ToolSource::OpenCode, "context7_resolve-library-id", None),
-            NormalizedTool::mcp("context7")
-        );
-
         assert_eq!(kind(ToolSource::Pi, "bashExecution"), Shell);
         assert_eq!(kind(ToolSource::Pi, "ls"), Search);
         assert_eq!(kind(ToolSource::Pi, "fetch"), Web);
         assert_eq!(kind(ToolSource::Pi, "custom"), Other);
-
-        assert_eq!(kind(ToolSource::Generic, "terminal"), Shell);
-        assert_eq!(kind(ToolSource::Generic, "read_file"), Read);
-        assert_eq!(kind(ToolSource::Generic, "search_files"), Search);
-        assert_eq!(kind(ToolSource::Generic, "web_search"), Web);
-        assert_eq!(kind(ToolSource::Generic, "patch"), Edit);
-        assert_eq!(kind(ToolSource::Generic, "write_file"), Write);
-        assert_eq!(kind(ToolSource::Generic, "vision_analyze"), Other);
     }
 
     #[test]

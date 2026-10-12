@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowUpCircle,
@@ -13,7 +12,6 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { AppId } from "@/lib/api";
-import { providersApi } from "@/lib/api/providers";
 import type { ToolInstallationReport } from "@/lib/api/settings";
 import type { VisibleApps } from "@/types";
 import { DEFAULT_VISIBLE_APPS } from "@/config/appConfig";
@@ -75,11 +73,10 @@ const SOURCE_LABEL: Record<string, string> = {
   pip: "pip",
 };
 
-type Row = { kind: "tool"; tool: ToolName } | { kind: "desktop" };
+type Row = { kind: "tool"; tool: ToolName };
 
 const ROWS: Row[] = [
   { kind: "tool", tool: "claude" },
-  { kind: "desktop" },
   ...TOOL_NAMES.filter((tool) => tool !== "claude").map(
     (tool): Row => ({ kind: "tool", tool }),
   ),
@@ -120,12 +117,6 @@ export function AppsPage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tools.toolDiagnostics]);
-  const { data: desktopStatus } = useQuery({
-    queryKey: ["claude-desktop-status"],
-    queryFn: () => providersApi.getClaudeDesktopStatus(),
-    staleTime: 30_000,
-  });
-
   const visibleApps: VisibleApps = {
     ...DEFAULT_VISIBLE_APPS,
     ...settings?.visibleApps,
@@ -268,32 +259,8 @@ export function AppsPage() {
           </div>
 
           <div className="divide-y divide-border overflow-hidden rounded-panel border border-border bg-surface">
-            {ROWS.map((row) =>
-              row.kind === "desktop" ? (
-                <AppRow
-                  key="claude-desktop"
-                  app="claude-desktop"
-                  name={
-                    <span className="flex items-center gap-1">
-                      {APP_DISPLAY_NAME["claude-desktop"]}
-                      <HelpTip title={APP_DISPLAY_NAME["claude-desktop"]}>
-                        {t("appsPage.desktopHelp")}
-                      </HelpTip>
-                    </span>
-                  }
-                  version={
-                    <span className="text-caption text-fg-2">
-                      {desktopStatus?.supported === false
-                        ? t("appsPage.desktopUnsupported")
-                        : desktopStatus?.configured
-                          ? t("appsPage.desktopConnected")
-                          : t("appsPage.desktopNotConnected")}
-                    </span>
-                  }
-                  visibility={visibilitySwitch("claude-desktop")}
-                />
-              ) : (
-                <ToolRow
+            {ROWS.map((row) => (
+              <ToolRow
                   key={row.tool}
                   tool={row.tool}
                   tools={tools}
@@ -305,9 +272,8 @@ export function AppsPage() {
                     }))
                   }
                   visibility={visibilitySwitch(TOOL_APP_IDS[row.tool])}
-                />
-              ),
-            )}
+              />
+            ))}
           </div>
         </div>
       </div>

@@ -17,28 +17,16 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
-import type { OpenClawProviderConfig, Provider } from "@/types";
+import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import { providersApi } from "@/lib/api/providers";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { useDragSort } from "@/hooks/useDragSort";
-import {
-  useOpenClawLiveProviderIds,
-  useOpenClawDefaultModel,
-} from "@/hooks/useOpenClaw";
-import {
-  useHermesLiveProviderIds,
-  useHermesModelConfig,
-} from "@/hooks/useHermes";
 import { useStreamCheck } from "@/hooks/useStreamCheck";
 import { ProviderCard } from "@/components/providers/ProviderCard";
 import { ProviderEmptyState } from "@/components/providers/ProviderEmptyState";
-import {
-  useCurrentOmoProviderId,
-  useCurrentOmoSlimProviderId,
-} from "@/lib/query/omo";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { HelpTip } from "@/components/ui/help-tip";
@@ -46,10 +34,8 @@ import { Notice } from "@/components/ui/notice";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { extractProviderBaseUrl } from "@/utils/providerConfigUtils";
 import { usePiCurrentState } from "@/lib/query/pi";
-import { isHermesReadOnlyProvider } from "@/config/hermesProviderPresets";
 import {
   buildAdditiveSections,
-  buildDesktopSections,
   buildSwitchSections,
   type CardPresentation,
   type ProviderSection,
@@ -68,15 +54,11 @@ interface ProviderListProps {
   onEdit: (provider: Provider) => void;
   onDelete: (provider: Provider) => void;
   onRemoveFromConfig?: (provider: Provider) => void;
-  onDisableOmo?: () => void;
-  onDisableOmoSlim?: () => void;
   onDuplicate: (provider: Provider) => void;
   onConfigureUsage?: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
   onOpenTerminal?: (provider: Provider) => void;
   onCreate?: () => void;
-  /** OpenClaw 的默认模型、Hermes 的当前供应商 */
-  onSetAsDefault?: (provider: Provider, modelId?: string) => void;
   /** 切换式应用必传：按模式 tab 算卡片 */
   switchMode?: SwitchModeProps;
   isLoading?: boolean;
@@ -93,14 +75,11 @@ export function ProviderList({
   onEdit,
   onDelete,
   onRemoveFromConfig,
-  onDisableOmo,
-  onDisableOmoSlim,
   onDuplicate,
   onConfigureUsage,
   onOpenWebsite,
   onOpenTerminal,
   onCreate,
-  onSetAsDefault,
   switchMode,
   isLoading = false,
   searchOpen,
@@ -113,23 +92,6 @@ export function ProviderList({
     appId,
   );
 
-  const { data: opencodeLiveIds, isPending: isOpencodeLiveIdsPending } =
-    useQuery({
-      queryKey: ["opencodeLiveProviderIds"],
-      queryFn: () => providersApi.getOpenCodeLiveProviderIds(),
-      enabled: appId === "opencode",
-    });
-  const { data: openclawLiveIds, isPending: isOpenclawLiveIdsPending } =
-    useOpenClawLiveProviderIds(appId === "openclaw");
-  const { data: hermesLiveIds, isPending: isHermesLiveIdsPending } =
-    useHermesLiveProviderIds(appId === "hermes");
-  const { data: hermesModelConfig } = useHermesModelConfig(appId === "hermes");
-  const { data: openclawDefaultModel } = useOpenClawDefaultModel(
-    appId === "openclaw",
-  );
-  const isOpenCode = appId === "opencode";
-  const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
-  const { data: currentOmoSlimId } = useCurrentOmoSlimProviderId(isOpenCode);
   const {
     data: piCurrentState,
     isSuccess: isPiCurrentStateSuccess,
@@ -142,22 +104,11 @@ export function ProviderList({
   // 在那之前按加载中画骨架，不然卡片先全落进「可添加」，读回来再整体搬到「已添加」。
   // 一张卡都没有时不用等，直接出空状态
   const isLiveMembershipPending =
-    (appId === "opencode" && isOpencodeLiveIdsPending) ||
-    (appId === "openclaw" && isOpenclawLiveIdsPending) ||
-    (appId === "hermes" && isHermesLiveIdsPending) ||
-    (appId === "pi" && isPiCurrentStatePending);
+    appId === "pi" && isPiCurrentStatePending;
 
   const isInConfig = useCallback(
     (provider: Provider): boolean => {
       switch (appId) {
-        case "mcode":
-          return provider.meta?.liveConfigManaged === true;
-        case "opencode":
-          return opencodeLiveIds?.includes(provider.id) ?? false;
-        case "openclaw":
-          return openclawLiveIds?.includes(provider.id) ?? false;
-        case "hermes":
-          return hermesLiveIds?.includes(provider.id) ?? false;
         case "pi":
           return isPiStateReady
             ? (piCurrentState?.enabledProviderIds.includes(provider.id) ??
@@ -167,14 +118,7 @@ export function ProviderList({
           return true;
       }
     },
-    [
-      appId,
-      opencodeLiveIds,
-      openclawLiveIds,
-      hermesLiveIds,
-      isPiStateReady,
-      piCurrentState,
-    ],
+    [appId, isPiStateReady, piCurrentState],
   );
 
   const handleTest = useCallback(
@@ -187,26 +131,11 @@ export function ProviderList({
   const queryClient = useQueryClient();
   const importMutation = useMutation({
     mutationFn: async (): Promise<boolean> => {
-      if (appId === "opencode") {
-        return (await providersApi.importOpenCodeFromLive()) > 0;
-      }
-      if (appId === "openclaw") {
-        return (await providersApi.importOpenClawFromLive()) > 0;
-      }
-      if (appId === "hermes") {
-        return (await providersApi.importHermesFromLive()) > 0;
-      }
-      if (appId === "claude-desktop") {
-        return (await providersApi.importClaudeDesktopFromClaude()) > 0;
-      }
       return providersApi.importDefault(appId);
     },
     onSuccess: (imported) => {
       if (imported) {
         queryClient.invalidateQueries({ queryKey: ["providers", appId] });
-        if (appId === "claude-desktop") {
-          queryClient.invalidateQueries({ queryKey: ["claudeDesktopStatus"] });
-        }
         toast.success(t("provider.importCurrentDescription"));
       } else {
         toast.info(t("provider.noProviders"));
@@ -216,8 +145,6 @@ export function ProviderList({
       // Tauri invoke 的 reject 值是后端序列化出的纯字符串而非 Error 对象，
       // 取 .message 只会得到 undefined（空 toast）。
       toast.error(extractErrorMessage(error) || t("settings.importFailed"));
-      // 导入失败前也可能已产生需要上屏的副作用：GrokBuild 官方登录态下点
-      // 导入，命令层会先补种官方条目、随后才因 live 不可导入而报错。
       queryClient.invalidateQueries({ queryKey: ["providers", appId] });
     },
   });
@@ -301,40 +228,11 @@ export function ProviderList({
         queue: switchMode.queue.filter((id) => known.has(id)),
       });
     }
-    if (appId === "claude-desktop") {
-      return buildDesktopSections({
-        t,
-        providers: filteredProviders,
-        currentId: currentProviderId,
-        onSwitch,
-      });
-    }
-    const defaultPrimary = openclawDefaultModel?.primary ?? "";
-    const slash = defaultPrimary.indexOf("/");
     return buildAdditiveSections({
       app: appId,
       t,
       providers: filteredProviders,
       isInConfig,
-      currentOmoId,
-      currentOmoSlimId,
-      openclawDefault:
-        appId === "openclaw" && slash > 0
-          ? {
-              providerId: defaultPrimary.slice(0, slash),
-              model: defaultPrimary.slice(slash + 1),
-            }
-          : null,
-      openclawModels: (provider) => {
-        const config = provider.settingsConfig as OpenClawProviderConfig;
-        if (!Array.isArray(config?.models)) return [];
-        return config.models
-          .filter((model) => typeof model.id === "string" && model.id.trim())
-          .map((model) => ({ id: model.id, name: model.name }));
-      },
-      hermesCurrentId: hermesModelConfig?.provider ?? null,
-      isHermesManaged: (provider) =>
-        isHermesReadOnlyProvider(provider.settingsConfig),
       piStateUnavailable: appId === "pi" && !isPiStateReady,
       actions: {
         add: onSwitch,
@@ -342,11 +240,6 @@ export function ProviderList({
           onRemoveFromConfig
             ? onRemoveFromConfig(provider)
             : onDelete(provider),
-        disableOmo: (provider) =>
-          provider.category === "omo-slim"
-            ? onDisableOmoSlim?.()
-            : onDisableOmo?.(),
-        setDefault: (provider, modelId) => onSetAsDefault?.(provider, modelId),
       },
     });
   }, [
@@ -357,17 +250,10 @@ export function ProviderList({
     filteredProviders,
     currentProviderId,
     onSwitch,
-    openclawDefaultModel?.primary,
     isInConfig,
-    currentOmoId,
-    currentOmoSlimId,
-    hermesModelConfig?.provider,
     isPiStateReady,
     onRemoveFromConfig,
     onDelete,
-    onDisableOmo,
-    onDisableOmoSlim,
-    onSetAsDefault,
   ]);
 
   const piStateError =
@@ -408,22 +294,16 @@ export function ProviderList({
           appId={appId}
           onCreate={appId === "pi" ? undefined : onCreate}
           onImport={
-            appId === "pi" || appId === "mcode"
-              ? undefined
-              : () => importMutation.mutate()
+            appId === "pi" ? undefined : () => importMutation.mutate()
           }
         />
       </div>
     );
   }
 
-  // 「当前」只用来决定额度自动刷新：Pi 没有当前项，OMO / Hermes 各看自己的当前项
+  // 「当前」只用来决定额度自动刷新：Pi 没有当前项
   const isCurrentFor = (provider: Provider) => {
     if (appId === "pi") return false;
-    if (provider.category === "omo") return provider.id === currentOmoId;
-    if (provider.category === "omo-slim")
-      return provider.id === currentOmoSlimId;
-    if (appId === "hermes") return provider.id === hermesModelConfig?.provider;
     return provider.id === currentProviderId;
   };
 

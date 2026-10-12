@@ -40,7 +40,7 @@ import {
 import { usageTable } from "./usageTable";
 
 /** 计费默认配置只管这 4 个有路由用量管线的应用 */
-const PRICING_APPS = ["claude", "codex", "gemini", "grokbuild"] as const;
+const PRICING_APPS = ["claude", "codex"] as const;
 type PricingApp = (typeof PRICING_APPS)[number];
 type PricingModelSource = "request" | "response";
 
@@ -49,8 +49,6 @@ type SourceState = Record<PricingApp, PricingModelSource>;
 const DEFAULT_SOURCES: SourceState = {
   claude: "response",
   codex: "response",
-  gemini: "response",
-  grokbuild: "response",
 };
 
 const errorText = (error: unknown) =>

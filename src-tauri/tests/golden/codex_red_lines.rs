@@ -225,7 +225,7 @@ fn snapshot(state: &AppState, target: &str) -> LiveSnapshot {
 /// CX-01 / 02 / 03
 #[test]
 fn third_party_key_lands_in_the_active_route_table() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for preserve in [false, true] {
         reset_test_fs();
         set_login_preservation(preserve);
@@ -257,7 +257,7 @@ fn third_party_key_lands_in_the_active_route_table() {
 /// CX-04
 #[test]
 fn tables_declaring_their_own_auth_get_no_injected_key() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for preserve in [false, true] {
         reset_test_fs();
         set_login_preservation(preserve);
@@ -313,7 +313,7 @@ fn tables_declaring_their_own_auth_get_no_injected_key() {
 /// CX-05
 #[test]
 fn requires_openai_auth_true_still_gets_the_key() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(true);
     let state = setup(
@@ -334,7 +334,7 @@ fn requires_openai_auth_true_still_gets_the_key() {
 /// CX-06 / 07
 #[test]
 fn refused_switches_have_no_side_effects() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     let cases: [(&str, bool, Option<&str>, &str); 5] = [
         // 带 Key 但配置为空：Key 没有地方放。
         ("empty-config-with-key", false, Some("sk-x"), ""),
@@ -394,7 +394,7 @@ fn refused_switches_have_no_side_effects() {
 /// CX-09
 #[test]
 fn legacy_openai_base_url_reroute_never_reaches_live() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for preserve in [false, true] {
         reset_test_fs();
         set_login_preservation(preserve);
@@ -426,7 +426,7 @@ fn legacy_openai_base_url_reroute_never_reaches_live() {
 /// CX-10
 #[test]
 fn normalization_never_overwrites_a_user_table() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(false);
     let user_table = "[model_providers.cc-switch]\nname = \"Mine\"\nbase_url = \"https://mine.example/v1\"\nwire_api = \"responses\"\nhttp_headers = { X-Tenant = \"t1\" }\n";
@@ -462,7 +462,7 @@ fn normalization_never_overwrites_a_user_table() {
 /// CX-11
 #[test]
 fn inline_model_providers_keep_the_key_inside() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(false);
     let state = setup(
@@ -482,7 +482,7 @@ fn inline_model_providers_keep_the_key_inside() {
 /// CX-12
 #[test]
 fn reserved_ids_match_case_sensitively() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for id in ["OpenAI", "Ollama", "oss"] {
         reset_test_fs();
         set_login_preservation(false);
@@ -504,7 +504,7 @@ fn reserved_ids_match_case_sensitively() {
 /// CX-13
 #[test]
 fn stale_reserved_tables_never_reach_live() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for preserve in [false, true] {
         reset_test_fs();
         set_login_preservation(preserve);
@@ -529,7 +529,7 @@ fn stale_reserved_tables_never_reach_live() {
 /// CX-14
 #[test]
 fn requires_openai_auth_follows_login_preservation() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     let header_card = codex(
         "header",
         None,
@@ -595,7 +595,7 @@ fn requires_openai_auth_follows_login_preservation() {
 /// CX-15：结果可以是拒绝，也可以是放行，但放行时路由表绝不要求官方登录。
 #[test]
 fn proxy_injected_oauth_cards_never_carry_the_official_login() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     for provider_type in ["xai_oauth", "github_copilot"] {
         reset_test_fs();
         set_login_preservation(true);
@@ -632,7 +632,7 @@ fn proxy_injected_oauth_cards_never_carry_the_official_login() {
 /// CX-23
 #[test]
 fn model_catalog_pointer_ownership() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(false);
     let catalog = json!({ "models": [{ "model": "relay-model" }] });
@@ -712,7 +712,7 @@ fn model_catalog_pointer_ownership() {
 /// CX-24
 #[test]
 fn web_search_sentinel_is_the_only_value_removed() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(false);
     let anthropic = with_meta(
@@ -759,7 +759,7 @@ fn web_search_sentinel_is_the_only_value_removed() {
 /// CX-25
 #[test]
 fn auth_cleanup_failure_is_a_warning() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     set_login_preservation(false);
     let state = setup(
@@ -859,7 +859,7 @@ async fn check_proxy_exit_keeps_login(current: &str, after_login: Option<&str>) 
     reason = "the test HOME and settings are process-global; the guard must span the async takeover calls"
 )]
 async fn exiting_proxy_keeps_the_login_the_user_has_now() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     check_proxy_exit_keeps_login("codex-official", None).await;
     check_proxy_exit_keeps_login("codex-official", Some(NEW_LOGIN)).await;
     check_proxy_exit_keeps_login("relay", Some(NEW_LOGIN)).await;
@@ -873,6 +873,6 @@ async fn exiting_proxy_keeps_the_login_the_user_has_now() {
     reason = "the test HOME and settings are process-global; the guard must span the async takeover calls"
 )]
 async fn exiting_proxy_after_logout_on_a_third_party_route_stays_logged_out() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     check_proxy_exit_keeps_login("relay", None).await;
 }

@@ -140,15 +140,6 @@ describe("SessionManagerPage", () => {
         sourcePath: "/mock/codex/archived_sessions/session-3.jsonl",
         resumeCommand: "codex resume codex-session-3",
       },
-      {
-        providerId: "hermes",
-        sessionId: "hermes-1",
-        title: "Hermes Session",
-        projectDir: null,
-        createdAt: now - 4 * HOUR,
-        lastActiveAt: now - 4 * HOUR,
-        sourcePath: "/mock/hermes/state.db",
-      },
     ];
     const messages: Record<string, SessionMessage[]> = {
       "codex:/mock/codex/session-1.jsonl": [
@@ -170,7 +161,6 @@ describe("SessionManagerPage", () => {
       "claude:/mock/claude/session-1.jsonl": [
         { role: "user", content: "claude", ts: now },
       ],
-      "hermes:/mock/hermes/state.db": [],
     };
 
     setSessionFixtures(sessions, messages);
@@ -256,9 +246,9 @@ describe("SessionManagerPage", () => {
     await openAppMenu();
     const menu = await screen.findByRole("menu");
     const items = within(menu).getAllByRole("menuitemradio");
-    // 全部应用 + 9 个来源，按会话数从多到少
-    expect(items).toHaveLength(10);
-    expect(items[0]).toHaveTextContent("全部应用5");
+    // 全部应用 + 3 个来源，按会话数从多到少
+    expect(items).toHaveLength(4);
+    expect(items[0]).toHaveTextContent("全部应用4");
     expect(items[1]).toHaveTextContent("Codex3");
     expect(items[items.length - 1]).toHaveTextContent("无会话");
     await userEvent.click(items[0]);
@@ -275,44 +265,7 @@ describe("SessionManagerPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("only offers apps that are shown in the sidebar", async () => {
-    setSettings({
-      visibleApps: {
-        claude: true,
-        "claude-desktop": true,
-        codex: true,
-        gemini: false,
-        grokbuild: false,
-        opencode: false,
-        openclaw: false,
-        hermes: false,
-        pi: false,
-        mcode: false,
-      },
-    });
-    renderPage("codex");
-    await screen.findByText("Alpha Session");
-    await waitFor(async () => {
-      await openAppMenu();
-      const menu = await screen.findByRole("menu");
-      expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(3);
-    });
-    const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("Hermes")).not.toBeInTheDocument();
-    // 隐藏应用的会话也不计入「全部应用」
-    expect(within(menu).getAllByRole("menuitemradio")[0]).toHaveTextContent(
-      "全部应用4",
-    );
-  });
 
-  it("shows the Claude Desktop note when coming from Claude Desktop", async () => {
-    renderPage("claude", { fromApp: "claude-desktop" });
-    expect(
-      await screen.findByText(
-        "Claude Desktop 没有单独的会话记录，这里显示 Claude Code 的会话。",
-      ),
-    ).toBeInTheDocument();
-  });
 
   it("filters by search and offers to clear an empty search", async () => {
     renderPage("codex");
@@ -373,22 +326,6 @@ describe("SessionManagerPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "返回会话列表" }));
     expect(await screen.findByText("Alpha Session")).toBeInTheDocument();
-  });
-
-  it("explains why a Hermes session cannot be resumed", async () => {
-    renderPage("hermes");
-    await screen.findByText("Hermes Session");
-    openRow("Hermes Session");
-
-    expect(
-      await screen.findByText("暂不支持从命令行恢复 Hermes 会话"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "复制恢复命令" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(
-      screen.getByText("Hermes 只显示最近 500 个会话"),
-    ).toBeInTheDocument();
   });
 
   it("shows the read error instead of an empty session", async () => {

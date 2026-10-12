@@ -176,8 +176,6 @@ export const TOOL_OUTPUT_VERB_KEY = `${READER_VERB_I18N_PREFIX}output`;
 const RAW_NAME_VERBS: Partial<Record<ReaderStyleId, Record<string, string>>> = {
   // Claude Code CLI 把 Edit 显示为 Update
   claude: { Edit: "Update", MultiEdit: "Update" },
-  gemini: { google_web_search: "GoogleSearch" },
-  opencode: { glob: "Glob", list: "List", websearch: "WebSearch" },
 };
 
 /** OpenCode TUI 的工具前缀符号 */

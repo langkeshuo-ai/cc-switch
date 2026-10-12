@@ -82,16 +82,11 @@ const IMPORT_SOURCE_FILES: Record<
 > = {
   claude: { file: "~/.claude.json", noteKey: "mcpPage.import.claudeNote" },
   codex: { file: "~/.codex/config.toml" },
-  gemini: { file: "~/.gemini/settings.json" },
-  grokbuild: { file: "~/.grok/config.toml" },
-  opencode: { file: "~/.config/opencode/opencode.json" },
-  hermes: { file: "~/.hermes/config.yaml" },
   pi: { file: "~/.pi/agent/mcp.json" },
-  mcode: { file: "~/.minimax/mcp.json" },
 };
 
 /** 先写配置文件、成功后才入库的应用：写失败时开关没变，重试要逐行重写 */
-const WRITE_THEN_SAVE_APPS: ReadonlySet<McpAppId> = new Set(["mcode", "pi"]);
+const WRITE_THEN_SAVE_APPS: ReadonlySet<McpAppId> = new Set(["pi"]);
 
 /** 写入失败：记下想要的状态，「重试」按这个值再写一次 */
 interface WriteFailure {

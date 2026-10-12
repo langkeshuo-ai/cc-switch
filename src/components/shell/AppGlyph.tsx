@@ -1,4 +1,4 @@
-import { Monitor, Terminal } from "lucide-react";
+import { Terminal } from "lucide-react";
 import type { AppId } from "@/lib/api";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { cn } from "@/lib/utils";
@@ -6,34 +6,18 @@ import { cn } from "@/lib/utils";
 /** 应用名：品牌名不翻译，四种语言都写原文。 */
 export const APP_DISPLAY_NAME: Record<AppId, string> = {
   claude: "Claude Code",
-  "claude-desktop": "Claude Desktop",
   codex: "Codex",
-  gemini: "Gemini CLI",
-  grokbuild: "Grok Build",
-  opencode: "OpenCode",
-  openclaw: "OpenClaw",
-  hermes: "Hermes",
   pi: "Pi",
-  mcode: "MiniMax Code",
 };
 
 const APP_ICON_NAME: Record<AppId, string> = {
   claude: "claude",
-  "claude-desktop": "claude",
   codex: "openai",
-  gemini: "gemini",
-  grokbuild: "grok",
-  opencode: "opencode",
-  openclaw: "openclaw",
-  hermes: "hermes",
   pi: "pi",
-  mcode: "minimax",
 };
 
-// Claude Code 和 Claude Desktop 用同一个图标，靠右下角的小角标区分终端与桌面
 const APP_BADGE_ICON: Partial<Record<AppId, typeof Terminal>> = {
   claude: Terminal,
-  "claude-desktop": Monitor,
 };
 
 interface AppGlyphProps {

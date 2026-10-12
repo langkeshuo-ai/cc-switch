@@ -5,16 +5,10 @@ import type { TFunction } from "i18next";
 import { Search, SlidersHorizontal, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
+import { ClaudeIcon, CodexIcon } from "@/components/BrandIcons";
 import { ProviderIconBox } from "@/components/ProviderIconBox";
 import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
-import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
-import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
-import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
-import type { OpenClawProviderPreset } from "@/config/openclawProviderPresets";
-import type { HermesProviderPreset } from "@/config/hermesProviderPresets";
-import type { McodeProviderPreset } from "@/config/mcodeProviderPresets";
 import type { PiProviderPreset } from "@/config/piProviderPresets";
 import type { ProviderCategory } from "@/types";
 import type { AppId } from "@/lib/api";
@@ -65,13 +59,7 @@ type PresetTranslator = (key: string) => unknown;
 export type AnyPreset =
   | ProviderPreset
   | CodexProviderPreset
-  | GeminiProviderPreset
-  | ClaudeDesktopProviderPreset
-  | OpenCodeProviderPreset
-  | OpenClawProviderPreset
-  | HermesProviderPreset
-  | PiProviderPreset
-  | McodeProviderPreset;
+  | PiProviderPreset;
 
 export type PresetEntry = {
   id: string;
@@ -233,8 +221,6 @@ function PresetIconBox({ preset }: { preset?: AnyPreset }) {
     inner = <ClaudeIcon size={16} />;
   } else if (preset.theme?.icon === "codex") {
     inner = <CodexIcon size={16} />;
-  } else if (preset.theme?.icon === "gemini") {
-    inner = <GeminiIcon size={16} />;
   } else if (preset.theme?.icon === "generic") {
     inner = <Zap className="h-4 w-4 text-fg-2" strokeWidth={1.5} />;
   } else {

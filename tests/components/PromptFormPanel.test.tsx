@@ -76,44 +76,7 @@ describe("PromptFormPanel", () => {
     expect(screen.getByLabelText(/prompts.name/)).toBeEnabled();
   });
 
-  it("explains a missing name only after a save attempt", () => {
-    const onSave = vi.fn();
-    render(
-      <PromptFormPanel appId="hermes" onSave={onSave} onClose={vi.fn()} />,
-    );
 
-    expect(
-      screen.queryByText("prompts.nameRequiredHermes"),
-    ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "prompts.addSubmit" }));
-
-    expect(screen.getByText("prompts.nameRequiredHermes")).toBeInTheDocument();
-    expect(screen.getByLabelText(/prompts.name/)).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
-    expect(onSave).not.toHaveBeenCalled();
-  });
-
-  it("names the overwritten file on the save button of the enabled prompt", () => {
-    render(
-      <PromptFormPanel
-        appId="hermes"
-        editingId="team"
-        initialData={active}
-        onSave={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    expect(
-      screen.getByRole("button", { name: "prompts.saveAndOverwrite:SOUL.md" }),
-    ).toBeInTheDocument();
-    // 删除只在列表里，编辑页底栏只有取消和保存
-    expect(
-      screen.queryByRole("button", { name: "common.delete" }),
-    ).not.toBeInTheDocument();
-  });
 
   it("keeps Pi content as typed and writes AGENTS.md for the enabled prompt", async () => {
     const onSave = vi.fn().mockResolvedValue(true);
@@ -142,19 +105,4 @@ describe("PromptFormPanel", () => {
     );
   });
 
-  it("refuses MiniMax Code prompts over 32 KB", () => {
-    const onSave = vi.fn();
-    render(<PromptFormPanel appId="mcode" onSave={onSave} onClose={vi.fn()} />);
-
-    fireEvent.change(screen.getByLabelText(/prompts.name/), {
-      target: { value: "Big" },
-    });
-    fireEvent.change(screen.getByLabelText("prompts.content"), {
-      target: { value: "a".repeat(32 * 1024 + 1) },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "prompts.addSubmit" }));
-
-    expect(screen.getByText("prompts.mcodeTooLarge")).toBeInTheDocument();
-    expect(onSave).not.toHaveBeenCalled();
-  });
 });

@@ -1,6 +1,4 @@
 mod app_config;
-mod app_lifecycle;
-mod app_setup;
 mod app_store;
 mod auto_launch;
 mod claude_mcp;
@@ -14,12 +12,11 @@ mod database;
 mod deeplink;
 mod error;
 mod init_status;
-mod jsonc_document;
 mod lightweight;
-mod log_redact;
 #[cfg(target_os = "linux")]
 mod linux_fix;
 pub mod live;
+mod log_redact;
 mod mcp;
 pub mod mode;
 mod model_capabilities;
@@ -33,6 +30,9 @@ mod services;
 mod session_manager;
 mod settings;
 mod store;
+
+#[cfg(test)]
+mod test_support;
 
 mod tray;
 mod usage_events;
@@ -50,9 +50,9 @@ pub use database::{Database, Profile};
 pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
 pub use error::AppError;
 pub use mcp::{
-    import_from_claude, import_from_codex, remove_server_from_claude,
-    remove_server_from_codex, sync_enabled_to_claude, sync_enabled_to_codex,
-    sync_single_server_to_claude, sync_single_server_to_codex,
+    import_from_claude, import_from_codex, remove_server_from_claude, remove_server_from_codex,
+    sync_enabled_to_claude, sync_enabled_to_codex, sync_single_server_to_claude,
+    sync_single_server_to_codex,
 };
 pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
@@ -113,14 +113,6 @@ pub(crate) fn url_for_log(url: &str) -> RedactedUrl<'_> {
     }
 }
 
-/// 为持有确切认证材料的调用方提供优先精确匹配、再启发式兜底的 URL 脱敏。
-pub(crate) fn url_for_log_with_secrets<'a>(
-    url: &'a str,
-    known_secrets: &'a [String],
-) -> RedactedUrl<'a> {
-    RedactedUrl { url, known_secrets }
-}
-
 /// 已知密钥参与子串脱敏的最短长度：过短的值(如 "api")当作子串会误伤无关文本，
 /// 所以只对足够长、几乎不可能是普通词的值做替换。
 const MIN_KNOWN_SECRET_LEN: usize = 8;
@@ -129,13 +121,6 @@ const MIN_KNOWN_SECRET_LEN: usize = 8;
 /// 不做任何“看起来像密钥”的形状猜测——只隐藏已知值，天然收敛、不误伤正常路径。
 pub(crate) fn redact_known_secrets(text: &str, known_secrets: &[String]) -> String {
     redact_known_secrets_with_min_length(text, known_secrets, MIN_KNOWN_SECRET_LEN)
-}
-
-/// Exact-value redaction for user-visible error text. Unlike URL logging, a
-/// short known credential must still be hidden because the result reaches the
-/// UI rather than a diagnostic-only path.
-pub(crate) fn redact_known_secrets_strict(text: &str, known_secrets: &[String]) -> String {
-    redact_known_secrets_with_min_length(text, known_secrets, 1)
 }
 
 fn redact_known_secrets_with_min_length(
@@ -726,7 +711,7 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
             }
 
-            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
+            // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex）
             //
             // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
             // 落成 "default" provider 设为 current，再追加官方预设（is_current=false）。
@@ -898,13 +883,7 @@ pub fn run() {
                 for app in [
                     crate::app_config::AppType::Claude,
                     crate::app_config::AppType::Codex,
-                    crate::app_config::AppType::Gemini,
-                    crate::app_config::AppType::GrokBuild,
-                    crate::app_config::AppType::OpenCode,
-                    crate::app_config::AppType::OpenClaw,
-                    crate::app_config::AppType::Hermes,
                     crate::app_config::AppType::Pi,
-                    crate::app_config::AppType::Mcode,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1311,20 +1290,13 @@ pub fn run() {
             commands::set_rectifier_config,
             commands::get_optimizer_config,
             commands::set_optimizer_config,
-            commands::get_copilot_optimizer_config,
-            commands::set_copilot_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
-            commands::install_update_and_restart,
-            commands::check_app_update_available,
             commands::check_for_updates,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
-            commands::get_claude_plugin_status,
-            commands::read_claude_plugin_config,
             commands::apply_claude_plugin_config,
-            commands::is_claude_plugin_applied,
             commands::apply_claude_onboarding_skip,
             commands::clear_claude_onboarding_skip,
             // Claude MCP management
@@ -1344,18 +1316,12 @@ pub fn run() {
             commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,
             commands::get_balance,
-            // New MCP via config.json (SSOT)
-            commands::get_mcp_config,
-            commands::upsert_mcp_server_in_config,
-            commands::delete_mcp_server_in_config,
-            commands::set_mcp_enabled,
             // Unified MCP management
             commands::get_mcp_servers,
             commands::upsert_mcp_server,
             commands::delete_mcp_server,
             commands::toggle_mcp_app,
             commands::import_mcp_from_apps,
-            commands::resync_mcp_to_apps,
             // Prompt management
             commands::get_prompts,
             commands::upsert_prompt,
@@ -1442,11 +1408,8 @@ pub fn run() {
             commands::import_skills_from_apps,
             commands::discover_available_skills,
             commands::check_skill_updates,
-            commands::resync_skills_to_apps,
             commands::update_skill,
             commands::migrate_skill_storage,
-            commands::get_cc_switch_skills_dir,
-            commands::open_cc_switch_skills_dir,
             commands::search_skills_sh,
             // Skill management (legacy API compatibility)
             commands::get_skills,
@@ -1553,9 +1516,6 @@ pub fn run() {
             commands::upsert_universal_provider,
             commands::delete_universal_provider,
             commands::sync_universal_provider,
-            // OpenCode specific
-            // OpenClaw specific
-            // Hermes specific
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
@@ -1589,21 +1549,6 @@ pub fn run() {
             commands::copilot_get_models_for_account,
             commands::copilot_get_usage,
             commands::copilot_get_usage_for_account,
-            // OMO commands
-            // Workspace files (OpenClaw)
-            commands::read_workspace_file,
-            commands::write_workspace_file,
-            // Daily memory files (OpenClaw workspace)
-            commands::list_daily_memory_files,
-            commands::read_daily_memory_file,
-            commands::write_daily_memory_file,
-            commands::delete_daily_memory_file,
-            commands::search_daily_memory_files,
-            commands::open_workspace_directory,
-            // lightweight mode (for testing or low-resource environments)
-            commands::enter_lightweight_mode,
-            commands::exit_lightweight_mode,
-            commands::is_lightweight_mode,
         ]);
 
     let app = builder
@@ -1901,7 +1846,6 @@ fn initialize_common_config_snippets(state: &store::AppState) {
         for app_type in [
             crate::app_config::AppType::Claude,
             crate::app_config::AppType::Codex,
-            crate::app_config::AppType::Gemini,
         ] {
             if let Err(e) = crate::services::provider::ProviderService::migrate_legacy_common_config_usage_if_needed(
                 state,

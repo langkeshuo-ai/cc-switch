@@ -62,6 +62,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
     defaultApps: {
       claude: true,
       codex: true,
+      pi: false,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     websiteUrl: "https://www.newapi.pro",
@@ -76,6 +77,7 @@ export const universalProviderPresets: UniversalProviderPreset[] = [
     defaultApps: {
       claude: true,
       codex: true,
+      pi: false,
     },
     defaultModels: NEWAPI_DEFAULT_MODELS,
     icon: "openai",

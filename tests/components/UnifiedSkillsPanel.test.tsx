@@ -85,7 +85,7 @@ vi.mock("@/hooks/useSkills", () => ({
       {
         directory: "shared-skill",
         name: "Shared Skill",
-        foundIn: ["grokbuild", "claude"],
+        foundIn: ["claude"],
         path: "/tmp/shared-skill",
       },
     ],
@@ -135,11 +135,6 @@ const makeSkill = (overrides: Overrides = {}): InstalledSkill => {
     apps: {
       claude: false,
       codex: false,
-      gemini: false,
-      grokbuild: false,
-      opencode: false,
-      openclaw: false,
-      hermes: false,
       pi: false,
       ...apps,
     },
@@ -174,7 +169,7 @@ describe("UnifiedSkillsPanel", () => {
         {
           directory: "shared-skill",
           name: "Shared Skill",
-          foundIn: ["grokbuild", "claude"],
+          foundIn: ["claude"],
           path: "/tmp/shared-skill",
         },
       ],
@@ -705,7 +700,7 @@ describe("UnifiedSkillsPanel", () => {
 
   it("imports with apps chosen from where each Skill was found", async () => {
     m.installed = [makeSkill()];
-    m.visibleApps = ["claude", "codex", "grokbuild", "pi"];
+    m.visibleApps = ["claude", "codex", "pi"];
     m.importSkills.mockResolvedValueOnce([makeSkill({ id: "shared" })]);
     renderPanel();
     await userEvent.click(
@@ -727,13 +722,7 @@ describe("UnifiedSkillsPanel", () => {
         apps: {
           claude: true,
           codex: false,
-          gemini: false,
-          grokbuild: true,
-          opencode: false,
-          openclaw: false,
-          hermes: false,
           pi: false,
-          mcode: false,
         },
       },
     ]);

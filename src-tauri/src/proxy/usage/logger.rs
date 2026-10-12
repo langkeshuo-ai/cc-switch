@@ -330,14 +330,12 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// 记录失败的请求（带更多上下文信息）
+    /// 记录失败的请求（带更多上下文信息）——同步内联版本。
     ///
-    /// H4：异步上下文专用——错误日志写入移入 blocking 线程池执行，
-    /// 避免阻塞 tokio worker。只能在 tokio runtime 上下文中调用。
-    ///
-    /// 相比 [`UsageLogger::log_error`]，本方法接受更多参数以提供完整的请求上下文。
+    /// 供调用方已身处 blocking 线程池（`spawn_blocking`）的场景使用：
+    /// 直接取 `Database` 的阻塞锁写库，不得在 tokio worker 线程上调用。
     #[allow(clippy::too_many_arguments)]
-    pub async fn log_error_with_context_async(
+    pub fn log_error_with_context(
         &self,
         request_id: String,
         provider_id: String,
@@ -350,23 +348,20 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
     ) -> Result<(), AppError> {
-        self.db
-            .db_blocking(move |conn| {
-                let log = Self::error_request_log(
-                    request_id,
-                    provider_id,
-                    app_type,
-                    model,
-                    status_code,
-                    error_message,
-                    latency_ms,
-                    is_streaming,
-                    session_id,
-                    provider_type,
-                );
-                Self::log_request_on_conn(conn, &log)
-            })
-            .await
+        let log = Self::error_request_log(
+            request_id,
+            provider_id,
+            app_type,
+            model,
+            status_code,
+            error_message,
+            latency_ms,
+            is_streaming,
+            session_id,
+            provider_type,
+        );
+        let conn = crate::database::lock_conn!(self.db.conn);
+        Self::log_request_on_conn(&conn, &log)
     }
 
     /// 查询模型定价的同步核心（H4：供 `db_blocking` 闭包复用）
@@ -409,15 +404,10 @@ impl<'a> UsageLogger<'a> {
         }
     }
 
-    /// 计算并记录请求（同步内联版本）
+    /// 计算并记录请求（同步内联版本）。
     ///
-    /// 生产路径请用 [`UsageLogger::log_with_calculation_async`]（H4：把同步 DB
-    /// 工作移入 blocking 线程池）。本同步版**仅供单元测试**——它需要在无 tokio
-    /// runtime 的测试线程里跑。
-    ///
-    /// 用 `#[cfg(test)]` 而非 `#[allow(dead_code)]`：测试支撑代码不该编进生产
-    /// 二进制（`allow` 只是让编译器闭嘴，函数照样进产物）。
-    #[cfg(test)]
+    /// 供调用方已身处 blocking 线程池（`spawn_blocking`）的场景使用：
+    /// 直接取 `Database` 的阻塞锁写库，不得在 tokio worker 线程上调用。
     #[allow(clippy::too_many_arguments)]
     pub fn log_with_calculation(
         &self,
@@ -445,7 +435,7 @@ impl<'a> UsageLogger<'a> {
             request_model,
             pricing_model,
             usage,
-            cost_multiplier,
+            Decimal::ONE,
             latency_ms,
             first_token_ms,
             status_code,
@@ -456,7 +446,10 @@ impl<'a> UsageLogger<'a> {
     }
 
     /// 计算并记录请求的同步核心（H4：供 `db_blocking` 闭包复用）
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `cost_multiplier` 参数已不再参与本路径的计价（倍率在上游重构中移出），
+    /// 仅为兼容既有调用方签名保留。
+    #[allow(clippy::too_many_arguments, unused_variables)]
     fn log_with_calculation_on_conn(
         conn: &rusqlite::Connection,
         request_id: String,
@@ -512,49 +505,6 @@ impl<'a> UsageLogger<'a> {
         };
 
         Self::log_request_on_conn(conn, &log)
-    }
-
-    /// H4：异步上下文专用——定价查询与日志写入整体移入 blocking 线程池执行，
-    /// 避免阻塞 tokio worker。参数均为 owned 值；只能在 tokio runtime 上下文中调用。
-    #[allow(clippy::too_many_arguments)]
-    pub async fn log_with_calculation_async(
-        &self,
-        request_id: String,
-        provider_id: String,
-        app_type: String,
-        model: String,
-        request_model: String,
-        pricing_model: String,
-        usage: TokenUsage,
-        cost_multiplier: Decimal,
-        latency_ms: u64,
-        first_token_ms: Option<u64>,
-        status_code: u16,
-        session_id: Option<String>,
-        provider_type: Option<String>,
-        is_streaming: bool,
-    ) -> Result<(), AppError> {
-        self.db
-            .db_blocking(move |conn| {
-                Self::log_with_calculation_on_conn(
-                    conn,
-                    request_id,
-                    provider_id,
-                    app_type,
-                    model,
-                    request_model,
-                    pricing_model,
-                    usage,
-                    cost_multiplier,
-                    latency_ms,
-                    first_token_ms,
-                    status_code,
-                    session_id,
-                    provider_type,
-                    is_streaming,
-                )
-            })
-            .await
     }
 }
 

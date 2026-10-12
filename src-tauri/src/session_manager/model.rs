@@ -616,14 +616,6 @@ mod tests {
                 include_str!("../../../tests/fixtures/sessions/codex.messages.json"),
             ),
             (
-                "gemini",
-                include_str!("../../../tests/fixtures/sessions/gemini.messages.json"),
-            ),
-            (
-                "opencode",
-                include_str!("../../../tests/fixtures/sessions/opencode.messages.json"),
-            ),
-            (
                 "pi",
                 include_str!("../../../tests/fixtures/sessions/pi.messages.json"),
             ),

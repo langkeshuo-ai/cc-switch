@@ -463,10 +463,6 @@ export function loginAccountKey(
   switch (appId) {
     case "codex":
       return "chatgpt";
-    case "gemini":
-      return "google";
-    case "grokbuild":
-      return "xai";
     default:
       return "claude";
   }

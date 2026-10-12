@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn creates_local_file_with_auto_sync_enabled_by_default() {
         with_test_home(|db, path| {
             let state = get_models_dev_sync_state(db).expect("sync state");
@@ -519,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn existing_file_with_auto_sync_disabled_stays_disabled() {
         with_test_home(|db, path| {
             // Files written before the default flipped carry an explicit `false`.
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn empty_override_file_does_not_roll_back_builtin_pricing_repairs() {
         with_test_home(|db, path| {
             get_models_dev_sync_state(db).expect("create override file");
@@ -576,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn models_dev_batch_sync_overwrites_existing_manual_pricing() {
         with_test_home(|db, path| {
             let mut manual = sample_pricing();
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn batch_update_and_delete_are_persisted_to_local_file() {
         with_test_home(|db, path| {
             assert_eq!(
@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn reloads_manual_file_edits_and_deletion_tombstones() {
         with_test_home(|db, path| {
             get_models_dev_sync_state(db).expect("create pricing file");
@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn repeated_seeded_tombstone_deletion_does_not_backfill_unrelated_usage() {
         with_test_home(|db, _path| {
             get_models_dev_sync_state(db).expect("create override file");
@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn recording_sync_result_preserves_user_selection_and_switches() {
         with_test_home(|db, _path| {
             let config = ModelsDevSyncConfig {

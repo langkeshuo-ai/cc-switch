@@ -32,23 +32,16 @@ use crate::store::AppState;
 #[serde(rename_all = "lowercase")]
 pub enum ProfileScope {
     Claude,
-    #[serde(rename = "claude-desktop")]
-    ClaudeDesktop,
     Codex,
 }
 
 impl ProfileScope {
     /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 3] = [
-        ProfileScope::Claude,
-        ProfileScope::ClaudeDesktop,
-        ProfileScope::Codex,
-    ];
+    pub const ALL: [ProfileScope; 2] = [ProfileScope::Claude, ProfileScope::Codex];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             ProfileScope::Claude => "claude",
-            ProfileScope::ClaudeDesktop => "claude-desktop",
             ProfileScope::Codex => "codex",
         }
     }
@@ -56,7 +49,7 @@ impl ProfileScope {
     pub fn parse(value: &str) -> Result<Self, AppError> {
         match value {
             "claude" => Ok(ProfileScope::Claude),
-            "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
+            "claude-desktop" => Ok(ProfileScope::Claude), // 旧数据降级
             "codex" => Ok(ProfileScope::Codex),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
@@ -68,7 +61,6 @@ impl ProfileScope {
     pub fn apps(&self) -> &'static [AppType] {
         match self {
             ProfileScope::Claude => &[AppType::Claude],
-            ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
             ProfileScope::Codex => &[AppType::Codex],
         }
     }
@@ -77,7 +69,6 @@ impl ProfileScope {
     pub fn for_app(app: &AppType) -> Option<Self> {
         match app {
             AppType::Claude => Some(ProfileScope::Claude),
-            AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
             AppType::Codex => Some(ProfileScope::Codex),
             _ => None,
         }
@@ -98,7 +89,6 @@ impl<T> PerApp<T> {
     pub fn get(&self, app: &AppType) -> Option<&T> {
         match app {
             AppType::Claude => Some(&self.claude),
-            AppType::ClaudeDesktop => Some(&self.claude_desktop),
             AppType::Codex => Some(&self.codex),
             _ => None,
         }
@@ -107,7 +97,6 @@ impl<T> PerApp<T> {
     pub fn get_mut(&mut self, app: &AppType) -> Option<&mut T> {
         match app {
             AppType::Claude => Some(&mut self.claude),
-            AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
             AppType::Codex => Some(&mut self.codex),
             _ => None,
         }
@@ -569,29 +558,20 @@ mod tests {
     fn test_scope_captured_detects_per_scope_snapshot() {
         let mut payload = ProfilePayload::default();
         assert!(!payload.scope_captured(ProfileScope::Claude));
-        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
 
         // 只拍过 claude 组（哪怕拍到的是空集）
         payload.mcp.claude = Some(vec![]);
         assert!(payload.scope_captured(ProfileScope::Claude));
-        assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
-
-        // Desktop 槽位属于独立的 claude-desktop 组
-        let mut desktop_only = ProfilePayload::default();
-        desktop_only.providers.claude_desktop = Some("d1".into());
-        assert!(desktop_only.scope_captured(ProfileScope::ClaudeDesktop));
-        assert!(!desktop_only.scope_captured(ProfileScope::Claude));
     }
 
     #[test]
     fn test_per_app_get_only_supports_profile_apps() {
         let per: PerApp<Option<String>> = PerApp::default();
         assert!(per.get(&AppType::Claude).is_some());
-        assert!(per.get(&AppType::ClaudeDesktop).is_some());
         assert!(per.get(&AppType::Codex).is_some());
-        assert!(per.get(&AppType::Gemini).is_none());
+        assert!(per.get(&AppType::Pi).is_none());
     }
 
     #[test]
@@ -610,20 +590,15 @@ mod tests {
 
     #[test]
     fn test_scope_app_grouping() {
-        // Claude Code 与 Claude Desktop 各自独立成组；
         // 组内应用与 for_app 反向映射必须一致
         assert_eq!(ProfileScope::Claude.apps(), &[AppType::Claude]);
-        assert_eq!(
-            ProfileScope::ClaudeDesktop.apps(),
-            &[AppType::ClaudeDesktop]
-        );
         assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
         for scope in ProfileScope::ALL {
             for app in scope.apps() {
                 assert_eq!(ProfileScope::for_app(app), Some(scope));
             }
         }
-        assert_eq!(ProfileScope::for_app(&AppType::Gemini), None);
+        assert_eq!(ProfileScope::for_app(&AppType::Pi), None);
     }
 
     #[test]

@@ -203,32 +203,7 @@ describe("SessionReader", () => {
       expect(stepButton(/Read a\.ts/)).toBeInTheDocument();
     });
 
-    it("Gemini：✓ / x 状态符与 ✦ 助手符号", () => {
-      renderReader("gemini", fixtures.gemini);
-      // 第一轮失败的 build 用 x，第二轮被中断的用 -
-      const [failed, interrupted] = screen.getAllByRole("button", {
-        name: /Shell npm run build/,
-      });
-      expect(within(failed).getByText("x")).toBeInTheDocument();
-      expect(within(interrupted).getByText("-")).toBeInTheDocument();
-      expect(screen.getAllByText("✦").length).toBeGreaterThan(0);
-      expect(
-        screen.getByText(/You have exhausted your capacity/),
-      ).toBeInTheDocument();
-    });
 
-    it("OpenCode：$ / → 图标标题，摘要合计 tokens 与费用", () => {
-      renderReader("opencode", fixtures.opencode);
-      expect(stepButton(/\$ bunx biome --version/)).toHaveAttribute(
-        "aria-expanded",
-        "true",
-      );
-      const summaries = screen.getAllByRole("button", {
-        name: /执行过程/,
-      });
-      expect(summaries[0].textContent).toMatch(/tok/);
-      expect(summaries[0].textContent).toMatch(/\$0\.0\d+/);
-    });
 
     it("Pi：小写动词与 ● 状态符", () => {
       renderReader("pi", fixtures.pi);

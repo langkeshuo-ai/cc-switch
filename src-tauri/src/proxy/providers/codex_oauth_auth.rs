@@ -1538,34 +1538,6 @@ impl CodexOAuthManager {
     }
 
     #[cfg(test)]
-    pub(crate) async fn add_test_account_with_access_token(
-        &self,
-        account_id: &str,
-        access_token: &str,
-        id_token: Option<&str>,
-    ) -> Result<(), CodexOAuthError> {
-        self.add_test_account_with_workspace_and_access_token(
-            account_id,
-            account_id,
-            access_token,
-            id_token,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn add_test_account_with_user_identity(
-        &self,
-        account_id: &str,
-        access_token: &str,
-        subject: &str,
-    ) -> Result<(), CodexOAuthError> {
-        let id_token = crate::codex_config::test_codex_id_token(subject);
-        self.add_test_account_with_access_token(account_id, access_token, Some(&id_token))
-            .await
-    }
-
-    #[cfg(test)]
     pub(crate) async fn add_test_account_with_workspace_and_access_token(
         &self,
         account_id: &str,
@@ -1607,26 +1579,19 @@ impl CodexOAuthManager {
     }
 
     #[cfg(test)]
-    pub(crate) async fn test_refresh_token_for_account(&self, account_id: &str) -> Option<String> {
-        self.accounts
-            .read()
-            .await
-            .get(account_id)
-            .map(|account| account.refresh_token.clone())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn test_set_token_updated_at_ms(
+    pub(crate) async fn add_test_account_with_access_token(
         &self,
         account_id: &str,
-        token_updated_at_ms: i64,
-    ) {
-        self.accounts
-            .write()
-            .await
-            .get_mut(account_id)
-            .expect("test account present")
-            .token_updated_at_ms = token_updated_at_ms;
+        access_token: &str,
+        id_token: Option<&str>,
+    ) -> Result<(), CodexOAuthError> {
+        self.add_test_account_with_workspace_and_access_token(
+            account_id,
+            account_id,
+            access_token,
+            id_token,
+        )
+        .await
     }
 
     // ==================== 内部方法 ====================

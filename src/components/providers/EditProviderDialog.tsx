@@ -48,15 +48,8 @@ interface EditProviderDialogProps {
 const LIVE_FILE: Partial<Record<AppId, string>> = {
   claude: "~/.claude/settings.json",
   codex: "~/.codex/config.toml",
-  gemini: "~/.gemini/.env",
 };
-const SWITCH_APPS: AppId[] = [
-  "claude",
-  "codex",
-  "gemini",
-  "grokbuild",
-  "claude-desktop",
-];
+const SWITCH_APPS: AppId[] = ["claude", "codex"];
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   typeof value === "object" && value !== null && !Array.isArray(value)

@@ -185,6 +185,7 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
+            pi: false,
           },
           models,
         }
@@ -201,6 +202,7 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
+        pi: false,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;
@@ -241,6 +243,7 @@ requires_openai_auth = true`;
           apps: {
             claude: claudeEnabled,
             codex: codexEnabled,
+            pi: false,
           },
           models,
         }
@@ -257,6 +260,7 @@ requires_openai_auth = true`;
       provider.apps = {
         claude: claudeEnabled,
         codex: codexEnabled,
+        pi: false,
       };
       provider.models = models;
       provider.websiteUrl = websiteUrl.trim() || undefined;

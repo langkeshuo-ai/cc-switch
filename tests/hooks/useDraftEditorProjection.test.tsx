@@ -99,7 +99,7 @@ describe("useDraftEditorProjection", () => {
     const onBase = vi.fn();
     const apply = vi.fn();
     const { result } = renderHook(() =>
-      useDraftEditorProjection("gemini", onBase),
+      useDraftEditorProjection("codex", onBase),
     );
 
     act(() => {
@@ -122,7 +122,7 @@ describe("useDraftEditorProjection", () => {
     const onBase = vi.fn();
     const apply = vi.fn();
     const { result } = renderHook(() =>
-      useDraftEditorProjection("grokbuild", onBase),
+      useDraftEditorProjection("codex", onBase),
     );
 
     act(() => {
@@ -170,7 +170,7 @@ describe("useDraftEditorProjection", () => {
         );
       });
       if (lifecycle === "app change") {
-        rerender({ ...initialProps, appId: "gemini" });
+        rerender({ ...initialProps, appId: "pi" });
       } else if (lifecycle === "receiver change") {
         rerender({ ...initialProps, onBase: undefined });
       } else {

@@ -1,13 +1,12 @@
 import { http, HttpResponse } from "msw";
 import type { AppId } from "@/lib/api/types";
 import { MODELS_DEV_API_URL } from "@/lib/modelsDev";
-import type { McpServer, Provider, Settings } from "@/types";
+import type { Provider, Settings } from "@/types";
 import {
   addProvider,
   deleteProvider,
   deleteSession,
   getCurrentProviderId,
-  getLiveProviderIds,
   getSessionMessages,
   getProviders,
   listProviders,
@@ -20,10 +19,6 @@ import {
   setSettings,
   getAppConfigDirOverride,
   setAppConfigDirOverrideState,
-  getMcpConfig,
-  setMcpServerEnabled,
-  upsertMcpServer,
-  deleteMcpServer,
 } from "./state";
 
 const TAURI_ENDPOINT = "http://tauri.local";
@@ -70,20 +65,6 @@ export const handlers = [
   ),
 
   http.post(`${TAURI_ENDPOINT}/update_tray_menu`, () => success(true)),
-
-  http.post(`${TAURI_ENDPOINT}/get_opencode_live_provider_ids`, () =>
-    success(getLiveProviderIds("opencode")),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/get_openclaw_live_provider_ids`, () =>
-    success(getLiveProviderIds("openclaw")),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/get_openclaw_default_model`, () =>
-    success({ primary: null, fallback: [] }),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/scan_openclaw_config_health`, () => success([])),
 
   http.post(`${TAURI_ENDPOINT}/switch_provider`, async ({ request }) => {
     const { id, app } = await withJson<{ id: string; app: AppId }>(request);
@@ -186,27 +167,11 @@ export const handlers = [
     );
   }),
 
-  // MCP APIs
-  http.post(`${TAURI_ENDPOINT}/get_mcp_config`, async ({ request }) => {
-    const { app } = await withJson<{ app: AppId }>(request);
-    return success(getMcpConfig(app));
-  }),
-
   http.post(`${TAURI_ENDPOINT}/import_mcp_from_claude`, () => success(1)),
   http.post(`${TAURI_ENDPOINT}/import_mcp_from_codex`, () => success(1)),
   http.post(`${TAURI_ENDPOINT}/resync_mcp_to_apps`, async ({ request }) => {
     const { apps } = await withJson<{ apps?: AppId[] | null }>(request);
-    const targets = apps?.length
-      ? apps
-      : [
-          "claude",
-          "codex",
-          "gemini",
-          "grokbuild",
-          "opencode",
-          "hermes",
-          "mcode",
-        ];
+    const targets = apps?.length ? apps : ["claude", "codex", "pi"];
     return success(targets.map((app) => ({ app, ok: true })));
   }),
 
@@ -218,38 +183,6 @@ export const handlers = [
   http.post(`${TAURI_ENDPOINT}/open_cc_switch_skills_dir`, () => success(true)),
   http.post(`${TAURI_ENDPOINT}/get_session_usage_last_sync`, () =>
     success(null),
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/set_mcp_enabled`, async ({ request }) => {
-    const { app, id, enabled } = await withJson<{
-      app: AppId;
-      id: string;
-      enabled: boolean;
-    }>(request);
-    setMcpServerEnabled(app, id, enabled);
-    return success(true);
-  }),
-
-  http.post(
-    `${TAURI_ENDPOINT}/upsert_mcp_server_in_config`,
-    async ({ request }) => {
-      const { app, id, spec } = await withJson<{
-        app: AppId;
-        id: string;
-        spec: McpServer;
-      }>(request);
-      upsertMcpServer(app, id, spec);
-      return success(true);
-    },
-  ),
-
-  http.post(
-    `${TAURI_ENDPOINT}/delete_mcp_server_in_config`,
-    async ({ request }) => {
-      const { app, id } = await withJson<{ app: AppId; id: string }>(request);
-      deleteMcpServer(app, id);
-      return success(true);
-    },
   ),
 
   http.post(`${TAURI_ENDPOINT}/restart_app`, () => success(true)),
@@ -508,14 +441,7 @@ export const handlers = [
     `${TAURI_ENDPOINT}/get_prompt_file_location`,
     async ({ request }) => {
       const { app } = await withJson<{ app: AppId }>(request);
-      const file =
-        app === "claude"
-          ? "CLAUDE.md"
-          : app === "gemini"
-            ? "GEMINI.md"
-            : app === "hermes"
-              ? "SOUL.md"
-              : "AGENTS.md";
+      const file = app === "claude" ? "CLAUDE.md" : "AGENTS.md";
       return success({
         path: `/home/test/.${app}/${file}`,
         displayPath: `~/.${app}/${file}`,

@@ -14,16 +14,14 @@ export function useManagedAccountUsers(
   defaultAccountId: string | null,
 ) {
   const { data: claude } = useProvidersQuery("claude");
-  const { data: desktop } = useProvidersQuery("claude-desktop");
   const { data: codex } = useProvidersQuery("codex");
 
   return useCallback(
     (accountIds: readonly string[]): ManagedAccountUser[] =>
       findManagedAccountUsers(authProvider, accountIds, defaultAccountId, {
         claude: claude?.providers,
-        "claude-desktop": desktop?.providers,
         codex: codex?.providers,
       }),
-    [authProvider, defaultAccountId, claude, desktop, codex],
+    [authProvider, defaultAccountId, claude, codex],
   );
 }

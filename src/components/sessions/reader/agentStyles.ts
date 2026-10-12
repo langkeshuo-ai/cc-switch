@@ -106,65 +106,6 @@ const codex: AgentReaderStyle = {
   monoTitles: false,
 };
 
-const gemini: AgentReaderStyle = {
-  id: "gemini",
-  accentVar: "--agent-gemini",
-  assistantGlyph: "✦",
-  userGlyph: ">",
-  step: { success: "✓", error: "x", pending: "o", interrupted: "-" },
-  resultFrame: "box",
-  resultConnector: "",
-  thinkingGlyph: "✦",
-  thinkingLabelKey: "sessionManager.reader.thinking.gemini",
-  titleFormat: "verb",
-  verbs: {
-    shell: "Shell",
-    read: "ReadFile",
-    search: "Search",
-    edit: "Edit",
-    write: "WriteFile",
-    web: "WebFetch",
-    mcp: "MCP",
-    agent: "Agent",
-    ask: "Ask",
-    todo: "Todos",
-  },
-  merge: { readSearchRuns: false, mcpSameServerRuns: false },
-  showDiffCounts: true,
-  showStepCost: false,
-  showExitCode: "nonzero",
-  monoTitles: true,
-};
-
-const opencode: AgentReaderStyle = {
-  id: "opencode",
-  accentVar: "--agent-opencode",
-  assistantGlyph: "",
-  userGlyph: "",
-  step: { success: "✓", error: "✗", pending: "~", interrupted: "✗" },
-  resultFrame: "tree",
-  resultConnector: "│",
-  thinkingGlyph: "",
-  thinkingLabelKey: "sessionManager.reader.thinking.opencode",
-  titleFormat: "icon",
-  verbs: {
-    shell: "",
-    read: "Read",
-    search: "Grep",
-    edit: "Edit",
-    write: "Wrote",
-    web: "WebFetch",
-    agent: "Task",
-    ask: "Asked",
-    todo: "Todos",
-  },
-  merge: { readSearchRuns: false, mcpSameServerRuns: false },
-  showDiffCounts: true,
-  showStepCost: true,
-  showExitCode: "nonzero",
-  monoTitles: true,
-};
-
 const pi: AgentReaderStyle = {
   id: "pi",
   accentVar: "--agent-pi",
@@ -225,7 +166,7 @@ const generic: AgentReaderStyle = {
 
 export const AGENT_READER_STYLES: Readonly<
   Record<ReaderStyleId, AgentReaderStyle>
-> = { claude, codex, gemini, opencode, pi, generic };
+> = { claude, codex, pi, generic };
 
 /** 按会话来源取风格；没有专属配置的来源映射到 generic */
 export const getAgentReaderStyle = (

@@ -48,7 +48,6 @@ import { RequestLogTable } from "./RequestLogTable";
 import { ProviderStatsTable } from "./ProviderStatsTable";
 import { ModelStatsTable } from "./ModelStatsTable";
 import { PricingConfigPanel } from "./PricingConfigPanel";
-import { RequestDetailPanel } from "./RequestDetailPanel";
 import { UsageDataSourcesSheet } from "./UsageDataSourcesSheet";
 import { UsageDateRangePicker } from "./UsageDateRangePicker";
 import { UsageHeatmap } from "./UsageHeatmap";
@@ -172,7 +171,6 @@ export function UsageDashboard({
   const [refreshIntervalMs, setRefreshIntervalMs] = useState(() =>
     normalizeRefreshInterval(savedRefreshIntervalMs),
   );
-  const [detailRequestId, setDetailRequestId] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [showRebuildConfirm, setShowRebuildConfirm] = useState(false);
   const [rebuildingCodex, setRebuildingCodex] = useState(false);
@@ -702,7 +700,6 @@ export function UsageDashboard({
             model={model}
             statusCode={statusCode}
             refreshIntervalMs={refreshIntervalMs}
-            onOpenDetail={setDetailRequestId}
           />
         )}
         {tab === "providers" && (
@@ -825,10 +822,6 @@ export function UsageDashboard({
       {filterRow}
       {body}
 
-      <RequestDetailPanel
-        requestId={detailRequestId}
-        onClose={() => setDetailRequestId(null)}
-      />
       <UsageDataSourcesSheet
         open={sourcesOpen}
         onOpenChange={setSourcesOpen}

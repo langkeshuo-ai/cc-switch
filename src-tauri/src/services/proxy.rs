@@ -11,7 +11,7 @@ use crate::proxy::switch_lock::SwitchLockManager;
 use crate::proxy::types::*;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 use crate::live::project::claude::PROXY_TOKEN_PLACEHOLDER;
@@ -182,21 +182,8 @@ impl ProxyService {
     /// 各应用是否处于代理模式（读设备本地的模式状态，不读会随云同步的
     /// `proxy_config.enabled`）。
     pub async fn get_takeover_status(&self) -> Result<ProxyTakeoverStatus, String> {
-        let [claude, codex, gemini, grokbuild] = crate::mode::current::proxy_flags([
-            AppType::Claude,
-            AppType::Codex,
-            AppType::Gemini,
-            AppType::GrokBuild,
-        ]);
-        Ok(ProxyTakeoverStatus {
-            claude,
-            codex,
-            gemini,
-            grokbuild,
-            // OpenCode and OpenClaw don't support proxy features
-            opencode: false,
-            openclaw: false,
-        })
+        let [claude, codex] = crate::mode::current::proxy_flags([AppType::Claude, AppType::Codex]);
+        Ok(ProxyTakeoverStatus { claude, codex })
     }
 
     /// 把代理的上游指向 `provider`（状态面板里的「使用中」）。
@@ -290,14 +277,6 @@ impl ProxyService {
                     Err(_) => false,
                 }
             }
-            AppType::Gemini => match self.read_gemini_live() {
-                Ok(config) => Self::is_gemini_live_taken_over(&config),
-                Err(_) => false,
-            },
-            AppType::GrokBuild => match self.read_grok_live() {
-                Ok(config) => Self::is_grok_live_taken_over(&config),
-                Err(_) => false,
-            },
             _ => false,
         }
     }
@@ -308,8 +287,6 @@ impl ProxyService {
         match app_type {
             AppType::Claude => Self::is_claude_live_taken_over(config),
             AppType::Codex => Self::is_codex_live_taken_over(config),
-            AppType::Gemini => Self::is_gemini_live_taken_over(config),
-            AppType::GrokBuild => Self::is_grok_live_taken_over(config),
             _ => false,
         }
     }
@@ -317,7 +294,154 @@ impl ProxyService {
     /// 是否有应用处于代理模式
     pub async fn is_takeover_active(&self) -> Result<bool, String> {
         let status = self.get_takeover_status().await?;
-        Ok(status.claude || status.codex || status.gemini || status.grokbuild)
+        Ok(status.claude || status.codex)
+    }
+
+    /// 为指定应用开启/关闭 Live 接管（fork 启动恢复路径）。
+    ///
+    /// 与 UI 的 `set_proxy_takeover_for_app` 走同一套 `mode::controller` 状态机：
+    /// enter/exit 内部已获取同一切换锁并同步 `proxy_config` 标志，这里不再重复加锁。
+    pub async fn set_takeover_for_app(&self, app_type: &str, enabled: bool) -> Result<(), String> {
+        let app: AppType = app_type.parse().map_err(|e| {
+            crate::error::format_structured_error(
+                "TAKEOVER_INVALID_APP_TYPE",
+                Some(&format!("无效的应用类型: {e}")),
+                &[("app", app_type)],
+                Some("reloadApps"),
+            )
+        })?;
+        if !app.supports_local_proxy() {
+            return Err(crate::error::format_structured_error(
+                "TAKEOVER_UNSUPPORTED_APP",
+                Some(&format!("{} 不支持本地路由", app.as_str())),
+                &[("app", app.as_str())],
+                Some("disableTakeover"),
+            ));
+        }
+        let handle = self
+            .app_handle
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| "应用句柄尚未就绪，无法切换代理接管".to_string())?;
+        let state = handle.state::<crate::store::AppState>();
+        if enabled {
+            crate::mode::controller::enter_with_route(state.inner(), &app, false, None).await
+        } else {
+            crate::mode::controller::exit(state.inner(), &app).await
+        }
+    }
+
+    /// 从异常退出中恢复（启动时调用）
+    ///
+    /// 检测到 Live 备份残留时调用此方法。
+    /// 会恢复 Live 配置、删除备份。
+    pub async fn recover_from_crash(&self) -> Result<(), String> {
+        for app_type in [AppType::Claude, AppType::Codex] {
+            if let Err(e) = self.restore_live_from_backup(&app_type).await {
+                log::warn!("恢复 {} 的 Live 配置失败: {e}", app_type.as_str());
+            }
+        }
+
+        self.db
+            .delete_all_live_backups()
+            .await
+            .map_err(|e| format!("删除备份失败: {e}"))?;
+
+        log::info!("已从异常退出中恢复 Live 配置");
+        Ok(())
+    }
+
+    /// 从 Live 备份行恢复单个应用的原始配置。备份本身是代理占位符（异常历史状态）时
+    /// 跳过：直接回写会把 Live 永久卡在代理地址，交给后续的模式状态机兜底重建。
+    async fn restore_live_from_backup(&self, app_type: &AppType) -> Result<(), String> {
+        let _guard = self.switch_locks.lock_for_app(app_type.as_str()).await;
+        let Some(backup) = self
+            .db
+            .get_live_backup(app_type.as_str())
+            .await
+            .map_err(|e| format!("获取 {} Live 备份失败: {e}", app_type.as_str()))?
+        else {
+            return Ok(());
+        };
+        let config: Value = serde_json::from_str(&backup.original_config)
+            .map_err(|e| format!("解析 {} 备份失败: {e}", app_type.as_str()))?;
+        if Self::config_has_proxy_placeholder(app_type, &config) {
+            log::warn!(
+                "{} 备份本身已是代理占位符（异常历史状态），跳过备份恢复",
+                app_type.as_str()
+            );
+            return Ok(());
+        }
+        match app_type {
+            AppType::Claude => {
+                let path = get_claude_settings_path();
+                crate::config::write_json_file_private(&path, &config)
+                    .map_err(|e| format!("写入 Claude 配置失败: {e}"))?;
+            }
+            AppType::Codex => {
+                let auth = config.get("auth").cloned().unwrap_or_else(|| json!({}));
+                let config_text = config
+                    .get("config")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                crate::codex_config::write_codex_live_atomic(&auth, config_text.as_deref())
+                    .map_err(|e| format!("写入 Codex 配置失败: {e}"))?;
+            }
+            _ => {}
+        }
+        log::info!("{} Live 配置已从备份恢复", app_type.as_str());
+        Ok(())
+    }
+
+    /// 检测 Live 配置是否处于"被接管"的残留状态
+    ///
+    /// 用于兜底处理：当数据库备份缺失但 Live 文件已经写成代理占位符时，
+    /// 启动流程可以据此触发恢复逻辑。
+    pub fn detect_takeover_in_live_configs(&self) -> bool {
+        if let Ok(config) = self.read_claude_live() {
+            if Self::is_claude_live_taken_over(&config) {
+                return true;
+            }
+        }
+
+        if let Ok(config) = self.read_codex_live() {
+            if Self::is_codex_live_taken_over(&config) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// 恢复 Live 配置，但保留代理状态（程序正常退出时调用）
+    ///
+    /// 把客户端文件从接管占位符恢复回原始配置并清掉备份，供下次启动时按
+    /// `proxy_config.enabled` 自动重新接管。与 [`Self::recover_from_crash`] 的区别：
+    /// 这里不区分崩溃/正常退出，也不触碰 mode 状态与代理服务器（进程即将退出，
+    /// 服务器随进程结束；重投影由下次启动的 `mode::controller::startup` 完成）。
+    pub async fn stop_with_restore_keep_state(&self) -> Result<(), String> {
+        // 1. 逐应用恢复原始 Live 配置
+        for app_type in [AppType::Claude, AppType::Codex] {
+            if let Err(e) = self.restore_live_from_backup(&app_type).await {
+                log::warn!("恢复 {} 的 Live 配置失败: {e}", app_type.as_str());
+            }
+        }
+
+        // 2. 删除备份（Live 配置已恢复，备份不再需要；保留各应用的 enabled
+        //    与故障转移配置，下次启动时自动恢复）
+        self.db
+            .delete_all_live_backups()
+            .await
+            .map_err(|e| format!("删除备份失败: {e}"))?;
+
+        // 3. 重置健康状态（下次启动徽章从正常开始）
+        if let Err(e) = self.db.clear_all_provider_health().await {
+            log::warn!("重置 Provider 健康状态失败: {e}");
+        }
+
+        log::info!("Live 配置已恢复（保留代理状态，下次启动将自动恢复）");
+        Ok(())
     }
 
     fn is_claude_live_taken_over(config: &Value) -> bool {
@@ -367,23 +491,6 @@ impl ProxyService {
                 .is_some_and(crate::codex_config::codex_config_has_official_proxy_route)
     }
 
-    fn is_gemini_live_taken_over(config: &Value) -> bool {
-        let env = match config.get("env").and_then(|v| v.as_object()) {
-            Some(env) => env,
-            None => return false,
-        };
-        env.get("GEMINI_API_KEY").and_then(|v| v.as_str()) == Some(PROXY_TOKEN_PLACEHOLDER)
-    }
-
-    fn is_grok_live_taken_over(config: &Value) -> bool {
-        config
-            .get("config")
-            .and_then(Value::as_str)
-            .is_some_and(|config_toml| {
-                crate::grok_config::has_proxy_placeholder(config_toml, PROXY_TOKEN_PLACEHOLDER)
-            })
-    }
-
     // ==================== Live 配置读写辅助方法 ====================
 
     fn read_claude_live(&self) -> Result<Value, String> {
@@ -422,23 +529,6 @@ impl ProxyService {
             .map_err(|e| format!("读取 Codex Live 配置失败: {e}"))
     }
 
-    fn read_gemini_live(&self) -> Result<Value, String> {
-        use crate::gemini_config::{env_to_json, get_gemini_env_path, read_gemini_env};
-
-        let env_path = get_gemini_env_path();
-        if !env_path.exists() {
-            return Err("Gemini .env 文件不存在".to_string());
-        }
-
-        let env_map = read_gemini_env().map_err(|e| format!("读取 Gemini env 失败: {e}"))?;
-        Ok(env_to_json(&env_map))
-    }
-
-    fn read_grok_live(&self) -> Result<Value, String> {
-        crate::grok_config::read_grok_live_settings()
-            .map_err(|e| format!("读取 Grok Build 配置失败: {e}"))
-    }
-
     // ==================== 原有方法 ====================
 
     /// 获取服务器状态
@@ -472,9 +562,8 @@ impl ProxyService {
             .await
             .map_err(|e| format!("获取代理配置失败: {e}"))?;
 
-        // 保存到数据库（保持 live_takeover_active 状态不变）
-        let mut new_config = config.clone();
-        new_config.live_takeover_active = previous.live_takeover_active;
+        // 保存到数据库
+        let new_config = config.clone();
 
         self.db
             .update_proxy_config(new_config.clone())

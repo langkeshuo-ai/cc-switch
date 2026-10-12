@@ -45,7 +45,6 @@ import type { CurrentProfileIds, ProfileScope } from "@/lib/api/profiles";
 
 const CURRENT_ID_KEY: Record<ProfileScope, keyof CurrentProfileIds> = {
   claude: "claude",
-  "claude-desktop": "claudeDesktop",
   codex: "codex",
 };
 

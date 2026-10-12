@@ -58,11 +58,7 @@ export function usePromptPageCommon(appId: AppId) {
 export function toggleEffectText(
   t: (key: string) => string,
   appId: AppId,
-  enabled: boolean,
 ): string {
-  if (appId === "hermes") {
-    return t(enabled ? "prompts.toast.hermesOn" : "prompts.toast.hermesOff");
-  }
   if (appId === "pi") return t("pi.prompts.reloadNotice");
   return "";
 }

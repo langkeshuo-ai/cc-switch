@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
-  visibleApps: ["claude", "codex", "gemini"] as string[],
+  visibleApps: ["claude", "codex"] as string[],
 }));
 
 vi.mock("@/hooks/useMcp", () => ({
@@ -133,7 +133,7 @@ describe("UnifiedMcpPanel", () => {
     mocks.serversMap = {};
     mocks.isLoading = false;
     mocks.isError = false;
-    mocks.visibleApps = ["claude", "codex", "gemini"];
+    mocks.visibleApps = ["claude", "codex"];
     mocks.toggle.mockReset().mockResolvedValue(true);
     mocks.bulkToggle.mockReset().mockImplementation(async ({ serverIds }) => ({
       succeeded: serverIds,
@@ -142,7 +142,7 @@ describe("UnifiedMcpPanel", () => {
     mocks.deleteServer.mockReset().mockResolvedValue(true);
     mocks.importServers.mockReset().mockResolvedValue(0);
     mocks.resync.mockReset().mockImplementation(async (apps?: string[]) =>
-      (apps ?? ["claude", "codex", "gemini"]).map((app) => ({
+      (apps ?? ["claude", "codex"]).map((app) => ({
         app,
         ok: true,
       })),
@@ -207,7 +207,7 @@ describe("UnifiedMcpPanel", () => {
     const header = screen.getByTestId("mcp-matrix");
     expect(
       within(header).getAllByRole("button", { name: /appMatrix.columnAria/ }),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
   });
 
   it("highlights the column header when a cell gets keyboard focus", async () => {
@@ -390,7 +390,7 @@ describe("UnifiedMcpPanel", () => {
 
   it("opens the edit drawer from the pencil button", async () => {
     mocks.serversMap = {
-      serena: makeServer("serena", { apps: { claude: true, hermes: true } }),
+      serena: makeServer("serena", { apps: { claude: true, codex: true } }),
     };
     renderPanel();
     await userEvent.click(

@@ -395,17 +395,6 @@ describe("UsageDashboard", () => {
     );
   });
 
-  it("opens the request detail drawer from a log row", async () => {
-    const user = userEvent.setup();
-    renderDashboard();
-
-    await user.click(screen.getByRole("button", { name: "open-row" }));
-
-    expect(await screen.findByTestId("request-detail")).toHaveTextContent(
-      "req-1",
-    );
-  });
-
   it("switches tabs and filters logs by status code", async () => {
     const user = userEvent.setup();
     renderDashboard();

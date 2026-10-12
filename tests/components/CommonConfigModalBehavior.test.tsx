@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import CodexConfigEditor from "@/components/providers/forms/CodexConfigEditor";
-import GeminiConfigEditor from "@/components/providers/forms/GeminiConfigEditor";
 
 vi.mock("@/components/common/FullScreenPanel", () => ({
   FullScreenPanel: ({
@@ -75,41 +74,4 @@ describe("Common config modals", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows no Gemini common config snippet and adds inactive fields to the global settings", () => {
-    const onEnvChange = vi.fn();
-    const onConfigChange = vi.fn();
-    render(
-      <GeminiConfigEditor
-        envValue={"GEMINI_API_KEY=k\nDEBUG=0"}
-        configValue={'{\n  "ui": {}\n}'}
-        onEnvChange={onEnvChange}
-        onConfigChange={onConfigChange}
-        envError=""
-        configError=""
-        inactiveFields={[
-          { path: ["env", "DEBUG"], value: "1" },
-          { path: ["config", "general"], value: { vimMode: true } },
-          { path: ["env", "HTTPS_PROXY"], value: "http://p" },
-        ]}
-      />,
-    );
-
-    expect(
-      screen.queryByRole("button", {
-        name: /geminiConfig.editCommonConfig|编辑通用配置/,
-      }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "+ env.DEBUG" }));
-    expect(onEnvChange).toHaveBeenLastCalledWith("GEMINI_API_KEY=k\nDEBUG=1");
-    fireEvent.click(screen.getByRole("button", { name: "+ env.HTTPS_PROXY" }));
-    expect(onEnvChange).toHaveBeenLastCalledWith(
-      "GEMINI_API_KEY=k\nDEBUG=0\nHTTPS_PROXY=http://p",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "+ config.general" }));
-    expect(JSON.parse(onConfigChange.mock.calls.at(-1)?.[0])).toEqual({
-      ui: {},
-      general: { vimMode: true },
-    });
-  });
 });

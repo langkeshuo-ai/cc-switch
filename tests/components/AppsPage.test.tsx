@@ -71,7 +71,10 @@ const missing = new Set<string>();
 
 function card(name: string) {
   return within(
-    screen.getByText(name).closest("[data-tool-row]") as HTMLElement,
+    // 用 span 限定：Pi 这类短名会同时命中图标 svg 内的 <title>
+    screen.getByText(name, { selector: "[data-tool-row] span" }).closest(
+      "[data-tool-row]",
+    ) as HTMLElement,
   );
 }
 
@@ -120,7 +123,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     upgraded.clear();
     outdated.clear();
     missing.clear();
-    outdated.add("claude").add("codex").add("gemini");
+    outdated.add("claude").add("codex").add("pi");
     mocks.getToolVersions
       .mockReset()
       .mockImplementation(async (tools: string[]) =>
@@ -189,7 +192,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     expect(mocks.runToolLifecycleAction).toHaveBeenCalledTimes(2);
     expect(updateButton("Claude Code")).toBeDisabled();
     expect(updateButton("Codex")).toBeDisabled();
-    expect(updateButton("Gemini CLI")).toBeEnabled();
+    expect(updateButton("Pi")).toBeEnabled();
 
     await act(async () => codexRun.resolve());
     expect(isReady("Codex")).toBe(true);
@@ -201,7 +204,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
 
   it("submits the remaining tools while a single upgrade is already running", async () => {
     const runs = new Map(
-      ["claude", "codex", "gemini"].map((name) => [name, deferred<void>()]),
+      ["claude", "codex", "pi"].map((name) => [name, deferred<void>()]),
     );
     mocks.runToolLifecycleAction.mockImplementation(
       async ([tool]: string[]) => {
@@ -222,17 +225,17 @@ describe("AppsPage concurrent CLI upgrades", () => {
     );
     expect(mocks.probeToolInstallations).toHaveBeenNthCalledWith(2, [
       "codex",
-      "gemini",
+      "pi",
     ]);
     expect(
       mocks.runToolLifecycleAction.mock.calls.map(([tools]) => tools),
-    ).toEqual([["claude"], ["codex"], ["gemini"]]);
+    ).toEqual([["claude"], ["codex"], ["pi"]]);
 
     await act(async () => {
-      runs.get("gemini")!.resolve();
+      runs.get("pi")!.resolve();
       runs.get("codex")!.resolve();
     });
-    expect(isReady("Gemini CLI")).toBe(true);
+    expect(isReady("Pi")).toBe(true);
     expect(isReady("Codex")).toBe(true);
     expect(updateButton("Claude Code")).toBeDisabled();
     await act(async () => runs.get("claude")!.resolve());
@@ -331,7 +334,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     });
     const { AppsPage } = await import("@/components/apps/AppsPage");
     const view = mountApps(AppsPage);
-    await waitFor(() => expect(mocks.getToolVersions).toHaveBeenCalledTimes(9));
+    await waitFor(() => expect(mocks.getToolVersions).toHaveBeenCalledTimes(3));
     view.unmount();
     const remounted = await renderApps();
     fireEvent.click(updateButton("Claude Code"));
@@ -383,7 +386,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
         preflight.resolve([
           report("claude"),
           report("codex", { needs_confirmation: true }),
-          report("gemini"),
+          report("pi"),
         ]),
       );
       await renderApps();
@@ -419,7 +422,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
 
   it("preserves batch progress across remounts and updates each completed tool", async () => {
     const runs = new Map(
-      ["claude", "codex", "gemini"].map((name) => [name, deferred<void>()]),
+      ["claude", "codex", "pi"].map((name) => [name, deferred<void>()]),
     );
     mocks.runToolLifecycleAction.mockImplementation(
       async ([tool]: string[]) => {
@@ -440,10 +443,10 @@ describe("AppsPage concurrent CLI upgrades", () => {
     expect(updateAll).toHaveAttribute("aria-busy", "true");
     expect(isReady("Codex")).toBe(true);
     expect(updateButton("Claude Code")).toHaveAttribute("aria-busy", "true");
-    expect(updateButton("Gemini CLI")).toBeDisabled();
+    expect(updateButton("Pi")).toBeDisabled();
 
-    await act(async () => runs.get("gemini")!.resolve());
-    expect(isReady("Gemini CLI")).toBe(true);
+    await act(async () => runs.get("pi")!.resolve());
+    expect(isReady("Pi")).toBe(true);
     expect(updateButton("Claude Code")).toBeDisabled();
     expect(updateAll).toHaveAttribute("aria-busy", "true");
     await act(async () => runs.get("claude")!.resolve());
@@ -537,7 +540,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     await waitFor(() => expect(mocks.success).toHaveBeenCalledTimes(1));
     expect(mocks.info).toHaveBeenCalledTimes(1);
     expect(isReady("Codex")).toBe(true);
-    expect(isReady("Gemini CLI")).toBe(true);
+    expect(isReady("Pi")).toBe(true);
     expect(mocks.warning).not.toHaveBeenCalled();
     expect(mocks.error).not.toHaveBeenCalled();
   });
@@ -573,7 +576,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     const firstRun = deferred<void>();
     const retryRun = deferred<void>();
     const codexRun = deferred<void>();
-    const geminiRun = deferred<void>();
+    const piRun = deferred<void>();
     let claudeAttempts = 0;
     mocks.runToolLifecycleAction.mockImplementation(
       async ([tool]: string[]) => {
@@ -584,7 +587,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
               : retryRun
             : tool === "codex"
               ? codexRun
-              : geminiRun;
+              : piRun;
         await run.promise;
         upgraded.add(tool);
       },
@@ -604,7 +607,7 @@ describe("AppsPage concurrent CLI upgrades", () => {
     );
     await act(async () => {
       codexRun.resolve();
-      geminiRun.resolve();
+      piRun.resolve();
     });
     expect(updateButton("Claude Code")).toBeDisabled();
     expect(mocks.warning).toHaveBeenCalledWith(
@@ -831,11 +834,11 @@ describe("AppsPage concurrent CLI upgrades", () => {
     await renderApps();
     fireEvent.click(updateAllButton());
     await waitFor(() => expect(isReady("Codex")).toBe(true));
-    expect(isReady("Gemini CLI")).toBe(true);
+    expect(isReady("Pi")).toBe(true);
     expect(updateButton("Claude Code")).toBeEnabled();
     expect(
       mocks.runToolLifecycleAction.mock.calls.map(([tools]) => tools),
-    ).toEqual([["codex"], ["gemini"]]);
+    ).toEqual([["codex"], ["pi"]]);
     expect(
       screen.getByRole("button", { name: "appsPage.checkUpdates" }),
     ).toBeEnabled();

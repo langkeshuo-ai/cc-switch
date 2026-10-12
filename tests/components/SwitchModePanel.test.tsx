@@ -199,23 +199,6 @@ describe("SwitchModePanel — Stack mode", () => {
     },
   );
 
-  it("does not read the Stack list for apps without Stack mode", async () => {
-    mockMode("route", "a");
-    let stackReads = 0;
-    server.use(
-      http.post(`${TAURI_ENDPOINT}/get_proxy_stack`, () => {
-        stackReads += 1;
-        return HttpResponse.json({ active: false, members: [] });
-      }),
-    );
-
-    renderPanel("gemini", { a: provider("a") });
-    await screen.findByTestId("card-a");
-    expect(stackReads).toBe(0);
-    expect(
-      screen.queryByRole("tab", { name: /mode\.stack/ }),
-    ).not.toBeInTheDocument();
-  });
 });
 
 describe("SwitchModePanel — mode layer", () => {
@@ -454,7 +437,7 @@ describe("SwitchModePanel — mode layer", () => {
         HttpResponse.json({ running: true, address: "127.0.0.1", port: 15721 }),
       ),
     );
-    renderPanel("gemini", { route: provider("route") });
+    renderPanel("claude", { route: provider("route") });
 
     expect(await screen.findByText("→ route")).toBeInTheDocument();
     expect(screen.queryByText(/15721/)).not.toBeInTheDocument();

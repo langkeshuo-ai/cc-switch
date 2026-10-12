@@ -22,12 +22,8 @@ export function ProviderEmptyState({
   // Pi / MiniMax Code 的"当前供应商"可以是原生应用自管的内置账号（不在可管理的
   // live 节点里），没有可导入的内容，列表也不提供导入按钮，因此不能沿用
   // "请点击导入当前配置"的通用文案。
-  const emptyCopyNs = appId === "pi" || appId === "mcode" ? appId : null;
-  const showKeyFieldsHint =
-    appId === "claude" ||
-    appId === "codex" ||
-    appId === "gemini" ||
-    appId === "grokbuild";
+  const emptyCopyNs = appId === "pi" ? appId : null;
+  const showKeyFieldsHint = appId === "claude" || appId === "codex";
 
   return (
     <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
@@ -46,9 +42,7 @@ export function ProviderEmptyState({
           {onImport && (
             <Button variant="neutral" size="regular" onClick={onImport}>
               <Download className="h-4 w-4" />
-              {appId === "claude-desktop"
-                ? t("provider.importFromClaude")
-                : t("provider.importCurrent")}
+              {t("provider.importCurrent")}
             </Button>
           )}
           {onCreate && (

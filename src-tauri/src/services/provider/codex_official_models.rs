@@ -894,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn a_missing_entry_is_fetched_once_and_reused_while_fresh() {
         let _scope = Scope::new();
         let setup = install(Some("0.158.0"), vec![fetched(&["gpt-6-sol"])], None);
@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn entries_for_another_codex_version_or_person_are_not_used() {
         let _scope = Scope::new();
         seed_cache("ws|sub:alice", T0, "0.157.1", models(&["old-version"]));
@@ -930,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn a_stale_entry_is_used_now_and_refreshed_in_the_background() {
         let _scope = Scope::new();
         seed_cache(
@@ -983,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn a_refresh_always_asks_and_keeps_the_old_entry_when_it_fails() {
         let _scope = Scope::new();
         seed_cache(
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn without_a_usable_official_list_the_bundled_list_is_used() {
         let _scope = Scope::new();
         let login = OfficialLogin::of(&login("ws", "alice")).unwrap();
@@ -1079,7 +1079,7 @@ mod tests {
 
     /// #8014：旧版本拉到的官方列表只有隐藏条目，写进目录后官方模型在选择器里全看不到。
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn a_source_without_a_listed_model_is_not_used() {
         let _scope = Scope::new();
         let login = OfficialLogin::of(&login("ws", "alice")).unwrap();
@@ -1221,7 +1221,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn codex_s_own_models_cache_is_never_read() {
         let scope = Scope::new();
         let codex_dir = scope._dir.path().join(".codex");

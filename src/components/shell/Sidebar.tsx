@@ -27,7 +27,6 @@ import { APP_IDS } from "@/config/appConfig";
 import type { GlobalPage, SettingsSection, View } from "@/lib/navigation";
 import { isAppPage } from "@/lib/navigation";
 import { SkillsIcon } from "@/components/BrandIcons";
-import { useUpdate } from "@/contexts/UpdateContext";
 import { sidebarWidth, useSidebarCollapsed } from "@/hooks/useSidebarCollapsed";
 import { useSidebarStatus, type AppNavStatus } from "@/hooks/useSidebarStatus";
 import { fmtUsd } from "@/components/usage/format";
@@ -207,7 +206,6 @@ function MainDirectory({
   appsUpdateAvailable = false,
 }: DirectoryProps) {
   const { t } = useTranslation();
-  const { hasUpdate } = useUpdate();
   const { appStatus, todayCost, authNeedsAttention } = useSidebarStatus();
   const apps = APP_IDS.filter((app) => visibleApps[app]);
   const onAppPage = isAppPage(view);
@@ -327,9 +325,7 @@ function MainDirectory({
           selected={false}
           icon={Settings}
           label={t("nav.settings")}
-          title={hasUpdate ? t("nav.settingsHasUpdate") : t("nav.settings")}
-          dot={hasUpdate}
-          dotTone="success"
+          title={t("nav.settings")}
           onClick={() => onSelectPage("settings")}
         />
       </div>
@@ -341,12 +337,6 @@ function modeTag(
   status: AppNavStatus,
   t: (key: string) => string,
 ): { label: string; className: string } | null {
-  if (status.mapping) {
-    return {
-      label: t("nav.mode.mapping"),
-      className: "bg-route-soft text-route-text",
-    };
-  }
   if (status.mode === "route") {
     return {
       label: t("nav.mode.route"),
@@ -378,9 +368,8 @@ function AppNavItem({
   const { t } = useTranslation();
   const name = APP_DISPLAY_NAME[app];
   const tag = modeTag(status, t);
-  const modeName = status.mapping
-    ? t("nav.mode.mappingFull")
-    : status.mode === "route"
+  const modeName =
+    status.mode === "route"
       ? t("nav.mode.route")
       : status.mode === "stack"
         ? t("nav.mode.stack")
@@ -397,7 +386,7 @@ function AppNavItem({
       ? { className: "bg-danger text-action-fg", icon: AlertGlyph }
       : status.mode === "stack"
         ? { className: "bg-stack-solid text-stack-on", icon: Layers }
-        : status.mode === "route" || status.mapping
+        : status.mode === "route"
           ? { className: "bg-route-solid text-route-on", icon: Route }
           : null;
     return (
@@ -628,7 +617,6 @@ function SettingsDirectory({
   onExitSettings,
 }: DirectoryProps) {
   const { t } = useTranslation();
-  const { hasUpdate } = useUpdate();
   const { data: version } = useQuery({
     queryKey: ["app-version"],
     queryFn: () => getVersion(),
@@ -672,14 +660,7 @@ function SettingsDirectory({
             selected={settingsSection === section}
             icon={icon}
             label={t(`settings.sections.${section}`)}
-            dot={section === "about" && hasUpdate}
-            dotTone="success"
             endDot
-            title={
-              section === "about" && hasUpdate
-                ? t("nav.settingsHasUpdate")
-                : undefined
-            }
             onClick={() => onSelectSettingsSection(section)}
           />
         ))}

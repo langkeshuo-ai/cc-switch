@@ -24,17 +24,16 @@ use tokio::sync::OwnedMutexGuard;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::live::engine::DeviceStore;
+#[cfg(test)]
+use crate::live::project::claude::PROXY_TOKEN_PLACEHOLDER;
 use crate::live::project::claude::{
     direct_patch, proxy_projection, ClaudeProjection, ProxyAuth, StackRoleModel,
-    PROXY_TOKEN_PLACEHOLDER,
 };
-use crate::live::project::gemini::GeminiProjection;
-use crate::live::project::grok::GrokProjection;
 use crate::provider::Provider;
+use crate::services::provider::claude_direct;
 use crate::services::provider::codex_client_catalog;
 use crate::services::provider::codex_direct::{self, Owner};
 use crate::services::provider::codex_official_models;
-use crate::services::provider::{claude_direct, gemini_direct, grok_direct};
 use crate::store::AppState;
 
 use super::contract;
@@ -44,12 +43,7 @@ use super::stack::{self, StackModel, StackView};
 use super::state::{op, Contract, Mode, ModeState, PendingTarget, StackState};
 
 /// 支持代理模式的应用。
-pub const PROXY_APPS: [AppType; 4] = [
-    AppType::Claude,
-    AppType::Codex,
-    AppType::Gemini,
-    AppType::GrokBuild,
-];
+pub const PROXY_APPS: [AppType; 2] = [AppType::Claude, AppType::Codex];
 
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -139,14 +133,6 @@ impl LiveNow {
     /// 客户端文件现在就是这份契约（`key` 相同）。
     fn has_contract(&self, key: &str) -> bool {
         matches!(self, Self::Proxy { contract: Some(contract), .. } if contract.key == key)
-    }
-
-    /// live 现在是哪个直连供应商写进去的（Grok 在没有写入记录时据此推断要删的表）。
-    fn direct_owner(&self) -> Option<&Provider> {
-        match self {
-            Self::Direct(provider) => provider.as_ref(),
-            Self::Proxy { .. } => None,
-        }
     }
 
     /// Codex 的 live 现在是谁写进去的。
@@ -328,24 +314,6 @@ async fn write_proxy(
             .map_err(err)?;
             unchanged
         }
-        AppType::Gemini => {
-            let projection = GeminiProjection::proxy_contract(
-                &GeminiProjection::of(&route.settings_config, false),
-                &proxy_url,
-                PROXY_TOKEN_PLACEHOLDER,
-            );
-            let contract = contract::gemini(&projection);
-            let unchanged = !force && live_now.has_contract(&contract.key);
-            target.contract = Some(contract);
-            gemini_direct::run(
-                &state.db,
-                op_name,
-                (!unchanged).then_some(&projection),
-                pending(target),
-            )
-            .map_err(err)?;
-            unchanged
-        }
         AppType::Codex => {
             let owner = live_now.codex_owner();
             let members = published_members(state, app, &stack, route)?;
@@ -368,27 +336,6 @@ async fn write_proxy(
             } else {
                 codex_direct::run(&state.db, op_name, planned, &prepared, pending).map_err(err)?;
             }
-            unchanged
-        }
-        AppType::GrokBuild => {
-            let base_url = format!("{}/grokbuild/v1", proxy_url.trim_end_matches('/'));
-            let projection = GrokProjection::proxy_contract(
-                &grok_direct::projection(route).map_err(err)?,
-                &base_url,
-                PROXY_TOKEN_PLACEHOLDER,
-            )
-            .map_err(err)?;
-            let contract = contract::grok(&projection);
-            let unchanged = !force && live_now.has_contract(&contract.key);
-            target.contract = Some(contract);
-            grok_direct::run(
-                &state.db,
-                op_name,
-                live_now.direct_owner(),
-                (!unchanged).then_some(&projection),
-                pending(target),
-            )
-            .map_err(err)?;
             unchanged
         }
         _ => return Err(format!("{} 不支持本地路由", app.as_str())),
@@ -453,57 +400,9 @@ fn write_direct(
                 .map_err(err)?;
             }
         }
-        AppType::Gemini => {
-            let projection = attached.then(|| {
-                direct_or_empty(
-                    app,
-                    direct.as_ref(),
-                    gemini_direct::projection,
-                    GeminiProjection::empty,
-                )
-            });
-            gemini_direct::run(&state.db, op_name, projection.as_ref(), pending_target)
-                .map_err(err)?;
-        }
-        AppType::GrokBuild => {
-            let projection = attached.then(|| {
-                direct_or_empty(app, direct.as_ref(), grok_direct::projection, || {
-                    GrokProjection { table: None }
-                })
-            });
-            grok_direct::run(
-                &state.db,
-                op_name,
-                None,
-                projection.as_ref(),
-                pending_target,
-            )
-            .map_err(err)?;
-        }
         _ => return Err(format!("{} 不支持本地路由", app.as_str())),
     }
     Ok(())
-}
-
-/// 直连供应商的投影。写不出来（没有、行里带着占位符、缺 Key）也不能让客户端一直指着
-/// 代理：退一步只清空关键字段（`empty`）。
-fn direct_or_empty<P>(
-    app: &AppType,
-    direct: Option<&Provider>,
-    project: impl FnOnce(&Provider) -> Result<P, AppError>,
-    empty: impl FnOnce() -> P,
-) -> P {
-    usable_direct(app, direct)
-        .map(project)
-        .transpose()
-        .unwrap_or_else(|error| {
-            log::warn!(
-                "写回直连的 {} 配置失败，只清空关键字段: {error}",
-                app.as_str()
-            );
-            None
-        })
-        .unwrap_or_else(empty)
 }
 
 /// 能照写回 live 的直连供应商：行里本身带着占位符（旧版接管期间被导入的残留）的不行，
@@ -819,11 +718,9 @@ fn write_direct_for_exit(
     )
 }
 
-/// 没有应用在代理模式、Claude Desktop 也没在用模型映射时，停掉代理服务。
+/// 没有应用在代理模式时，停掉代理服务。
 async fn stop_server_if_unused(state: &AppState) {
-    if current::proxy_flags(PROXY_APPS).contains(&true)
-        || crate::claude_desktop_config::current_provider_uses_proxy(&state.db)
-    {
+    if current::proxy_flags(PROXY_APPS).contains(&true) {
         return;
     }
     if state.proxy_service.is_running().await {
@@ -831,29 +728,6 @@ async fn stop_server_if_unused(state: &AppState) {
             log::warn!("停止代理服务失败: {error}");
         }
     }
-}
-
-/// Claude Desktop 的当前供应商是模型映射卡、代理服务却没在跑时把它拉起来：启动、切到映射卡、
-/// 应用项目之后各调一次。拉不起来只记日志，Desktop 页的状态横幅会提示服务没在运行。
-pub async fn ensure_desktop_mapping_service(state: &AppState) {
-    if !crate::claude_desktop_config::current_provider_uses_proxy(&state.db)
-        || state.proxy_service.is_running().await
-    {
-        return;
-    }
-    if let Err(error) = state.proxy_service.start().await {
-        log::error!("Claude Desktop 正在用模型映射，启动代理服务失败: {error}");
-    }
-}
-
-/// Claude Desktop 换卡（切换、应用项目）之后对齐代理服务：从映射卡换走时，别人也不用就停掉；
-/// 换上映射卡时拉起来。`was_mapping` 是换卡前的 `current_provider_uses_proxy`：只在映射卡
-/// 被换走时才去停，别的换卡不碰服务，免得停掉用户在设置页手动开的服务。
-pub async fn sync_desktop_mapping_service(state: &AppState, was_mapping: bool) {
-    if was_mapping && !crate::claude_desktop_config::current_provider_uses_proxy(&state.db) {
-        stop_server_if_unused(state).await;
-    }
-    ensure_desktop_mapping_service(state).await;
 }
 
 /// 「关闭本地路由」：全部退回直连，再停掉代理服务。
@@ -1494,7 +1368,6 @@ pub async fn startup(state: &AppState) {
     }
     // 接上失败退回直连的应用可能已经把代理拉起来了。
     stop_server_if_unused(state).await;
-    ensure_desktop_mapping_service(state).await;
     // 记一次新启动的 Codex 会读到的目录：兜住启动时补完的操作和 CC Switch 没开时的外部修改。
     codex_client_catalog::observe(&DeviceStore::for_device());
 }
@@ -2312,7 +2185,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn entering_and_leaving_proxy_mode_only_touches_key_and_exclusive_fields() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2362,7 +2235,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_route_switch_with_the_same_contract_leaves_the_client_file_alone() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2405,7 +2278,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_route_providers_exclusive_fields_follow_the_contract() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2441,7 +2314,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_proxy_route_is_independent_of_the_direct_pointer() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2482,7 +2355,7 @@ mod mode_tests {
     /// 保存当前供应商要等进入代理写完契约，之后按代理模式处理，不能拿进入前读到的直连
     /// 模式把关键字段写回 live。
     #[tokio::test(flavor = "multi_thread")]
-    #[serial]
+    #[serial(global_env)]
     async fn saving_the_current_provider_waits_for_entering_proxy_mode() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2557,7 +2430,7 @@ mod mode_tests {
     /// 之前的指针判断「b 不是当前供应商」只存了行，等那次操作补完 b 成了当前供应商，live
     /// 里却是它的旧 Key。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn nothing_is_saved_while_the_previous_write_cannot_be_finished() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2615,7 +2488,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn failover_moves_the_route_without_writing_client_files() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2645,7 +2518,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_crash_at_any_step_is_finished_or_discarded_on_startup() {
         for (point, expect_proxy) in [("pending", false), ("published:0", true), ("target", true)] {
             let _home = Home::new();
@@ -2686,7 +2559,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_crash_while_leaving_proxy_mode_is_finished_on_startup() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -2711,7 +2584,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn startup_moves_legacy_takeover_state_over_to_the_modes() {
         for enabled in [true, false] {
             let home = Home::new();
@@ -2767,93 +2640,7 @@ mod mode_tests {
     }
 
     #[tokio::test]
-    #[serial]
-    async fn gemini_proxy_contract_keeps_the_other_env_lines() {
-        let _home = Home::new();
-        let env_path = crate::gemini_config::get_gemini_env_path();
-        fs::create_dir_all(env_path.parent().unwrap()).unwrap();
-        fs::write(
-            &env_path,
-            "# my notes\nGEMINI_SANDBOX=true\nGEMINI_API_KEY=real-key\nGOOGLE_GEMINI_BASE_URL=https://g.example\n",
-        )
-        .unwrap();
-        let row = Provider::with_id(
-            "g".to_string(),
-            "G".to_string(),
-            json!({ "env": {
-                "GEMINI_API_KEY": "real-key",
-                "GOOGLE_GEMINI_BASE_URL": "https://g.example"
-            }}),
-            None,
-        );
-        let state = state_with(AppType::Gemini, &[row], "g").await;
-
-        enter(&state, &AppType::Gemini, false).await.expect("enter");
-        let proxy_url = state.proxy_service.build_proxy_urls().await.unwrap().0;
-        assert_eq!(
-            fs::read_to_string(&env_path).unwrap(),
-            format!(
-                "# my notes\nGEMINI_SANDBOX=true\nGEMINI_API_KEY=PROXY_MANAGED\nGOOGLE_GEMINI_BASE_URL={proxy_url}\n"
-            )
-        );
-        exit(&state, &AppType::Gemini).await.expect("exit");
-        let text = fs::read_to_string(&env_path).unwrap();
-        assert!(text.contains("GEMINI_API_KEY=real-key"), "{text}");
-        assert!(!text.contains("PROXY_MANAGED"), "{text}");
-    }
-
-    /// 代理换了端口：一个应用重写失败（配置文件解析不了），其余接上代理的应用照样按新
-    /// 地址重写，失败的应用在报错里。
-    #[tokio::test]
-    #[serial]
-    async fn a_new_proxy_address_reaches_every_app_even_if_one_fails() {
-        let _home = Home::new();
-        seed_settings(USER_SETTINGS);
-        seed_gemini(
-            "GEMINI_API_KEY=real-key\nGOOGLE_GEMINI_BASE_URL=https://g.example\n",
-            "{}",
-        );
-        let state = state_with(
-            AppType::Claude,
-            &[claude("a", "https://a.example", json!({}))],
-            "a",
-        )
-        .await;
-        let row = gemini(
-            "g",
-            json!({ "GEMINI_API_KEY": "real-key", "GOOGLE_GEMINI_BASE_URL": "https://g.example" }),
-            json!({}),
-        );
-        state.db.save_provider("gemini", &row).unwrap();
-        state.db.set_current_provider("gemini", "g").unwrap();
-        crate::settings::set_current_provider(&AppType::Gemini, Some("g")).unwrap();
-        enter(&state, &AppType::Claude, false)
-            .await
-            .expect("enter claude");
-        enter(&state, &AppType::Gemini, false)
-            .await
-            .expect("enter gemini");
-        let old_url = state.proxy_service.build_proxy_urls().await.unwrap().0;
-
-        fs::write(settings_path(), "not json").unwrap();
-        let mut config = state.db.get_proxy_config().await.unwrap();
-        config.listen_port = 0;
-        assert!(state.proxy_service.update_config(&config).await.unwrap());
-        let new_url = state.proxy_service.build_proxy_urls().await.unwrap().0;
-        assert_ne!(new_url, old_url);
-
-        let error = resync_routes(&state).await.expect_err("claude fails");
-        assert!(error.starts_with("claude:"), "{error}");
-        assert!(
-            gemini_env().contains(&format!("GOOGLE_GEMINI_BASE_URL={new_url}\n")),
-            "{}",
-            gemini_env()
-        );
-        state.proxy_service.stop().await.unwrap();
-    }
-
-    #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_routes_between_official_and_third_party_contracts() {
         let _home = Home::new();
         let native_auth = json!({
@@ -2962,7 +2749,7 @@ mod mode_tests {
 
     /// 官方做路由时会话和官方直连落在同一个桶：进出代理不换 Codex 选中的 provider id。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_route_keeps_the_direct_session_bucket() {
         for unified in [false, true] {
             let _home = Home::new();
@@ -3182,7 +2969,7 @@ command = "fs-server"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_direct_switch_replaces_only_key_fields_and_round_trips() {
         let _home = Home::new();
         set_preservation(true);
@@ -3226,7 +3013,7 @@ command = "fs-server"
     /// CC Switch 自己的指针；代理契约带进来的，退出代理时同样删掉。用户直接写进 live 的
     /// 指针一直留着。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_row_catalog_pointer_leaves_with_its_provider() {
         let _home = Home::new();
         set_preservation(true);
@@ -3277,7 +3064,7 @@ command = "fs-server"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_exclusive_fields_the_user_changed_stay() {
         let _home = Home::new();
         set_preservation(true);
@@ -3298,7 +3085,7 @@ command = "fs-server"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_switch_leaves_a_dormant_route_table() {
         let _home = Home::new();
         set_preservation(true);
@@ -3336,7 +3123,7 @@ command = "fs-server"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_an_active_profile_overriding_the_route_is_refused_without_side_effects() {
         let _home = Home::new();
         set_preservation(true);
@@ -3366,7 +3153,7 @@ command = "fs-server"
     /// 生效的 profile 显式选了内置的 `openai`：和官方卡不写 model_provider 去的是同一个
     /// 地方，切到官方卡不拒绝；切到第三方仍然拒绝。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_profile_selecting_the_built_in_openai_allows_the_official_card() {
         let _home = Home::new();
         set_preservation(true);
@@ -3395,7 +3182,7 @@ command = "fs-server"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_migration_retires_only_tables_cc_switch_wrote() {
         let _home = Home::new();
         set_preservation(true);
@@ -3455,7 +3242,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_switch_crash_rolls_every_file_forward() {
         let _home = Home::new();
         set_preservation(false);
@@ -3500,7 +3287,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_preservation_off_gives_the_login_back_on_the_way_to_official() {
         let _home = Home::new();
         set_preservation(false);
@@ -3566,7 +3353,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_retry_after_a_failed_switch_finishes_it_first() {
         let _home = Home::new();
         let (state, official) = codex_switch_interrupted_after_auth_json().await;
@@ -3580,7 +3367,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_an_interrupted_switch_keeps_the_login_when_codex_changed_config_toml() {
         let _home = Home::new();
         let (state, official) = codex_switch_interrupted_after_auth_json().await;
@@ -3608,7 +3395,7 @@ model_provider = "c"
     /// auth.json）：单看文件分不出发布开始过没有，按 pending 里的「已开始发布」照样前滚，
     /// 还没写出去的登录暂存不能丢，客户端写的 auth.json 不动。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_an_interrupted_switch_keeps_the_stash_when_the_published_file_changed_again() {
         let _home = Home::new();
         let (state, _official) = codex_switch_interrupted_after_auth_json().await;
@@ -3627,7 +3414,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_an_unreadable_login_stash_is_never_overwritten() {
         let _home = Home::new();
         set_preservation(false);
@@ -3654,7 +3441,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_routes_for_different_accounts_swap_the_login() {
         let _home = Home::new();
         set_preservation(true);
@@ -3705,7 +3492,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn claude_a_retry_after_a_failed_switch_removes_the_failed_targets_exclusive_fields() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -3735,7 +3522,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_keyring_logins_keep_requires_openai_auth_on_the_preservation_setting() {
         let _home = Home::new();
         for preserve in [true, false] {
@@ -3754,7 +3541,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_route_switch_with_the_same_contract_leaves_the_client_files_alone() {
         let _home = Home::new();
         set_preservation(true);
@@ -3818,7 +3605,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editor_saves_key_fields_to_the_row_and_global_edits_to_live() {
         let _home = Home::new();
         set_preservation(true);
@@ -3918,7 +3705,7 @@ model_provider = "c"
     /// 把它收进行，切走时也就不会删掉；在编辑器里删掉它就从 live 删；新加的独有字段归
     /// 供应商。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editor_leaves_exclusive_fields_from_live_to_the_user() {
         let _home = Home::new();
         set_preservation(true);
@@ -4010,7 +3797,7 @@ model_provider = "c"
     /// 打开编辑器之后客户端改了一个从 live 带进来的独有字段：用户没动它，保存时不收进行，
     /// 也不把打开时的值写回去。live 里生效的 profile 选着路由表时，编辑和新增都照样能存。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editor_leaves_what_the_user_did_not_touch_to_the_client() {
         let _home = Home::new();
         set_preservation(true);
@@ -4080,7 +3867,7 @@ model_provider = "c"
     /// 收进新供应商，切到新供应商再切走，客户端改的值还在。预设自己带的独有字段照样归新
     /// 供应商。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_add_dialog_leaves_a_live_field_changed_after_opening_to_the_client() {
         let _home = Home::new();
         set_preservation(true);
@@ -4167,7 +3954,7 @@ model_provider = "c"
     /// 编辑器里把路由表从 custom 改名成别的表：那张表归供应商（按内容收成 custom 表），
     /// 不当成全局设置写进 live，切走后表和里面的 Key 都不会留下。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editor_route_table_renamed_in_the_editor_stays_with_the_provider() {
         let _home = Home::new();
         set_preservation(true);
@@ -4215,7 +4002,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_login_refreshed_during_the_switch_is_never_overwritten() {
         let _home = Home::new();
         set_preservation(false);
@@ -4258,579 +4045,6 @@ model_provider = "c"
         );
     }
 
-    // ===== Gemini CLI =====
-
-    const GEMINI_USER_ENV: &str = "# my notes\nGEMINI_SANDBOX=docker\nGEMINI_API_KEY=key-a\nDEBUG=1\nGOOGLE_GEMINI_BASE_URL=https://a.example\nGEMINI_MODEL=m-a\n";
-    const GEMINI_USER_SETTINGS: &str = r#"{
-  "model": {
-    "name": "m-a",
-    "compressionThreshold": 0.5
-  },
-  "security": {
-    "auth": {
-      "selectedType": "gemini-api-key"
-    }
-  },
-  "mcpServers": {
-    "fs": {
-      "command": "fs"
-    }
-  }
-}
-"#;
-
-    fn gemini_env_path() -> std::path::PathBuf {
-        crate::gemini_config::get_gemini_env_path()
-    }
-
-    fn gemini_settings_path() -> std::path::PathBuf {
-        crate::gemini_config::get_gemini_settings_path()
-    }
-
-    fn seed_gemini(env: &str, settings: &str) {
-        fs::create_dir_all(gemini_env_path().parent().unwrap()).unwrap();
-        fs::write(gemini_env_path(), env).unwrap();
-        fs::write(gemini_settings_path(), settings).unwrap();
-    }
-
-    fn gemini_env() -> String {
-        fs::read_to_string(gemini_env_path()).unwrap()
-    }
-
-    fn gemini_settings() -> Value {
-        serde_json::from_slice(&fs::read(gemini_settings_path()).unwrap()).unwrap()
-    }
-
-    /// `.env` 里用户自己的行（注释、非关键字段），按原顺序。
-    fn gemini_user_lines(text: &str) -> Vec<String> {
-        text.lines()
-            .filter(|line| {
-                line.split_once('=')
-                    .is_none_or(|(key, _)| !crate::live::floor::gemini_floor_env(key.trim()))
-            })
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn gemini(id: &str, env: Value, config: Value) -> Provider {
-        Provider::with_id(
-            id.to_string(),
-            id.to_uppercase(),
-            json!({ "env": env, "config": config }),
-            None,
-        )
-    }
-
-    fn gemini_a_vertex() -> [Provider; 2] {
-        [
-            gemini(
-                "a",
-                json!({
-                    "GEMINI_API_KEY": "key-a",
-                    "GOOGLE_GEMINI_BASE_URL": "https://a.example",
-                    "GEMINI_MODEL": "m-a"
-                }),
-                json!({ "model": { "name": "m-a" } }),
-            ),
-            gemini(
-                "vertex",
-                json!({
-                    "GOOGLE_GENAI_USE_VERTEXAI": "true",
-                    "GOOGLE_CLOUD_PROJECT": "p"
-                }),
-                json!({}),
-            ),
-        ]
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn gemini_switch_replaces_only_key_fields_and_round_trips() {
-        let _home = Home::new();
-        seed_gemini(GEMINI_USER_ENV, GEMINI_USER_SETTINGS);
-        let state = state_with(AppType::Gemini, &gemini_a_vertex(), "a").await;
-
-        ProviderService::switch(&state, AppType::Gemini, "vertex").expect("to vertex");
-        assert_eq!(
-            gemini_env(),
-            "# my notes\nGEMINI_SANDBOX=docker\nDEBUG=1\nGOOGLE_GENAI_USE_VERTEXAI=true\nGOOGLE_CLOUD_PROJECT=p\n"
-        );
-        assert_eq!(
-            gemini_settings(),
-            json!({
-                "model": { "compressionThreshold": 0.5 },
-                "security": { "auth": { "selectedType": "gemini-api-key" } },
-                "mcpServers": { "fs": { "command": "fs" } }
-            })
-        );
-
-        ProviderService::switch(&state, AppType::Gemini, "a").expect("back to a");
-        let env = gemini_env();
-        assert_eq!(gemini_user_lines(&env), gemini_user_lines(GEMINI_USER_ENV));
-        for line in [
-            "GEMINI_API_KEY=key-a",
-            "GOOGLE_GEMINI_BASE_URL=https://a.example",
-            "GEMINI_MODEL=m-a",
-        ] {
-            assert!(env.contains(line), "{env}");
-        }
-        assert!(!env.contains("VERTEX"), "{env}");
-        assert_eq!(
-            gemini_settings(),
-            serde_json::from_str::<Value>(GEMINI_USER_SETTINGS).unwrap()
-        );
-        assert_eq!(direct(&state, &AppType::Gemini).as_deref(), Some("a"));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn gemini_official_switch_selects_the_google_login() {
-        let _home = Home::new();
-        seed_gemini(GEMINI_USER_ENV, GEMINI_USER_SETTINGS);
-        let [a, _] = gemini_a_vertex();
-        let mut official = gemini("google", json!({}), json!({}));
-        official.category = Some("official".to_string());
-        let state = state_with(AppType::Gemini, &[a, official], "a").await;
-
-        ProviderService::switch(&state, AppType::Gemini, "google").expect("to official");
-        assert_eq!(gemini_env(), "# my notes\nGEMINI_SANDBOX=docker\nDEBUG=1\n");
-        assert_eq!(
-            gemini_settings()["security"]["auth"]["selectedType"],
-            json!("oauth-personal")
-        );
-        assert!(gemini_settings()["model"].get("name").is_none());
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn gemini_proxy_contract_follows_the_route_model_and_skips_same_contract_routes() {
-        let _home = Home::new();
-        seed_gemini(GEMINI_USER_ENV, GEMINI_USER_SETTINGS);
-        let [a, _] = gemini_a_vertex();
-        let mut b = a.clone();
-        b.id = "b".to_string();
-        b.settings_config["env"]["GEMINI_API_KEY"] = json!("key-b");
-        b.settings_config["env"]["GOOGLE_GEMINI_BASE_URL"] = json!("https://b.example");
-        let state = state_with(AppType::Gemini, &[a, b], "a").await;
-
-        enter(&state, &AppType::Gemini, false).await.expect("enter");
-        let proxy_url = state.proxy_service.build_proxy_urls().await.unwrap().0;
-        let env = gemini_env();
-        assert!(env.contains("GEMINI_API_KEY=PROXY_MANAGED"), "{env}");
-        assert!(
-            env.contains(&format!("GOOGLE_GEMINI_BASE_URL={proxy_url}")),
-            "{env}"
-        );
-        assert!(env.contains("GEMINI_MODEL=m-a"), "{env}");
-        assert_eq!(gemini_user_lines(&env), gemini_user_lines(GEMINI_USER_ENV));
-
-        // b 的模型名和 a 一样：契约相同，客户端文件不读也不写。
-        let before = fs::read(gemini_env_path()).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(gemini_env_path(), fs::Permissions::from_mode(0o000)).unwrap();
-        }
-        ProviderService::switch(&state, AppType::Gemini, "b").expect("route to b");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(gemini_env_path(), fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        assert_eq!(fs::read(gemini_env_path()).unwrap(), before);
-        assert_eq!(in_use(&state, &AppType::Gemini).as_deref(), Some("b"));
-
-        exit(&state, &AppType::Gemini).await.expect("exit");
-        let env = gemini_env();
-        assert!(env.contains("GEMINI_API_KEY=key-a"), "{env}");
-        assert!(!env.contains(PROXY_TOKEN_PLACEHOLDER), "{env}");
-        assert_eq!(gemini_user_lines(&env), gemini_user_lines(GEMINI_USER_ENV));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn gemini_editor_saves_key_fields_to_the_row_and_global_edits_to_live() {
-        let _home = Home::new();
-        seed_gemini(GEMINI_USER_ENV, GEMINI_USER_SETTINGS);
-        let state = state_with(AppType::Gemini, &gemini_a_vertex(), "a").await;
-
-        let a = state.db.get_provider_by_id("a", "gemini").unwrap().unwrap();
-        let view = ProviderService::editor_view(&state, AppType::Gemini, &a.settings_config, None)
-            .expect("view");
-        assert_eq!(view.settings["env"]["GEMINI_SANDBOX"], json!("docker"));
-        assert_eq!(
-            view.settings["config"]["mcpServers"]["fs"]["command"],
-            json!("fs")
-        );
-
-        let mut edited = view.settings.clone();
-        edited["env"]["GEMINI_API_KEY"] = json!("key-a2");
-        edited["env"]["DEBUG"] = json!("2");
-        edited["config"]["ui"] = json!({ "theme": "dark" });
-        let mut row = a.clone();
-        row.settings_config = edited;
-        ProviderService::update_from_editor(
-            &state,
-            AppType::Gemini,
-            Some("a"),
-            row,
-            Some(crate::services::provider::EditorSave {
-                base: view.settings.clone(),
-                draft: None,
-                on_conflict: Default::default(),
-            }),
-        )
-        .expect("save");
-
-        let env = gemini_env();
-        assert!(
-            env.contains("GEMINI_API_KEY=key-a2") && env.contains("DEBUG=2"),
-            "{env}"
-        );
-        assert_eq!(gemini_settings()["ui"], json!({ "theme": "dark" }));
-        let saved = state.db.get_provider_by_id("a", "gemini").unwrap().unwrap();
-        assert_eq!(
-            saved.settings_config["env"]["GEMINI_API_KEY"],
-            json!("key-a2")
-        );
-        assert!(saved.settings_config["env"].get("DEBUG").is_none());
-        assert!(saved.settings_config["config"].get("ui").is_none());
-
-        // 编辑非当前的 vertex：live 的关键字段不动，全局改动照写。
-        let vertex = state
-            .db
-            .get_provider_by_id("vertex", "gemini")
-            .unwrap()
-            .unwrap();
-        let view =
-            ProviderService::editor_view(&state, AppType::Gemini, &vertex.settings_config, None)
-                .expect("view vertex");
-        assert!(view.settings["env"].get("GEMINI_API_KEY").is_none());
-        let mut edited = view.settings.clone();
-        edited["env"]["GOOGLE_CLOUD_PROJECT"] = json!("p2");
-        edited["env"]["DEBUG"] = json!("3");
-        let mut row = vertex.clone();
-        row.settings_config = edited;
-        ProviderService::update_from_editor(
-            &state,
-            AppType::Gemini,
-            Some("vertex"),
-            row,
-            Some(crate::services::provider::EditorSave {
-                base: view.settings,
-                draft: None,
-                on_conflict: Default::default(),
-            }),
-        )
-        .expect("save vertex");
-        let env = gemini_env();
-        assert!(
-            env.contains("GEMINI_API_KEY=key-a2") && env.contains("DEBUG=3"),
-            "{env}"
-        );
-        assert!(!env.contains("GOOGLE_CLOUD_PROJECT"), "{env}");
-        let saved = state
-            .db
-            .get_provider_by_id("vertex", "gemini")
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            saved.settings_config["env"]["GOOGLE_CLOUD_PROJECT"],
-            json!("p2")
-        );
-    }
-
-    // ===== Grok Build =====
-
-    const GROK_USER_LIVE: &str = "# mine\n[ui]\ntheme = \"dark\"\n\n[model.mine]\nmodel = \"m\"\nname = \"Mine\"\n\n[mcp_servers.fs]\ncommand = \"fs\"\n";
-
-    fn grok_path() -> std::path::PathBuf {
-        crate::grok_config::get_grok_config_path()
-    }
-
-    fn seed_grok(text: &str) {
-        fs::create_dir_all(grok_path().parent().unwrap()).unwrap();
-        fs::write(grok_path(), text).unwrap();
-    }
-
-    fn grok_text() -> String {
-        fs::read_to_string(grok_path()).unwrap()
-    }
-
-    fn grok_doc() -> toml::Table {
-        toml::from_str(&grok_text()).unwrap()
-    }
-
-    /// live 里的 `[model.*]` 表名（排好序）。
-    fn grok_tables() -> Vec<String> {
-        grok_doc()
-            .get("model")
-            .and_then(|model| model.as_table())
-            .map(|tables| tables.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    fn grok_row(id: &str, table: &str, extra: &str) -> Provider {
-        Provider::with_id(
-            id.to_string(),
-            id.to_uppercase(),
-            json!({ "config": format!(
-                "[models]\ndefault = \"{table}\"\n\n[model.\"{table}\"]\nmodel = \"{id}-model\"\nname = \"{id}\"\nbase_url = \"https://{id}.example/v1\"\napi_key = \"key-{id}\"\napi_backend = \"responses\"\ncontext_window = 500000\n{extra}"
-            ) }),
-            None,
-        )
-    }
-
-    fn grok_official() -> Provider {
-        let mut official = Provider::with_id(
-            "grok-official".to_string(),
-            "Grok Official".to_string(),
-            json!({ "config": "" }),
-            None,
-        );
-        official.category = Some("official".to_string());
-        official
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_switch_deletes_the_written_table_even_after_the_client_changed_the_default() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_with(
-            AppType::GrokBuild,
-            &[grok_row("a", "grok-4.5", ""), grok_official()],
-            "grok-official",
-        )
-        .await;
-
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("to a");
-        assert_eq!(grok_doc()["models"]["default"].as_str(), Some("grok-4.5"));
-        assert_eq!(grok_tables(), vec!["grok-4.5", "mine"]);
-
-        // Grok 的 /settings 把默认模型改成了内置的 grok-4.6。
-        let changed = grok_text().replace("default = \"grok-4.5\"", "default = \"grok-4.6\"");
-        fs::write(grok_path(), changed).unwrap();
-
-        ProviderService::switch(&state, AppType::GrokBuild, "grok-official").expect("to official");
-        assert_eq!(grok_tables(), vec!["mine"], "{}", grok_text());
-        assert!(grok_doc().get("models").is_none(), "{}", grok_text());
-        assert!(grok_text().starts_with("# mine\n[ui]\ntheme = \"dark\"\n"));
-
-        // 切回去照样能用。
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("back to a");
-        assert_eq!(grok_tables(), vec!["grok-4.5", "mine"]);
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_table_keys_follow_the_provider_and_renames_replace_the_old_table() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_with(
-            AppType::GrokBuild,
-            &[
-                grok_row("a", "grok-4.5", "reasoning_summary = \"none\"\n"),
-                grok_row("b", "b", ""),
-            ],
-            "b",
-        )
-        .await;
-
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("to a");
-        assert_eq!(
-            grok_doc()["model"]["grok-4.5"]["reasoning_summary"].as_str(),
-            Some("none")
-        );
-        ProviderService::switch(&state, AppType::GrokBuild, "b").expect("to b");
-        assert_eq!(grok_tables(), vec!["b", "mine"]);
-        assert!(
-            !grok_text().contains("reasoning_summary"),
-            "{}",
-            grok_text()
-        );
-
-        // 编辑当前供应商、把表名从 b 改成 grok-4.6：live 里只剩新表。
-        let mut b = state
-            .db
-            .get_provider_by_id("b", "grokbuild")
-            .unwrap()
-            .unwrap();
-        b.settings_config = grok_row("b", "grok-4.6", "").settings_config;
-        ProviderService::update(&state, AppType::GrokBuild, Some("b"), b).expect("rename");
-        assert_eq!(grok_tables(), vec!["grok-4.6", "mine"]);
-        assert_eq!(grok_doc()["models"]["default"].as_str(), Some("grok-4.6"));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_without_a_write_record_infers_the_table_an_older_version_wrote() {
-        let _home = Home::new();
-        // 旧版把 a 的行整份写进了 live：新版没有写入记录。
-        let a = grok_row("a", "grok-4.5", "");
-        let old = format!(
-            "{}\n{}",
-            a.settings_config["config"].as_str().unwrap(),
-            GROK_USER_LIVE
-        );
-        seed_grok(&old);
-        let state = state_with(AppType::GrokBuild, &[a, grok_row("b", "b", "")], "a").await;
-
-        ProviderService::switch(&state, AppType::GrokBuild, "b").expect("to b");
-        assert_eq!(grok_tables(), vec!["b", "mine"], "{}", grok_text());
-        assert_eq!(
-            state::written(&DeviceStore::for_device(), "grokbuild")
-                .unwrap()
-                .unwrap()
-                .tables,
-            vec!["b".to_string()]
-        );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_proxy_writes_the_route_table_through_the_engine() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_with(
-            AppType::GrokBuild,
-            &[
-                grok_row("a", "grok-4.5", ""),
-                grok_row("b", "b", ""),
-                grok_official(),
-            ],
-            "a",
-        )
-        .await;
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("direct a");
-
-        enter(&state, &AppType::GrokBuild, false)
-            .await
-            .expect("enter");
-        let proxy_url = state.proxy_service.build_proxy_urls().await.unwrap().0;
-        let doc = grok_doc();
-        let table = &doc["model"]["grok-4.5"];
-        assert_eq!(table["api_key"].as_str(), Some(PROXY_TOKEN_PLACEHOLDER));
-        assert_eq!(
-            table["base_url"].as_str(),
-            Some(format!("{proxy_url}/grokbuild/v1").as_str())
-        );
-
-        // 换一家表名不同的路由：旧的代理表按写入记录删掉。
-        ProviderService::switch(&state, AppType::GrokBuild, "b").expect("route to b");
-        assert_eq!(grok_tables(), vec!["b", "mine"]);
-        assert!(
-            ProviderService::switch(&state, AppType::GrokBuild, "grok-official").is_err(),
-            "the official account cannot be routed"
-        );
-
-        exit(&state, &AppType::GrokBuild).await.expect("exit");
-        assert_eq!(grok_tables(), vec!["grok-4.5", "mine"]);
-        assert_eq!(
-            grok_doc()["model"]["grok-4.5"]["api_key"].as_str(),
-            Some("key-a")
-        );
-        assert!(grok_text().contains("[mcp_servers.fs]"));
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_switch_crash_rolls_forward_with_the_write_record() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_with(
-            AppType::GrokBuild,
-            &[grok_row("a", "grok-4.5", ""), grok_row("b", "b", "")],
-            "a",
-        )
-        .await;
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("direct a");
-
-        for point in ["published:0", "target"] {
-            ProviderService::switch(&state, AppType::GrokBuild, "a").expect("reset");
-            failpoint::crash_at(Some(point));
-            let crashed = ProviderService::switch(&state, AppType::GrokBuild, "b");
-            failpoint::crash_at(None);
-            assert!(crashed.is_err(), "{point}");
-
-            crate::mode::operation::recover_on_startup(&state.db);
-            assert_eq!(grok_tables(), vec!["b", "mine"], "{point}");
-            assert_eq!(direct(&state, &AppType::GrokBuild).as_deref(), Some("b"));
-            assert_eq!(
-                state::written(&DeviceStore::for_device(), "grokbuild")
-                    .unwrap()
-                    .unwrap()
-                    .tables,
-                vec!["b".to_string()],
-                "{point}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_editor_saves_the_table_to_the_row_and_global_edits_to_live() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_with(
-            AppType::GrokBuild,
-            &[grok_row("a", "grok-4.5", ""), grok_row("b", "b", "")],
-            "a",
-        )
-        .await;
-        ProviderService::switch(&state, AppType::GrokBuild, "a").expect("direct a");
-
-        let a = state
-            .db
-            .get_provider_by_id("a", "grokbuild")
-            .unwrap()
-            .unwrap();
-        let view =
-            ProviderService::editor_view(&state, AppType::GrokBuild, &a.settings_config, None)
-                .expect("view");
-        let shown = view.settings["config"].as_str().unwrap().to_string();
-        assert!(
-            shown.contains("[model.mine]") && shown.contains("key-a"),
-            "{shown}"
-        );
-
-        let edited = shown
-            .replace("theme = \"dark\"", "theme = \"light\"")
-            .replace("a-model", "a-model-2");
-        let mut row = a.clone();
-        row.settings_config = json!({ "config": edited });
-        ProviderService::update_from_editor(
-            &state,
-            AppType::GrokBuild,
-            Some("a"),
-            row,
-            Some(crate::services::provider::EditorSave {
-                base: view.settings,
-                draft: None,
-                on_conflict: Default::default(),
-            }),
-        )
-        .expect("save");
-
-        let doc = grok_doc();
-        assert_eq!(doc["ui"]["theme"].as_str(), Some("light"));
-        assert_eq!(
-            doc["model"]["grok-4.5"]["model"].as_str(),
-            Some("a-model-2")
-        );
-        let saved = state
-            .db
-            .get_provider_by_id("a", "grokbuild")
-            .unwrap()
-            .unwrap();
-        let row_text = saved.settings_config["config"].as_str().unwrap();
-        assert!(row_text.contains("a-model-2"), "{row_text}");
-        assert!(
-            !row_text.contains("[ui]") && !row_text.contains("[model.mine]"),
-            "{row_text}"
-        );
-    }
-
     // ---------- 新增对话框：和编辑器同一套规则 ----------
 
     async fn state_without_providers() -> AppState {
@@ -4867,7 +4081,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_add_dialog_saves_key_fields_to_the_row_and_global_edits_to_live() {
         let _home = Home::new();
         set_preservation(true);
@@ -4905,7 +4119,7 @@ model_provider = "c"
 
     /// 新增对话框的底已经套了预设：预设带的独有字段归新供应商，live 里用户自己写的不归它。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_add_dialog_keeps_the_users_exclusive_fields_out_of_the_new_row() {
         let _home = Home::new();
         set_preservation(true);
@@ -4947,105 +4161,6 @@ model_provider = "c"
                 && !c_config.contains("model_verbosity"),
             "{c_config}"
         );
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn gemini_add_dialog_first_provider_writes_key_fields_and_sets_the_pointer() {
-        let _home = Home::new();
-        seed_gemini(GEMINI_USER_ENV, GEMINI_USER_SETTINGS);
-        let state = state_without_providers().await;
-
-        let draft = Provider::with_id(
-            "c".to_string(),
-            "C".to_string(),
-            json!({ "env": {
-                "GEMINI_API_KEY": "key-c",
-                "GOOGLE_GEMINI_BASE_URL": "https://c.example",
-                "GEMINI_MODEL": "m-c",
-            }, "config": {} }),
-            None,
-        );
-        let view =
-            ProviderService::editor_view(&state, AppType::Gemini, &draft.settings_config, None)
-                .expect("view c");
-        assert_eq!(view.settings["env"]["GEMINI_SANDBOX"], json!("docker"));
-        let mut edited = view.settings.clone();
-        edited["env"]["DEBUG"] = json!("5");
-        edited["config"]["ui"] = json!({ "theme": "dark" });
-        add_from_editor(&state, AppType::Gemini, draft, edited, view.settings).expect("add c");
-
-        let env = gemini_env();
-        assert!(
-            env.contains("GEMINI_API_KEY=key-c")
-                && env.contains("GEMINI_MODEL=m-c")
-                && env.contains("DEBUG=5")
-                && env.contains("# my notes"),
-            "{env}"
-        );
-        assert_eq!(gemini_settings()["ui"], json!({ "theme": "dark" }));
-        assert_eq!(
-            crate::mode::current::provider_for(
-                &state.db,
-                &AppType::Gemini,
-                crate::mode::current::Purpose::Direct
-            )
-            .unwrap()
-            .as_deref(),
-            Some("c")
-        );
-        let c = state.db.get_provider_by_id("c", "gemini").unwrap().unwrap();
-        assert!(c.settings_config["env"].get("DEBUG").is_none());
-        assert!(c.settings_config["config"].get("ui").is_none());
-    }
-
-    #[tokio::test]
-    #[serial]
-    async fn grok_add_dialog_first_provider_records_the_written_table() {
-        let _home = Home::new();
-        seed_grok(GROK_USER_LIVE);
-        let state = state_without_providers().await;
-
-        let draft = grok_row("a", "grok-4.5", "");
-        let view =
-            ProviderService::editor_view(&state, AppType::GrokBuild, &draft.settings_config, None)
-                .expect("view a");
-        let shown = view.settings["config"].as_str().unwrap().to_string();
-        assert!(
-            shown.contains("[model.mine]") && shown.contains("key-a"),
-            "{shown}"
-        );
-        let edited = json!({ "config": shown.replace("theme = \"dark\"", "theme = \"light\"") });
-        add_from_editor(&state, AppType::GrokBuild, draft, edited, view.settings).expect("add a");
-
-        let doc = grok_doc();
-        assert_eq!(doc["ui"]["theme"].as_str(), Some("light"));
-        assert_eq!(doc["models"]["default"].as_str(), Some("grok-4.5"));
-        assert_eq!(grok_tables(), vec!["grok-4.5", "mine"]);
-        let written = crate::mode::state::written(&DeviceStore::for_device(), "grokbuild")
-            .unwrap()
-            .expect("write record");
-        assert_eq!(written.tables, vec!["grok-4.5".to_string()]);
-        let a = state
-            .db
-            .get_provider_by_id("a", "grokbuild")
-            .unwrap()
-            .unwrap();
-        let row_text = a.settings_config["config"].as_str().unwrap();
-        assert!(
-            !row_text.contains("[ui]") && !row_text.contains("[model.mine]"),
-            "{row_text}"
-        );
-
-        // 第二个新增的供应商不动 live 的关键字段。
-        let draft = grok_row("b", "b", "");
-        let view =
-            ProviderService::editor_view(&state, AppType::GrokBuild, &draft.settings_config, None)
-                .expect("view b");
-        let edited = view.settings.clone();
-        add_from_editor(&state, AppType::GrokBuild, draft, edited, view.settings).expect("add b");
-        assert_eq!(grok_doc()["models"]["default"].as_str(), Some("grok-4.5"));
-        assert_eq!(grok_tables(), vec!["grok-4.5", "mine"]);
     }
 
     // ---- Stack 模型（`mode::stack`） ----
@@ -5098,7 +4213,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn stack_models_join_the_claude_contract_and_leave_with_it() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5185,7 +4300,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_users_own_model_discovery_switch_survives_switches_and_proxy_mode() {
         let _home = Home::new();
         let mut user: Value = serde_json::from_str(USER_SETTINGS).unwrap();
@@ -5204,7 +4319,7 @@ model_provider = "c"
     /// `modelPicker` 是关键字段：聚合模式下换成 Stack 模型列表，用户自己配的不保留；离开
     /// 聚合模式（退出代理、直连切换）都清掉。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_stack_model_picker_replaces_a_users_own_and_leaves_with_stack_mode() {
         let _home = Home::new();
         let mut user: Value = serde_json::from_str(USER_SETTINGS).unwrap();
@@ -5224,7 +4339,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn stack_models_leave_the_client_file_on_exit_and_come_back_on_enter() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5248,7 +4363,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_default_leads_the_aliases_and_repeating_a_target_changes_nothing() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5286,7 +4401,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn routing_mode_and_stack_mode_share_the_list() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5327,7 +4442,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn entering_with_a_picked_route_changes_target_and_mode_in_one_step() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5367,7 +4482,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn setting_the_route_in_direct_mode_only_records_it() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5414,7 +4529,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_default_cannot_be_removed_and_a_new_default_joins_the_list() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5453,7 +4568,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn changing_the_main_page_switch_sends_apps_in_the_other_mode_back_to_direct() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5474,67 +4589,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
-    async fn claude_desktop_model_mapping_keeps_the_server_running() {
-        let _home = Home::new();
-        seed_settings(USER_SETTINGS);
-        let state = state_with(
-            AppType::Claude,
-            &[claude("a", "https://a.example", json!({}))],
-            "a",
-        )
-        .await;
-        let mut mapping = Provider::with_id(
-            "map".to_string(),
-            "Map".to_string(),
-            json!({ "env": { "ANTHROPIC_BASE_URL": "https://map.example" } }),
-            None,
-        );
-        mapping.meta = Some(crate::provider::ProviderMeta {
-            claude_desktop_mode: Some(crate::provider::ClaudeDesktopMode::Proxy),
-            ..Default::default()
-        });
-        let desktop = AppType::ClaudeDesktop;
-        state
-            .db
-            .save_provider(desktop.as_str(), &mapping)
-            .expect("save mapping provider");
-        crate::settings::set_current_provider(&desktop, Some("map")).expect("desktop current");
-
-        // Claude Code 退出路由时，Desktop 还在用模型映射，服务不能跟着停。
-        enter(&state, &AppType::Claude, false).await.expect("enter");
-        exit(&state, &AppType::Claude).await.expect("exit");
-        assert!(state.proxy_service.is_running().await);
-
-        // 服务被手动停掉后，下一次检查（启动、切换、应用项目）会把它拉起来。
-        state.proxy_service.stop().await.expect("stop");
-        ensure_desktop_mapping_service(&state).await;
-        assert!(state.proxy_service.is_running().await);
-
-        // 从映射卡换走时 Claude Code 还在路由：服务留着，等它退出路由时再停。
-        enter(&state, &AppType::Claude, false).await.expect("enter");
-        crate::settings::set_current_provider(&desktop, None).expect("clear desktop current");
-        state
-            .db
-            .delete_provider(desktop.as_str(), "map")
-            .expect("drop mapping");
-        sync_desktop_mapping_service(&state, true).await;
-        assert!(state.proxy_service.is_running().await);
-        exit(&state, &AppType::Claude).await.expect("exit");
-        assert!(!state.proxy_service.is_running().await);
-
-        // 换卡前就不是映射卡：用户在设置页手动开的服务不碰。
-        state.proxy_service.start().await.expect("manual start");
-        sync_desktop_mapping_service(&state, false).await;
-        assert!(state.proxy_service.is_running().await);
-
-        // 从映射卡换走、没人在用：顺手停掉。
-        sync_desktop_mapping_service(&state, true).await;
-        assert!(!state.proxy_service.is_running().await);
-    }
-
-    #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn changing_the_main_page_switch_with_nothing_to_exit_keeps_the_server() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5548,7 +4603,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_failover_finishing_after_entering_stack_mode_is_dropped() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5566,7 +4621,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn enabling_failover_cannot_move_the_default_in_stack_mode() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5602,7 +4657,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn stack_mode_sends_default_requests_to_the_default_only() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5653,7 +4708,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn official_accounts_cannot_be_stacked() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5673,7 +4728,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn a_failed_stack_change_says_whether_it_will_be_finished() {
         for (point, partial) in [
             ("pending", false),
@@ -5711,7 +4766,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn operations_that_do_not_touch_the_list_keep_it() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5732,7 +4787,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn editing_or_deleting_an_stacked_provider_rewrites_the_contract() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5768,7 +4823,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn the_first_model_of_the_defaults_list_leads_the_aliases() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5822,7 +4877,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn routing_mode_keeps_the_claude_aliases() {
         let _home = Home::new();
         seed_settings(USER_SETTINGS);
@@ -5881,7 +4936,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_stack_models_join_the_catalog_and_leave_with_it() {
         let _home = Home::new();
         seed_codex("approval_policy = \"on-request\"\n", None);
@@ -5985,7 +5040,7 @@ model_provider = "c"
     /// 「经典子 agent」开关：Stack 模式下立刻按开关重写合并目录，关掉后回到原来的目录；
     /// 不在 Stack 模式时什么都不写。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn classic_subagents_toggle_rewrites_the_stack_catalog() {
         let _home = Home::new();
         seed_codex("approval_policy = \"on-request\"\n", None);
@@ -6027,7 +5082,7 @@ model_provider = "c"
 
     /// 路由那家自己管理模型目录文件：Stack 模型发布不了，名单照存，结果带提示而不是静默成功。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_route_with_its_own_catalog_reports_stack_models_unpublished() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6109,7 +5164,7 @@ model_provider = "c"
 
     /// 直连切号也提示可能缓存旧登录，不要求生成模型目录。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_direct_account_switch_reports_the_cached_login() {
         let _home = Home::new();
         let clients = FakeClients::install();
@@ -6146,7 +5201,7 @@ model_provider = "c"
 
     /// 桌面版在目录变化之前启动：Stack 视图带上 `staleClients`；之后启动的不算旧。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_stack_view_reports_clients_on_an_old_catalog() {
         let _home = Home::new();
         let clients = FakeClients::install();
@@ -6189,7 +5244,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_route_with_its_own_catalog_skips_the_client_check() {
         let _home = Home::new();
         let clients = FakeClients::install();
@@ -6215,7 +5270,7 @@ model_provider = "c"
     /// 用户直接在 config.toml 里指定的模型目录：写入时照留，生成的目录不生效，同样要提示。
     /// 手写进 config.toml 的指针挡不住聚合：进代理时按关键字段清掉，加进 Stack 后换上合并目录。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_hand_written_catalog_pointer_gives_way_to_the_stack_catalog() {
         let _home = Home::new();
         seed_codex("model_catalog_json = \"/work/global-models.json\"\n", None);
@@ -6240,7 +5295,7 @@ model_provider = "c"
     /// 提示上的「改用 CC Switch 的模型目录」：去掉路由那家行里的指针，契约带进 live 的那份
     /// 跟着删掉，换上合并目录，不再提示。行里其余内容原样。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_adopting_the_catalog_drops_the_route_rows_own_pointer() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6287,7 +5342,7 @@ model_provider = "c"
     /// 编辑器里的模型目录指针归这张卡：live 里手写的不显示、不收进行，保存当前卡时清掉；用户在
     /// 编辑器里写的外来指针存进行、随卡写入；指向 CC Switch 目录的指针不存（由写入方决定）。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editor_catalog_pointer_belongs_to_the_card() {
         let _home = Home::new();
         set_preservation(true);
@@ -6378,7 +5433,7 @@ model_provider = "c"
 
     /// 普通保存入口（不带编辑器底）改了 Stack 里那家的模型目录：合并目录跟着重算。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn editing_an_stacked_codex_provider_rewrites_the_catalog() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6405,7 +5460,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_broken_stacked_provider_is_skipped_and_cannot_be_stacked() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6458,7 +5513,7 @@ model_provider = "c"
 
     /// 行里的 TOML 坏在密钥那一行：解析诊断会带上这行原文，失败日志不能把它写进日志文件。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn failure_logs_drop_the_config_line_a_broken_row_quotes() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6485,7 +5540,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_accounts_cannot_be_stacked() {
         let _home = Home::new();
         seed_codex("", None);
@@ -6598,7 +5653,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_route_lists_every_official_model_before_the_stacked_ones() {
         let _home = Home::new();
         let alice = chatgpt("ws", "alice");
@@ -6661,7 +5716,7 @@ model_provider = "c"
     /// #8014：本机 Codex 太旧时服务端只回隐藏条目。照写的话官方模型在选择器里一个都
     /// 看不到、只剩 Stack 模型；不写这种目录，并提示升级。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_list_without_a_listed_model_is_not_published() {
         let _home = Home::new();
         seed_codex("", Some(&chatgpt("ws", "alice")));
@@ -6688,7 +5743,7 @@ model_provider = "c"
     /// 列表变了而重写失败（这里是 config.toml 恰好解析不了）：缓存已经是新的，下一次检查
     /// 不再联网、拿到的也不会是「列表变了」，但仍按缓存补写客户端文件。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_failed_rewrite_after_a_refresh_is_retried_at_the_next_check() {
         let _home = Home::new();
         seed_codex("", Some(&chatgpt("ws", "alice")));
@@ -6730,7 +5785,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_login_that_changes_before_the_write_stops_it() {
         let _home = Home::new();
         seed_codex("", Some(&chatgpt("ws", "alice")));
@@ -6759,7 +5814,7 @@ model_provider = "c"
     /// 钥匙串不归写锁管：按 alice 取列表的时候 Codex 在钥匙串里换成了 bob，不能把 alice
     /// 的列表写给 bob。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_a_keychain_login_that_changes_during_the_fetch_stops_the_write() {
         let _home = Home::new();
         seed_codex("cli_auth_credentials_store = \"keyring\"\n", None);
@@ -6796,7 +5851,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_the_login_comes_from_where_codex_keeps_it() {
         let _home = Home::new();
         let official = crate::database::CODEX_OFFICIAL_PROVIDER_ID;
@@ -6873,7 +5928,7 @@ model_provider = "c"
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_switching_back_to_official_uses_the_login_it_will_restore() {
         let _home = Home::new();
         set_preservation(false);
@@ -6908,7 +5963,7 @@ model_provider = "c"
     /// 没填 Key 的草稿：显示「切过去之后的样子」和只存行都不拿切换的安全闸拒绝，要进 live
     /// 时（路由到它、直连切到它）照样拒绝，否则会把 ChatGPT 登录发给第三方。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_keyless_draft_is_shown_and_saved_but_never_written_to_live() {
         let _home = Home::new();
         set_preservation(true);
@@ -6986,7 +6041,7 @@ model_provider = "c"
     /// 直连模式下编辑当前供应商：保存会把关键字段一起换进 live，这时去掉 Key 照样拒绝，行
     /// 撤回、live 不动。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_editing_the_current_provider_into_a_keyless_row_is_refused() {
         let _home = Home::new();
         set_preservation(true);
@@ -7033,7 +6088,7 @@ model_provider = "c"
 
     /// 新增第一个供应商会同时写进 live：没填 Key 照样拒绝，行不留。
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_adding_a_keyless_first_provider_is_refused() {
         let _home = Home::new();
         set_preservation(true);

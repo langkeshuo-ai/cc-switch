@@ -35,8 +35,8 @@ describe("parseTrayNavigation", () => {
         providerId: "copilot",
       }),
     ).toEqual({ app: "claude", intent: "needsRoute", providerId: "copilot" });
-    expect(parseTrayNavigation({ app: "grokbuild", intent: "add" })).toEqual({
-      app: "grokbuild",
+    expect(parseTrayNavigation({ app: "pi", intent: "add" })).toEqual({
+      app: "pi",
       intent: "add",
       providerId: undefined,
     });
@@ -48,6 +48,7 @@ describe("parseTrayNavigation", () => {
   it("drops unknown targets and incomplete needs-route requests", () => {
     expect(parseTrayNavigation(null)).toBeNull();
     expect(parseTrayNavigation({ app: "nope" })).toBeNull();
+    expect(parseTrayNavigation({ app: "grokbuild" })).toBeNull();
     expect(parseTrayNavigation({ section: "nope" })).toBeNull();
     expect(parseTrayNavigation({ app: "codex", intent: "needsRoute" })).toEqual(
       { app: "codex" },

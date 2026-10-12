@@ -37,13 +37,11 @@ impl ProviderRouter {
         }
     }
 
-    /// 选择可用的供应商（支持故障转移）
-    ///
-    /// 返回按优先级排序的可用供应商列表：
-    /// - 故障转移关闭时：仅返回当前供应商
-    /// - 故障转移开启时：仅使用故障转移队列，按队列顺序依次尝试（P1 → P2 → ...）
+    /// 便捷入口：自动读「正在用的供应商」后转调 [`Self::select_providers_with_current`]。
+    /// 生产路由走 `select_providers_with_current`（上下文里已有 current）；
+    /// 本方法目前仅测试使用。
+    #[allow(dead_code)]
     pub async fn select_providers(&self, app_type: &str) -> Result<Vec<Provider>, AppError> {
-        // 代理模式下路由到代理路由那家，和直连指针无关。
         let current_provider = AppType::from_str(app_type).ok().and_then(|app_enum| {
             crate::mode::current::provider_in_use(&self.db, &app_enum)
                 .ok()
@@ -375,7 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_provider_router_creation() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -386,7 +384,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_failover_disabled_uses_current_provider() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -409,7 +407,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_failover_enabled_uses_queue_order_ignoring_current() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -444,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_failover_enabled_uses_queue_only_even_if_current_not_in_queue() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -474,7 +472,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn codex_official_current_stays_single_route_when_failover_is_stale() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -503,7 +501,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn stale_codex_official_queue_entries_are_not_retry_targets() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -545,7 +543,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_select_providers_does_not_consume_half_open_permit() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());
@@ -588,7 +586,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(global_env)]
     async fn test_release_permit_neutral_frees_half_open_slot() {
         let _home = TempHome::new();
         let db = Arc::new(Database::memory().unwrap());

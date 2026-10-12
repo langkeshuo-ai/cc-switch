@@ -4,18 +4,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use cc_switch_lib::{update_settings, AppSettings, AppState, Database, MultiAppConfig};
 
 /// 为测试设置隔离的 HOME 目录，避免污染真实用户数据。
-///
-/// cargo test 下每个测试二进制一个进程、二进制之间顺序执行，共用一个固定目录即可。
-/// nextest 每个测试一个进程、多个进程并发，各自启动时都会清空目录，所以按槽位分开：
-/// 槽位号在同时运行的测试之间唯一、测试结束后复用，目录数不超过并发数。
 pub fn ensure_test_home() -> &'static Path {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| {
-        let dir_name = match std::env::var("NEXTEST_TEST_GLOBAL_SLOT") {
-            Ok(slot) => format!("cc-switch-test-home-nextest-{slot}"),
-            Err(_) => "cc-switch-test-home".to_string(),
-        };
-        let base = std::env::temp_dir().join(dir_name);
+        let base = std::env::temp_dir().join("cc-switch-test-home");
         if base.exists() {
             let _ = std::fs::remove_dir_all(&base);
         }
@@ -103,6 +95,27 @@ pub fn test_mutex() -> MutexGuard<'static, ()> {
 #[allow(dead_code)]
 pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
     let db = Arc::new(Database::memory()?);
+    Ok(AppState::new(db))
+}
+
+/// 文件库版 AppState，仅供 golden 的 `import_rows` 使用：那批用例要锁「写进 DB 的
+/// 原始字节行」（见 `util::dump_provider_rows` 的只读打开），写入端也必须落在同一个
+/// 文件库上。golden 是单二进制 + `test_mutex` 串行，且没有其他集成二进制再用这个
+/// 固定 home 的文件库，不会复现当年跨进程 `database is locked` 的问题。
+#[allow(dead_code)]
+pub fn create_test_state_file_backed() -> Result<AppState, Box<dyn std::error::Error>> {
+    let db = Arc::new(Database::init()?);
+    Ok(AppState::new(db))
+}
+
+/// 同 [`create_test_state_with_config`]，但落在文件库上：供需要用 SQLite 触发器
+/// 注入写入失败的用例（触发器必须建在 state 实际使用的库上）。
+#[allow(dead_code)]
+pub fn create_test_state_file_backed_with_config(
+    config: &MultiAppConfig,
+) -> Result<AppState, Box<dyn std::error::Error>> {
+    let db = Arc::new(Database::init()?);
+    db.migrate_from_json(config)?;
     Ok(AppState::new(db))
 }
 

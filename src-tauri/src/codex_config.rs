@@ -178,36 +178,6 @@ pub(crate) struct CodexManagedLiveRefresh {
     pub(crate) chatgpt_account_id: String,
 }
 
-/// 测试用：Codex live 的四个文件（auth、config、模型目录、托管账号标记）的字节，用来断言
-/// 「被拒的操作没有改动任何文件」。
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodexLiveStateSnapshot {
-    files: Vec<(PathBuf, Option<Vec<u8>>)>,
-}
-
-#[cfg(test)]
-impl CodexLiveStateSnapshot {
-    pub(crate) fn capture() -> Result<Self, AppError> {
-        let paths = [
-            get_codex_auth_path(),
-            get_codex_config_path(),
-            get_codex_model_catalog_path(),
-            get_codex_managed_oauth_live_auth_marker_path(),
-        ];
-        let mut files = Vec::with_capacity(paths.len());
-        for path in paths {
-            let bytes = match fs::read(&path) {
-                Ok(bytes) => Some(bytes),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-                Err(err) => return Err(AppError::io(&path, err)),
-            };
-            files.push((path, bytes));
-        }
-        Ok(Self { files })
-    }
-}
-
 /// Which Codex tool surface the generated model catalog should target.
 ///
 /// - `ProxyChat`: cc-switch's proxy takes over and converts Responses<->Chat,
@@ -282,11 +252,6 @@ pub fn get_codex_auth_path() -> PathBuf {
 
 pub(crate) fn get_codex_managed_oauth_live_auth_marker_path() -> PathBuf {
     crate::config::get_app_config_dir().join(CODEX_MANAGED_OAUTH_LIVE_AUTH_MARKER_FILENAME)
-}
-
-#[cfg(test)]
-pub(crate) fn codex_managed_oauth_live_auth_marker_exists() -> bool {
-    get_codex_managed_oauth_live_auth_marker_path().exists()
 }
 
 /// 从 live/备份的 Codex `auth` 中提取上游 ChatGPT workspace ID。
@@ -3079,7 +3044,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn ensure_live_auth_guard_rejects_rotated_refresh_without_mutating_live_bundle() {
         let _home = CodexLiveTestHome::new();
         let before = seed_rotated_managed_codex_live_state();
@@ -3092,7 +3057,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn clear_live_auth_guard_rejects_rotated_refresh_without_mutating_live_bundle() {
         let _home = CodexLiveTestHome::new();
         let before = seed_rotated_managed_codex_live_state();
@@ -3185,7 +3150,7 @@ base_url = "https://single.example.com/v1"
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn managed_chatgpt_login_matches_local_marker_and_workspace() {
         let _home = CodexLiveTestHome::new();
         let shared_chatgpt_user_token = |subject: &str| {
@@ -3298,7 +3263,7 @@ base_url = "https://single.example.com/v1"
     /// 原生 ChatGPT 登录没有 marker 是常态：不认所有权，也不算读取失败；marker 坏了同样
     /// 不认。
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn missing_or_malformed_marker_never_establishes_ownership() {
         let _home = CodexLiveTestHome::new();
         let id_token = test_codex_id_token("user-a");
@@ -3321,7 +3286,7 @@ base_url = "https://single.example.com/v1"
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn legacy_managed_marker_removal_requires_manager_identity() {
         let _home = CodexLiveTestHome::new();
         let id_token = test_codex_id_token("legacy-user");
@@ -5513,7 +5478,7 @@ wire_api = "responses"
     }
 
     #[test]
-    #[serial]
+    #[serial(global_env)]
     fn proxy_chat_catalog_ignores_codex_models_cache() {
         let home = CodexLiveTestHome::new();
         let codex_dir = home._dir.path().join(".codex");
@@ -5632,9 +5597,9 @@ model_catalog_json = "cc-switch-model-catalog.json"
         #[cfg(windows)]
         let linked = std::os::windows::fs::symlink_dir(&outside_dir, base_dir.join("link"));
         if let Err(err) = linked {
-            // Windows 在 \\wsl.localhost 上建不了符号链接（Incorrect function），夹具无从构造
-            assert!(crate::config::is_wsl_path(temp.path()), "symlink: {err}");
-            eprintln!("cannot create symlinks on WSL share ({err}); skipping");
+            // Windows 建 symlink 需要特权（开发者模式/管理员；os error 1314），
+            // \\wsl.localhost 上则报 Incorrect function——夹具无从构造时一律跳过。
+            eprintln!("cannot create symlinks here ({err}); skipping");
             return;
         }
 

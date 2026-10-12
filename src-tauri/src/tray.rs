@@ -34,27 +34,14 @@ const COPILOT_UNIT_PREMIUM: &str = "requests";
 pub const TRAY_ID: &str = "cc-switch";
 
 /// 进托盘的应用，顺序和侧栏一致。累加式应用没有「当前供应商」，不进托盘。
-pub const TRAY_APPS: [AppType; 5] = [
-    AppType::Claude,
-    AppType::ClaudeDesktop,
-    AppType::Codex,
-    AppType::Gemini,
-    AppType::GrokBuild,
-];
+pub const TRAY_APPS: [AppType; 2] = [AppType::Claude, AppType::Codex];
 
 /// 应用全称（产品名，不翻译）。用全称是为了把 Claude Code 和 Claude Desktop 分开。
 fn app_display_name(app: &AppType) -> &'static str {
     match app {
         AppType::Claude => "Claude Code",
-        AppType::ClaudeDesktop => "Claude Desktop",
         AppType::Codex => "Codex",
-        AppType::Gemini => "Gemini CLI",
-        AppType::GrokBuild => "Grok Build",
-        AppType::OpenCode => "OpenCode",
-        AppType::OpenClaw => "OpenClaw",
-        AppType::Hermes => "Hermes",
         AppType::Pi => "Pi",
-        AppType::Mcode => "MiniMax Code",
     }
 }
 
@@ -124,9 +111,6 @@ pub struct TrayTexts {
     pub tier_monthly: &'static str,
     pub tier_thirty_day: &'static str,
     pub tier_credits: &'static str,
-    pub tier_gemini_pro: &'static str,
-    pub tier_gemini_flash: &'static str,
-    pub tier_gemini_flash_lite: &'static str,
     pub tier_premium: &'static str,
     pub tier_left: &'static str,
     pub tier_used_up: &'static str,
@@ -223,9 +207,6 @@ impl TrayTexts {
                 tier_monthly: "Monthly",
                 tier_thirty_day: "30-day",
                 tier_credits: "Credits",
-                tier_gemini_pro: "Pro",
-                tier_gemini_flash: "Flash",
-                tier_gemini_flash_lite: "Flash Lite",
                 tier_premium: "Premium",
                 tier_left: "{label} {value}% left",
                 tier_used_up: "{label} used up",
@@ -282,9 +263,6 @@ impl TrayTexts {
                 tier_monthly: "月間",
                 tier_thirty_day: "30日間",
                 tier_credits: "クレジット",
-                tier_gemini_pro: "Pro",
-                tier_gemini_flash: "Flash",
-                tier_gemini_flash_lite: "Flash Lite",
                 tier_premium: "プレミアム",
                 tier_left: "{label} 残り {value}%",
                 tier_used_up: "{label} 使い切り",
@@ -338,9 +316,6 @@ impl TrayTexts {
                 tier_monthly: "每月",
                 tier_thirty_day: "30 天",
                 tier_credits: "額度",
-                tier_gemini_pro: "Pro",
-                tier_gemini_flash: "Flash",
-                tier_gemini_flash_lite: "Flash Lite",
                 tier_premium: "進階請求",
                 tier_left: "{labelSp}剩餘 {value}%",
                 tier_used_up: "{labelSp}已用完",
@@ -394,9 +369,6 @@ impl TrayTexts {
                 tier_monthly: "每月",
                 tier_thirty_day: "30 天",
                 tier_credits: "额度",
-                tier_gemini_pro: "Pro",
-                tier_gemini_flash: "Flash",
-                tier_gemini_flash_lite: "Flash Lite",
                 tier_premium: "高级请求",
                 tier_left: "{labelSp}剩余 {value}%",
                 tier_used_up: "{labelSp}已用完",
@@ -467,9 +439,6 @@ enum TierGroup {
     Fable,
     Monthly,
     Credits,
-    GeminiPro,
-    GeminiFlash,
-    GeminiFlashLite,
     Premium,
 }
 
@@ -489,9 +458,6 @@ const TIER_GROUPS: &[(TierGroup, &[&str])] = {
         (TierGroup::Fable, &[s::TIER_SEVEN_DAY_FABLE]),
         (TierGroup::Monthly, &[s::TIER_MONTHLY, s::TIER_THIRTY_DAY]),
         (TierGroup::Credits, &[s::TIER_CREDITS]),
-        (TierGroup::GeminiPro, &[s::TIER_GEMINI_PRO]),
-        (TierGroup::GeminiFlash, &[s::TIER_GEMINI_FLASH]),
-        (TierGroup::GeminiFlashLite, &[s::TIER_GEMINI_FLASH_LITE]),
         (TierGroup::Premium, &["premium"]),
     ]
 };
@@ -506,9 +472,6 @@ fn tier_label(texts: &TrayTexts, group: TierGroup, tier_name: &str) -> &'static 
         }
         TierGroup::Monthly => texts.tier_monthly,
         TierGroup::Credits => texts.tier_credits,
-        TierGroup::GeminiPro => texts.tier_gemini_pro,
-        TierGroup::GeminiFlash => texts.tier_gemini_flash,
-        TierGroup::GeminiFlashLite => texts.tier_gemini_flash_lite,
         TierGroup::Premium => texts.tier_premium,
     }
 }
@@ -974,16 +937,10 @@ pub(crate) fn provider_needs_routing(app: &AppType, provider: &Provider) -> bool
         .and_then(|meta| meta.api_format.as_deref())
         .filter(|fmt| !fmt.is_empty());
     match app {
-        AppType::ClaudeDesktop => {
-            managed_oauth
-                || meta
-                    .and_then(|meta| meta.claude_desktop_mode.as_ref())
-                    .is_some_and(|mode| *mode == crate::provider::ClaudeDesktopMode::Proxy)
-        }
         AppType::Claude => {
             managed_oauth || full_url || api_format.is_some_and(|f| f != "anthropic")
         }
-        AppType::Codex | AppType::GrokBuild => {
+        AppType::Codex => {
             managed_oauth
                 || full_url
                 || matches!(api_format, Some("openai_chat" | "anthropic"))
@@ -1131,9 +1088,6 @@ fn provider_entry(app: &AppType, provider: &Provider) -> ProviderEntry {
 }
 
 fn tray_mode(app_state: &AppState, app: &AppType) -> TrayMode {
-    if *app == AppType::ClaudeDesktop {
-        return TrayMode::Desktop;
-    }
     if !crate::mode::current::is_proxy(app) {
         return TrayMode::Direct;
     }
@@ -1391,14 +1345,10 @@ fn switch_feedback(app: &AppType, mode: TrayMode, name: String) -> Option<TrayFe
             app: app.clone(),
             name,
         }),
-        TrayMode::Direct
-            if matches!(app, AppType::Codex | AppType::Gemini | AppType::GrokBuild) =>
-        {
-            Some(TrayFeedback::Switched {
-                app: app.clone(),
-                name,
-            })
-        }
+        TrayMode::Direct if matches!(app, AppType::Codex) => Some(TrayFeedback::Switched {
+            app: app.clone(),
+            name,
+        }),
         TrayMode::Stack => Some(TrayFeedback::StackDefault {
             app: app.clone(),
             name,
@@ -1974,12 +1924,11 @@ fn collect_model(app_state: &AppState, texts: &TrayTexts) -> Result<TrayModel, A
     Ok(TrayModel { entries, status })
 }
 
-/// 退出会让它们断开的情况：路由服务在跑，且有应用在路由 / 聚合模式，或 Claude Desktop 在用
-/// 模型映射卡（和 `controller::stop_server_if_unused` 的「在用」同一口径，隐藏的应用也算）。
+/// 退出会让它们断开的情况：路由服务在跑，且有应用在路由 / 聚合模式（和
+/// `controller::stop_server_if_unused` 的「在用」同一口径，隐藏的应用也算）。
 fn routing_in_use(app_state: &AppState) -> bool {
     app_state.proxy_service.running_now() == Some(true)
-        && (crate::mode::current::proxy_flags(crate::mode::controller::PROXY_APPS).contains(&true)
-            || crate::claude_desktop_config::current_provider_uses_proxy(&app_state.db))
+        && crate::mode::current::proxy_flags(crate::mode::controller::PROXY_APPS).contains(&true)
 }
 
 // ─── 模型 → Tauri 菜单 ─────────────────────────────────────────────────────────
@@ -2439,7 +2388,6 @@ pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool
         let Some(app_state) = app_handle.try_state::<AppState>() else {
             return;
         };
-        let desktop_was_mapping = crate::commands::desktop_uses_mapping(app_state.inner(), scope);
         match crate::services::profile::ProfileService::apply(app_state.inner(), &profile_id, scope)
         {
             Ok(warnings) => {
@@ -2470,7 +2418,6 @@ pub fn handle_profile_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool
                     app_state.inner(),
                     &profile_id,
                     scope,
-                    desktop_was_mapping,
                 );
             }
             Err(e) => {
@@ -2502,10 +2449,6 @@ pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> boo
     let app_handle = app.clone();
     let provider_id = provider_id.to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        let desktop_was_mapping = app_type == AppType::ClaudeDesktop
-            && app_handle.try_state::<AppState>().is_some_and(|state| {
-                crate::claude_desktop_config::current_provider_uses_proxy(&state.db)
-            });
         match handle_provider_click(&app_handle, &app_type, &provider_id) {
             Ok(ClickOutcome::Switched { mode, name }) => {
                 clear_app_problems(&app_type);
@@ -2513,21 +2456,6 @@ pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> boo
                     record_feedback(&app_handle, feedback);
                 }
                 emit_switched(&app_handle, &app_type, &provider_id);
-                if app_type == AppType::ClaudeDesktop {
-                    // 换上模型映射卡要把路由服务拉起来、换走时别人不用就停掉（同主界面
-                    // `switch_provider`），对齐之后再重建一次。
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Some(state) = handle.try_state::<AppState>() {
-                            crate::mode::controller::sync_desktop_mapping_service(
-                                state.inner(),
-                                desktop_was_mapping,
-                            )
-                            .await;
-                        }
-                        refresh_tray_menu(&handle);
-                    });
-                }
             }
             Ok(ClickOutcome::NeedsRoute) => {
                 navigate(
@@ -2824,10 +2752,9 @@ mod tests {
     use super::*;
     use crate::provider::{UsageData, UsageResult};
     use crate::services::subscription::{
-        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_GEMINI_FLASH,
-        TIER_GEMINI_FLASH_LITE, TIER_GEMINI_PRO, TIER_MONTHLY, TIER_SEVEN_DAY,
-        TIER_SEVEN_DAY_FABLE, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET, TIER_THIRTY_DAY,
-        TIER_WEEKLY_LIMIT,
+        CredentialStatus, QuotaTier, SubscriptionQuota, TIER_FIVE_HOUR, TIER_MONTHLY,
+        TIER_SEVEN_DAY, TIER_SEVEN_DAY_FABLE, TIER_SEVEN_DAY_OPUS, TIER_SEVEN_DAY_SONNET,
+        TIER_THIRTY_DAY, TIER_WEEKLY_LIMIT,
     };
 
     fn en() -> TrayTexts {
@@ -2853,16 +2780,7 @@ mod tests {
     #[test]
     fn tray_lists_switch_apps_in_sidebar_order_without_additive_apps() {
         let names: Vec<&str> = TRAY_APPS.iter().map(app_display_name).collect();
-        assert_eq!(
-            names,
-            [
-                "Claude Code",
-                "Claude Desktop",
-                "Codex",
-                "Gemini CLI",
-                "Grok Build"
-            ]
-        );
+        assert_eq!(names, ["Claude Code", "Codex"]);
         for app in TRAY_APPS {
             assert!(!app.is_additive_mode(), "{app:?} 是累加式应用，不进托盘");
         }
@@ -3037,36 +2955,6 @@ mod tests {
         assert_eq!(at(85.0), ("5 小时剩余 15%".to_string(), true));
         // 用完时额度本身写「已用完」，不再加「快用完」。
         assert_eq!(at(100.0), ("5 小时已用完".to_string(), false));
-    }
-
-    #[test]
-    fn latin_labels_get_a_space_before_the_chinese_word() {
-        let quota = make_quota(
-            "gemini",
-            true,
-            vec![tier(TIER_GEMINI_PRO, 15.0), tier(TIER_GEMINI_FLASH, 42.0)],
-        );
-        assert_eq!(
-            sub_title(&zh(), &quota).as_deref(),
-            Some("Pro 剩余 85% · Flash 剩余 58%")
-        );
-    }
-
-    #[test]
-    fn title_writes_every_tier_in_original_order() {
-        let quota = make_quota(
-            "gemini",
-            true,
-            vec![
-                tier(TIER_GEMINI_PRO, 5.0),
-                tier(TIER_GEMINI_FLASH, 42.0),
-                tier(TIER_GEMINI_FLASH_LITE, 80.0),
-            ],
-        );
-        assert_eq!(
-            sub_title(&en(), &quota).as_deref(),
-            Some("Pro 95% left · Flash 58% left · Flash Lite 20% left")
-        );
     }
 
     #[test]
@@ -3482,15 +3370,10 @@ mod tests {
             serde_json::json!({"providerType": "github_copilot"}),
             serde_json::json!({}),
         );
-        for app in [
-            AppType::Claude,
-            AppType::ClaudeDesktop,
-            AppType::Codex,
-            AppType::GrokBuild,
-        ] {
+        for app in [AppType::Claude, AppType::Codex] {
             assert!(provider_needs_routing(&app, &copilot), "{app:?}");
         }
-        assert!(!provider_needs_routing(&AppType::Gemini, &copilot));
+        assert!(!provider_needs_routing(&AppType::Pi, &copilot));
 
         let openai_chat = provider(
             serde_json::json!({"apiFormat": "openai_chat"}),
@@ -3522,15 +3405,6 @@ mod tests {
         assert!(provider_needs_routing(&AppType::Codex, &chat_wire));
         let responses_wire = provider(serde_json::json!({}), codex_config("responses"));
         assert!(!provider_needs_routing(&AppType::Codex, &responses_wire));
-
-        let desktop_mapping = provider(
-            serde_json::json!({"claudeDesktopMode": "proxy"}),
-            serde_json::json!({}),
-        );
-        assert!(provider_needs_routing(
-            &AppType::ClaudeDesktop,
-            &desktop_mapping
-        ));
 
         // 官方卡永远不算。
         let mut official = copilot.clone();
@@ -3620,7 +3494,7 @@ mod tests {
                 TrayMode::Direct,
                 vec![entry("kimi", "Kimi For Coding")],
             ),
-            snapshot(AppType::GrokBuild, TrayMode::Direct, vec![]),
+            snapshot(AppType::Codex, TrayMode::Direct, vec![]),
         ];
         let menu = model(&[], &apps);
         assert_eq!(
@@ -3629,7 +3503,7 @@ mod tests {
                 "打开 CC Switch",
                 "---",
                 "Claude Code · Kimi For Coding",
-                "Grok Build · 添加供应商…",
+                "Codex · 添加供应商…",
                 "---",
                 "轻量模式",
                 "---",
@@ -3637,7 +3511,7 @@ mod tests {
                 "退出 CC Switch",
             ]
         );
-        assert!(matches!(&menu[3], TrayEntry::Item { id, .. } if id == "nav:add:grokbuild"));
+        assert!(matches!(&menu[3], TrayEntry::Item { id, .. } if id == "nav:add:codex"));
         assert!(matches!(&menu[8], TrayEntry::Item { id, .. } if id == "quit"));
     }
 
@@ -3682,13 +3556,13 @@ mod tests {
         official.official = true;
         official.blocked_from_routing = true;
         let app = snapshot(
-            AppType::GrokBuild,
+            AppType::Codex,
             TrayMode::Route,
             vec![entry("or", "OpenRouter"), official],
         );
         let menu = model(&[], &[app]);
-        assert_eq!(text_of(&menu[2]), "Grok Build · 路由 · OpenRouter");
-        let children = children_of(&menu, &AppType::GrokBuild);
+        assert_eq!(text_of(&menu[2]), "Codex · 路由 · OpenRouter");
+        let children = children_of(&menu, &AppType::Codex);
         assert_eq!(text_of(&children[0]), "路由");
         assert!(
             matches!(&children[2], TrayEntry::Item { enabled: false, text, .. }
@@ -3764,68 +3638,6 @@ mod tests {
                 "---",
                 "打开 Codex 页面"
             ]
-        );
-    }
-
-    #[test]
-    fn desktop_submenu_marks_mapping_cards_without_a_mode_header() {
-        let mut mapping = entry("kimi", "Kimi For Coding");
-        mapping.needs_routing = true;
-        let app = snapshot(
-            AppType::ClaudeDesktop,
-            TrayMode::Desktop,
-            vec![mapping, entry("official", "Claude Desktop Official")],
-        );
-        let menu = model(&[], &[app]);
-        assert_eq!(
-            text_of(&menu[2]),
-            "Claude Desktop · 模型映射 · Kimi For Coding"
-        );
-        let children = children_of(&menu, &AppType::ClaudeDesktop);
-        assert_eq!(
-            texts_of(&children),
-            [
-                "Kimi For Coding · 模型映射",
-                "Claude Desktop Official",
-                "---",
-                "打开 Claude Desktop 页面"
-            ]
-        );
-        assert!(
-            matches!(&children[0], TrayEntry::Check { id, .. } if id == "prov:claude-desktop:kimi")
-        );
-    }
-
-    #[test]
-    fn service_down_shows_the_problem_row_and_needs_attention_instead_of_quota() {
-        let mut mapping = entry("kimi", "Kimi For Coding");
-        mapping.needs_routing = true;
-        let mut desktop = snapshot(AppType::ClaudeDesktop, TrayMode::Desktop, vec![mapping]);
-        desktop.service_down = true;
-        desktop.quota = Some(QuotaView::Lines(vec![tier_line(
-            &zh(),
-            zh().tier_weekly,
-            20.0,
-            None,
-        )]));
-        let mut apps = [desktop];
-        let problems = [TrayProblem::ServiceDown { port: 15721 }];
-        mark_attention(&mut apps, &problems);
-        let menu = model(&problems, &apps);
-        assert_eq!(text_of(&menu[0]), "路由服务没在运行（端口 15721）");
-        assert!(
-            matches!(&menu[0], TrayEntry::Item { id, enabled: true, .. } if id == "nav:settings:routing")
-        );
-        assert_eq!(text_of(&menu[1]), "---");
-        assert_eq!(text_of(&menu[2]), "打开 CC Switch");
-        assert_eq!(
-            text_of(&menu[4]),
-            "Claude Desktop · 模型映射 · Kimi For Coding · 需要处理"
-        );
-        let children = children_of(&menu, &AppType::ClaudeDesktop);
-        assert_eq!(
-            text_of(&children[0]),
-            "路由服务没在运行，Kimi For Coding 暂时不可用"
         );
     }
 
@@ -4075,7 +3887,8 @@ mod tests {
     #[test]
     fn feedback_only_for_switches_that_need_a_client_restart() {
         let name = || "DeepSeek".to_string();
-        for app in [AppType::Codex, AppType::Gemini, AppType::GrokBuild] {
+        {
+            let app = AppType::Codex;
             assert_eq!(
                 switch_feedback(&app, TrayMode::Direct, name()),
                 Some(TrayFeedback::Switched {
@@ -4091,10 +3904,6 @@ mod tests {
             switch_feedback(&AppType::Claude, TrayMode::Direct, name()),
             None
         );
-        assert!(matches!(
-            switch_feedback(&AppType::ClaudeDesktop, TrayMode::Desktop, name()),
-            Some(TrayFeedback::Switched { .. })
-        ));
         for app in [AppType::Claude, AppType::Codex] {
             assert!(matches!(
                 switch_feedback(&app, TrayMode::Stack, name()),
@@ -4155,11 +3964,11 @@ mod tests {
             feedback_text(
                 &en(),
                 &TrayFeedback::Switched {
-                    app: AppType::ClaudeDesktop,
+                    app: AppType::Codex,
                     name: "DeepSeek".to_string()
                 }
             ),
-            "Claude Desktop switched to DeepSeek. Restart Claude Desktop to apply"
+            "Codex switched to DeepSeek. Restart Codex to apply"
         );
     }
 
@@ -4200,21 +4009,6 @@ mod tests {
                 app: Some("claude".to_string()),
                 intent: Some("needsRoute".to_string()),
                 provider_id: Some("pkg:with:colons".to_string()),
-                ..Default::default()
-            })
-        );
-        assert_eq!(
-            parse_nav_id("nav:app:claude-desktop:quota"),
-            Some(TrayNavigation {
-                app: Some("claude-desktop".to_string()),
-                ..Default::default()
-            })
-        );
-        assert_eq!(
-            parse_nav_id("nav:add:grokbuild"),
-            Some(TrayNavigation {
-                app: Some("grokbuild".to_string()),
-                intent: Some("add".to_string()),
                 ..Default::default()
             })
         );

@@ -310,37 +310,6 @@ describe("ProviderList Component", () => {
     expect(screen.getByTestId("queueAdd-a")).toBeInTheDocument();
   });
 
-  it("uses the additive layout for apps that keep several providers", async () => {
-    const providerA = createProvider({ id: "a", name: "A" });
-    const live = createProvider({ id: "live", name: "Live" });
-    const onSwitch = vi.fn();
-    const onRemoveFromConfig = vi.fn();
-    useDragSortMock.mockReturnValue({
-      sortedProviders: [providerA, live],
-      sensors: [],
-      handleDragEnd: vi.fn(),
-    });
-    server.use(
-      http.post(`${TAURI_ENDPOINT}/get_opencode_live_provider_ids`, () =>
-        HttpResponse.json(["live"]),
-      ),
-    );
-
-    renderWithQueryClient(
-      <ProviderList
-        {...baseProps}
-        providers={{ a: providerA, live }}
-        appId="opencode"
-        onSwitch={onSwitch}
-        onRemoveFromConfig={onRemoveFromConfig}
-      />,
-    );
-
-    fireEvent.click(await screen.findByTestId("remove-live"));
-    expect(onRemoveFromConfig).toHaveBeenCalledWith(live);
-    fireEvent.click(screen.getByTestId("add-a"));
-    expect(onSwitch).toHaveBeenCalledWith(providerA);
-  });
 
   it("filters providers with the search input", () => {
     const providerAlpha = createProvider({ id: "alpha", name: "Alpha Labs" });
@@ -698,31 +667,4 @@ describe("ProviderList Component", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not tell MiniMax Code users to click a missing import button", async () => {
-    renderWithQueryClient(
-      <ProviderList
-        providers={{}}
-        currentProviderId=""
-        appId="mcode"
-        onSwitch={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-        onDuplicate={vi.fn()}
-        onOpenWebsite={vi.fn()}
-        onCreate={vi.fn()}
-      />,
-    );
-
-    await screen.findByText("mcode.empty.title");
-    expect(screen.getByText("mcode.empty.description")).toBeInTheDocument();
-    expect(
-      screen.queryByText("provider.noProvidersDescription"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "provider.importCurrent" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "provider.addProvider" }),
-    ).toBeInTheDocument();
-  });
 });

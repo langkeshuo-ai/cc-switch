@@ -12,8 +12,6 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProviderForm } from "@/components/providers/forms/ProviderForm";
 import { codexProviderPresets } from "@/config/codexProviderPresets";
-import { geminiProviderPresets } from "@/config/geminiProviderPresets";
-import { grokBuildProviderPresets } from "@/config/grokBuildProviderPresets";
 import type { AppId } from "@/lib/api";
 import { server } from "../msw/server";
 import { createTestQueryClient } from "../utils/testQueryClient";
@@ -69,23 +67,11 @@ function projectAsLive() {
     http.post(
       "http://tauri.local/get_provider_editor_view",
       async ({ request }) => {
-        const { app, settingsConfig = {} } = (await request.json()) as {
-          app: AppId;
+        const { settingsConfig = {} } = (await request.json()) as {
           settingsConfig?: Record<string, unknown>;
         };
         const settings = { ...settingsConfig };
-        if (app === "gemini") {
-          settings.env = {
-            ...(settingsConfig.env as Record<string, unknown>),
-            GEMINI_SANDBOX: "docker",
-          };
-          settings.config = {
-            ...(settingsConfig.config as Record<string, unknown>),
-            ui: { theme: "dark" },
-          };
-        } else {
-          settings.config = `${String(settingsConfig.config ?? "")}${LIVE_TOML}`;
-        }
+        settings.config = `${String(settingsConfig.config ?? "")}${LIVE_TOML}`;
         return HttpResponse.json({ settings, inactive: [] });
       },
     ),
@@ -165,48 +151,5 @@ describe("新增对话框的草稿投影", () => {
     );
   });
 
-  it("Gemini：选预设、切回自定义后，全局设置仍在显示内容和底里", async () => {
-    const bases: Base[] = [];
-    renderForm("gemini", bases);
-    await nextBase(bases, 0);
 
-    const preset = geminiProviderPresets.find(
-      (item) => item.category !== "official",
-    )!;
-    let seen = bases.length;
-    clickPreset(preset.name);
-    let base = await nextBase(bases, seen);
-    expect((base!.env as Record<string, unknown>).GEMINI_SANDBOX).toBe(
-      "docker",
-    );
-
-    seen = bases.length;
-    clickPreset("providerPreset.custom");
-    base = await nextBase(bases, seen);
-    expect((base!.env as Record<string, unknown>).GEMINI_SANDBOX).toBe(
-      "docker",
-    );
-    await waitFor(() =>
-      expect(
-        editorTexts().some((text) => text.includes("GEMINI_SANDBOX=docker")),
-      ).toBe(true),
-    );
-  });
-
-  it("Grok Build：选预设后显示投影内容，切到官方卡作废底", async () => {
-    const bases: Base[] = [];
-    renderForm("grokbuild", bases);
-    await nextBase(bases, 0);
-
-    const preset = grokBuildProviderPresets[0];
-    const seen = bases.length;
-    clickPreset(preset.nameKey ?? preset.name);
-    const base = await nextBase(bases, seen);
-    await waitFor(() =>
-      expect(editorTexts()).toContain(String(base!.config)),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /Grok Official/ }));
-    await waitFor(() => expect(bases.at(-1)).toBeNull());
-  });
 });

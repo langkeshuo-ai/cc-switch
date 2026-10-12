@@ -12,7 +12,6 @@ import type { Prompt, AppId } from "@/lib/api";
 import { fieldClass } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
-  MCODE_PROMPT_LIMIT,
   charCount,
   formatSize,
   promptFileName,
@@ -61,7 +60,6 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   const baseId = useId();
   const appName = APP_DISPLAY_NAME[appId];
   const fileName = promptFileName(appId);
-  const isHermes = appId === "hermes";
   const isPi = appId === "pi";
   const isActive = Boolean(editingId && initialData?.enabled);
   const [name, setName] = useState("");
@@ -82,11 +80,9 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   }, [initialData]);
 
   const bodyBytes = utf8Bytes(content);
-  const limit = appId === "mcode" ? MCODE_PROMPT_LIMIT : undefined;
+  const limit = undefined;
   const overLimit = limit !== undefined && bodyBytes > limit;
-  const nameError = !name.trim()
-    ? t(isHermes ? "prompts.nameRequiredHermes" : "prompts.nameRequired")
-    : "";
+  const nameError = !name.trim() ? t("prompts.nameRequired") : "";
   const bodyError = overLimit
     ? t("prompts.mcodeTooLarge", { size: formatSize(bodyBytes) })
     : "";
@@ -192,11 +188,7 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               value={name}
               onChange={(event) => setName(event.target.value)}
               disabled={saving}
-              placeholder={t(
-                isHermes
-                  ? "prompts.namePlaceholderHermes"
-                  : "prompts.namePlaceholder",
-              )}
+              placeholder={t("prompts.namePlaceholder")}
               aria-required="true"
               aria-invalid={showNameError}
               aria-describedby={showNameError ? nameHintId : undefined}
@@ -241,14 +233,10 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
               onChange={(event) => setContent(event.target.value)}
               disabled={saving}
               spellCheck={false}
-              placeholder={
-                isHermes
-                  ? t("prompts.contentPlaceholderHermes")
-                  : t("prompts.contentPlaceholder", {
-                      filename: fileName,
-                      appName,
-                    })
-              }
+              placeholder={t("prompts.contentPlaceholder", {
+                filename: fileName,
+                appName,
+              })}
               aria-invalid={showBodyError}
               aria-describedby={
                 showBodyError ? `${bodyHintId} ${countId}` : countId

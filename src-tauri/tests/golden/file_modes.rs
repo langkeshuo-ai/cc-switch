@@ -134,7 +134,7 @@ fn switch_everything(state: &cc_switch_lib::AppState) -> (String, String) {
 /// 客户端目录已存在（用户装过这些工具）、文件由 CC Switch 新建时的权限位。
 #[test]
 fn switch_creates_expected_files_and_modes() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     for dir in [".claude", ".codex", ".gemini", ".grok"] {
         std::fs::create_dir_all(home().join(dir)).expect("create client dir");
@@ -151,7 +151,7 @@ fn switch_creates_expected_files_and_modes() {
 /// 已有文件是 0600 时，切换后仍是 0600（替换写入不能把权限放宽）。
 #[test]
 fn switch_keeps_private_modes_of_existing_files() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     for (path, content) in [
         (".claude/settings.json", "{}"),

@@ -86,7 +86,7 @@ fn relay(id: &str, common_config: Option<bool>) -> Provider {
 
 #[test]
 fn third_party_to_third_party_replaces_every_key_field() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let b = provider(
         "b",
@@ -105,7 +105,7 @@ fn third_party_to_third_party_replaces_every_key_field() {
 /// `/model` 写在 live 顶层的 `model` 属于切走前的那家，不能带给下一家。
 #[test]
 fn model_picked_in_client_does_not_follow_the_switch() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let state = setup(&[relay("a", None), relay("b", None)], "a");
     let mut live = read_home_json(LIVE);
@@ -118,7 +118,7 @@ fn model_picked_in_client_does_not_follow_the_switch() {
 
 #[test]
 fn bedrock_to_official_leaves_no_provider_keys() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let bedrock = provider(
         "bedrock",
@@ -158,7 +158,7 @@ fn bedrock_to_official_leaves_no_provider_keys() {
 /// 真正读取的 `AWS_BEARER_TOKEN_BEDROCK` 里，行本身不改写。
 #[test]
 fn legacy_bedrock_api_key_row_is_projected_to_the_bearer_env() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let legacy = provider(
         "bedrock",
@@ -187,7 +187,7 @@ fn legacy_bedrock_api_key_row_is_projected_to_the_bearer_env() {
 
 #[test]
 fn vertex_to_third_party_leaves_no_vertex_keys() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let vertex = provider(
         "vertex",
@@ -208,7 +208,7 @@ fn vertex_to_third_party_leaves_no_vertex_keys() {
 
 #[test]
 fn api_key_helper_does_not_outlive_its_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let helper = provider(
         "helper",
@@ -229,7 +229,7 @@ fn api_key_helper_does_not_outlive_its_provider() {
 
 #[test]
 fn official_roundtrip_through_third_party() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let state = setup(
         &[
@@ -248,7 +248,7 @@ fn official_roundtrip_through_third_party() {
 /// live 里与供应商无关的功能开关（同在 `CLAUDE_CODE_USE_` 前缀下）来回切换后值不变。
 #[test]
 fn common_config_opt_in_keeps_key_fields_per_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let state = setup(&[relay("a", Some(true)), relay("b", Some(true))], "a");
     let mut live = read_home_json(LIVE);
@@ -274,7 +274,7 @@ fn common_config_opt_in_keeps_key_fields_per_provider() {
 /// `CLAUDE_CODE_USE_BEDROCK=1`，Claude Code 继续走 Bedrock。
 #[test]
 fn common_config_opt_in_does_not_carry_key_fields_to_the_next_provider() {
-    let _guard = test_mutex().lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = test_mutex();
     reset_test_fs();
     let bedrock = provider(
         "bedrock",

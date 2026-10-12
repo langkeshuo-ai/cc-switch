@@ -774,7 +774,7 @@ fn test_parse_trimmed_app_mcp_deeplink_rejected() {
     );
 
     let err = parse_deeplink_url(&url).expect_err("trimmed-only apps must be rejected");
-    assert!(err.to_string().contains("No supported app"), "error: {err}");
+    assert!(err.to_string().contains("At least one app"), "error: {err}");
 }
 
 #[test]

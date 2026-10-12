@@ -751,11 +751,6 @@ mod tests {
         // 路由那家自己的 `deepseek/…` 不被同名的 Stack key 截走。
         assert_eq!(decode(&codex, "deepseek/deepseek-v4-pro"), Decoded::Plain);
         assert_eq!(decode(&codex, "ccs-without-separator"), Decoded::Plain);
-        assert_eq!(
-            decode(&AppType::ClaudeDesktop, "ccs-claude-k--m"),
-            Decoded::Plain
-        );
-        assert_eq!(decode(&AppType::GrokBuild, "ccs-k/m"), Decoded::Plain);
     }
 
     #[test]
@@ -1174,7 +1169,6 @@ mod tests {
             (AppType::Claude, "claude-sonnet-5"),
             (AppType::Claude, "kimi-k3"),
             (AppType::Codex, "deepseek/deepseek-v4-pro"),
-            (AppType::ClaudeDesktop, "ccs-claude-kimi--kimi-k3"),
         ] {
             assert!(
                 matches!(resolve_in(&fx, app, model), Resolved::Plain),

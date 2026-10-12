@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   fillCodexCatalogModel,
-  fillHermesModel,
   fillOpenClawModel,
   fillOpenCodeModel,
   piPresetThinkingFor,
@@ -85,18 +84,6 @@ describe("fillOpenClawModel", () => {
   });
 });
 
-describe("fillHermesModel", () => {
-  it("fills context_length only when blank", () => {
-    expect(fillHermesModel({ id: "m" }, metadata)).toEqual({
-      id: "m",
-      context_length: 262144,
-    });
-    expect(fillHermesModel({ id: "m", context_length: 1 }, metadata)).toEqual({
-      id: "m",
-      context_length: 1,
-    });
-  });
-});
 
 describe("fillOpenCodeModel", () => {
   it("fills missing limits, modalities and reasoning", () => {

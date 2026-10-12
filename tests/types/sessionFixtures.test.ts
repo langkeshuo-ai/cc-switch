@@ -21,9 +21,7 @@ import type {
 } from "@/types";
 import claude from "../fixtures/sessions/claude.messages.json";
 import codex from "../fixtures/sessions/codex.messages.json";
-import gemini from "../fixtures/sessions/gemini.messages.json";
 import generic from "../fixtures/sessions/generic.messages.json";
-import opencode from "../fixtures/sessions/opencode.messages.json";
 import pi from "../fixtures/sessions/pi.messages.json";
 
 /**
@@ -334,8 +332,6 @@ const lineCount = (s: string) =>
 const fixtures: Record<string, unknown> = {
   claude,
   codex,
-  gemini,
-  opencode,
   pi,
   generic,
 };
@@ -451,22 +447,40 @@ describe("session reader fixtures", () => {
     },
   );
 
-  it("6 份 fixture 合起来覆盖所有块类型、工具类别、状态与事件", () => {
+  it("4 份 fixture 合起来覆盖所有块类型、工具类别、状态与事件", () => {
     const blocks = Object.values(fixtures).flatMap((raw) =>
       allBlocks(asMessages(raw)),
     );
     const seen = <T>(values: T[]) => [...new Set(values)].sort();
 
-    expect(seen(blocks.map((b) => b.type))).toEqual([...BLOCK_TYPES].sort());
+    // 裁剪版只保留 claude/codex/pi/generic：原 gemini/opencode fixture
+    // 承载的样例值不再有 fixture 覆盖（按枚举分别列出）
+    const uncoveredBlockTypes = ["step"]; // 仅 OpenCode 产生
+    const uncoveredToolKinds = ["other"];
+    const uncoveredToolStatuses = ["pending"];
+    const uncoveredEventKinds = ["error", "info"];
+    expect(seen(blocks.map((b) => b.type))).toEqual(
+      [...BLOCK_TYPES]
+        .filter((t) => !uncoveredBlockTypes.includes(t))
+        .sort(),
+    );
     expect(
       seen(blocks.flatMap((b) => (b.type === "tool_call" ? [b.kind] : []))),
-    ).toEqual([...TOOL_KINDS].sort());
+    ).toEqual(
+      [...TOOL_KINDS].filter((k) => !uncoveredToolKinds.includes(k)).sort(),
+    );
     expect(
       seen(blocks.flatMap((b) => (b.type === "tool_result" ? [b.status] : []))),
-    ).toEqual([...TOOL_STATUSES].sort());
+    ).toEqual(
+      [...TOOL_STATUSES]
+        .filter((s) => !uncoveredToolStatuses.includes(s))
+        .sort(),
+    );
     expect(
       seen(blocks.flatMap((b) => (b.type === "event" ? [b.kind] : []))),
-    ).toEqual([...EVENT_KINDS].sort());
+    ).toEqual(
+      [...EVENT_KINDS].filter((k) => !uncoveredEventKinds.includes(k)).sort(),
+    );
 
     const images = blocks.flatMap((b) =>
       b.type === "image"
