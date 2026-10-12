@@ -1681,7 +1681,7 @@ mod tests {
         assert_env_str(
             env,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            Some("claude-haiku-4-5"),
+            Some("claude-haiku-5-5"),
         );
         assert_env_str(
             env,
@@ -1791,7 +1791,7 @@ mod tests {
         assert_env_str(
             env,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-            Some("claude-haiku-4-5"),
+            Some("claude-haiku-5-5"),
         );
         assert_env_str(
             env,
@@ -4901,7 +4901,7 @@ model_provider = "c"
             .expect("routing");
         let env = settings()["env"].clone();
         assert_eq!(env["ANTHROPIC_DEFAULT_SONNET_MODEL"], "claude-sonnet-5");
-        assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-haiku-4-5");
+        assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "claude-haiku-5-5");
         assert_eq!(picker(), None);
     }
 
