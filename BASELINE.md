@@ -7,27 +7,27 @@
 | 项 | 值 | 核对方式 |
 |---|---|---|
 | 上游仓库 | `farion1231/cc-switch` | git remote `upstream` |
-| 基线上游 tag | **v3.20.4** | merge-base `1ee2fdc3`（上游 docs refresh for v3.20.4），其 `package.json` version = `3.20.4` |
-| 本 fork 版本 | `3.20.4-trim.13` | `package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` 三处**一致**（2026-10-10 交叉核对通过） |
-| 上游最新 tag（参考） | v4.0.6（2026-10-09 发布）；4.0.x 的 `SCHEMA_VERSION = 20` | 升级决策见 T5 评估报告，未定前基线保持 v3.20.4 |
+| 基线上游 tag | **v4.0.6** | merge commit `06147412`（上游 v4.0.6 合入，冲突以上游为准），其 `package.json` version = `4.0.6` |
+| 本 fork 版本 | `4.0.6-trim.1` | `package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` 三处**一致**（2026-10-12 交叉核对通过） |
+| 历史基线（参考） | v3.20.4（merge-base `1ee2fdc3`）→ trim.13；v4.0.6 升级后 N 归零重计 | 跟版流程见 §7 |
 
 **版本核对结果**：三处版本号一致，无漂移。
 
 ## 2. 数据库 schema 不变量（最高优先级）
 
-> **本 fork 的 `SCHEMA_VERSION` 必须等于基线上游（v3.20.4）的值：`19`。**
-> 上游 4.0.x 为 `20`（其 v19→v20 迁移内容是给 `mcp_servers` 加 `enabled_pi`）。
+> **本 fork 的 `SCHEMA_VERSION` 必须等于基线上游（v4.0.6）的值：`20`。**
+> 上游 v3.20.4 为 `19`；4.0.x 的 v19→v20 迁移内容是给 `mcp_servers` 加 `enabled_pi`（随上游基线接受，非 fork 自造）。
 
-- 禁止任何 fork 自造迁移；fork 曾自造的三条迁移（v19→v20 `app_snapshots` 建表、v20→v21 放行 Pi proxy_config 行、v21→v22 清理被裁应用）已全部删除。
+- 禁止任何 fork 自造迁移；fork 曾自造的三条迁移（v19→v20 `app_snapshots` 建表、v20→v21 放行 Pi proxy_config 行、v21→v22 清理被裁应用）已全部删除，schema 回退上游基线（T2）。
 - `proxy_config` 的 CHECK 约束保持上游四值：`('claude','codex','gemini','grokbuild')`，**不含 `'pi'`**。
-- 存量 fork 数据库（v20/v21/v22）由启动时的 `normalize_legacy_trim_schema` 自动降级归一到上游 v19 形状，**无需手工改库**。
+- 存量 fork 数据库（v20/v21/v22）由启动时的版本预检放行（`093fb91d`）：高于 `SCHEMA_VERSION` 拒绝、等于/低于则正常迁移，**无需手工改库**。
 - 理由：fork 曾把 schema 顶到 22，导致每次跟上游都要手改数据库、且与官方构建互不兼容（官方装在 fork 库上直接拒绝启动）。schema 对齐后，跟版只 diff 代码，不动库。
 
 ## 3. 裁剪范围
 
 只保留 **Claude Code / Codex CLI / Pi coding agent** 三个应用。
 
-**删除的 7 个应用**及其对应 Rust 模块（对照上游 v3.20.4）：
+**删除的 7 个应用**及其对应 Rust 模块（对照上游 v4.0.6）：
 
 | 应用 | 已删除路径 |
 |---|---|
