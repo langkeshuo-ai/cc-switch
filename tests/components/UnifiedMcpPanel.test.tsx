@@ -89,11 +89,6 @@ function makeServer(id: string, overrides: ServerOverrides = {}): McpServer {
     apps: {
       claude: false,
       codex: false,
-      gemini: false,
-      grokbuild: false,
-      opencode: false,
-      openclaw: false,
-      hermes: false,
       ...apps,
     },
   } as McpServer;

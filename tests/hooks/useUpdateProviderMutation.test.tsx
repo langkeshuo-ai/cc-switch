@@ -18,16 +18,6 @@ vi.mock("@/lib/api", () => ({
   settingsApi: {},
 }));
 
-vi.mock("@/hooks/useHermes", () => ({
-  invalidateHermesProviderCaches: vi.fn(),
-}));
-
-vi.mock("@/hooks/useOpenClaw", () => ({
-  openclawKeys: {
-    health: ["openclaw", "health"],
-  },
-}));
-
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (_key: string, options?: { defaultValue?: string }) =>

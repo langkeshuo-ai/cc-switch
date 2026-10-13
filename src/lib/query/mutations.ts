@@ -27,8 +27,12 @@ export const useAddProviderMutation = (appId: AppId) => {
         editorSave?: ProviderEditorSave;
       },
     ) => {
-      const { providerKey: _providerKey, addToLive, editorSave, ...rest } =
-        providerInput;
+      const {
+        providerKey: _providerKey,
+        addToLive,
+        editorSave,
+        ...rest
+      } = providerInput;
 
       let id: string;
 

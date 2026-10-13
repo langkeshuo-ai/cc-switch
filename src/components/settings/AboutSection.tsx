@@ -123,7 +123,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     }
   }, []);
 
-
   const displayVersion = version ?? t("common.unknown");
 
   return (

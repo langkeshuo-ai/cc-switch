@@ -103,8 +103,7 @@ export function ProviderList({
   // 累加式应用要等 live 里有哪些供应商读回来（成功或失败）才知道卡片该进哪个分区；
   // 在那之前按加载中画骨架，不然卡片先全落进「可添加」，读回来再整体搬到「已添加」。
   // 一张卡都没有时不用等，直接出空状态
-  const isLiveMembershipPending =
-    appId === "pi" && isPiCurrentStatePending;
+  const isLiveMembershipPending = appId === "pi" && isPiCurrentStatePending;
 
   const isInConfig = useCallback(
     (provider: Provider): boolean => {
@@ -293,9 +292,7 @@ export function ProviderList({
         <ProviderEmptyState
           appId={appId}
           onCreate={appId === "pi" ? undefined : onCreate}
-          onImport={
-            appId === "pi" ? undefined : () => importMutation.mutate()
-          }
+          onImport={appId === "pi" ? undefined : () => importMutation.mutate()}
         />
       </div>
     );

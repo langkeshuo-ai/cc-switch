@@ -81,11 +81,6 @@ describe("useProxyStatus", () => {
         return Promise.resolve({
           claude: false,
           codex: false,
-          pi: false,
-          gemini: false,
-          grokbuild: false,
-          opencode: false,
-          openclaw: false,
         });
       }
 

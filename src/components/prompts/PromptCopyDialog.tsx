@@ -55,9 +55,7 @@ export function PromptCopyDialog({
   useEffect(() => {
     if (!ready || picks) return;
     setPicks(
-      Object.fromEntries(
-        targets.map((app, index) => [app, !sameName(index)]),
-      ),
+      Object.fromEntries(targets.map((app, index) => [app, !sameName(index)])),
     );
     // sameName 依赖 lists，只在第一次读完时定默认勾选
     // eslint-disable-next-line react-hooks/exhaustive-deps

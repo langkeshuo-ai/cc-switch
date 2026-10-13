@@ -80,20 +80,14 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
   }, [initialData]);
 
   const bodyBytes = utf8Bytes(content);
-  const limit = undefined;
-  const overLimit = limit !== undefined && bodyBytes > limit;
   const nameError = !name.trim() ? t("prompts.nameRequired") : "";
-  const bodyError = overLimit
-    ? t("prompts.mcodeTooLarge", { size: formatSize(bodyBytes) })
-    : "";
   const showNameError = attempted && Boolean(nameError);
-  const showBodyError = attempted && Boolean(bodyError);
 
   const handleSave = async () => {
     if (savingRef.current) return;
-    if (nameError || bodyError) {
+    if (nameError) {
       setAttempted(true);
-      (nameError ? nameRef : bodyRef).current?.focus();
+      nameRef.current?.focus();
       return;
     }
 
@@ -139,15 +133,12 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
         : t("prompts.saveAndOverwrite", { file: fileName })
       : t("common.save");
 
-  const countText = limit
-    ? `${formatSize(bodyBytes)} / 32 KB`
-    : t("prompts.charCount", {
-        chars: charCount(content).toLocaleString(),
-        size: formatSize(bodyBytes),
-      });
+  const countText = t("prompts.charCount", {
+    chars: charCount(content).toLocaleString(),
+    size: formatSize(bodyBytes),
+  });
 
   const nameHintId = `${baseId}-name-hint`;
-  const bodyHintId = `${baseId}-body-hint`;
   const countId = `${baseId}-count`;
 
   return (
@@ -237,25 +228,16 @@ const PromptFormPanel: React.FC<PromptFormPanelProps> = ({
                 filename: fileName,
                 appName,
               })}
-              aria-invalid={showBodyError}
-              aria-describedby={
-                showBodyError ? `${bodyHintId} ${countId}` : countId
-              }
+              aria-describedby={countId}
               className={cn(
                 promptFieldClass,
                 "min-h-[180px] flex-1 resize-none px-3 py-2.5 font-mono text-caption leading-[18px]",
               )}
             />
             <div className="flex items-start gap-3">
-              {showBodyError ? (
-                <FieldError id={bodyHintId}>{bodyError}</FieldError>
-              ) : null}
               <span
                 id={countId}
-                className={cn(
-                  "ms-auto shrink-0 whitespace-nowrap text-caption tabular-nums",
-                  overLimit ? "text-danger-text" : "text-fg-2",
-                )}
+                className="ms-auto shrink-0 whitespace-nowrap text-caption tabular-nums text-fg-2"
               >
                 {countText}
               </span>

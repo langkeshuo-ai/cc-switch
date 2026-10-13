@@ -171,7 +171,8 @@ export const handlers = [
   http.post(`${TAURI_ENDPOINT}/import_mcp_from_codex`, () => success(1)),
   http.post(`${TAURI_ENDPOINT}/resync_mcp_to_apps`, async ({ request }) => {
     const { apps } = await withJson<{ apps?: AppId[] | null }>(request);
-    const targets = apps?.length ? apps : ["claude", "codex", "pi"];
+    // 与 Rust live_sync_apps 对齐：Pi core 没有原生 MCP 注册表，不在受管目标里
+    const targets = apps?.length ? apps : ["claude", "codex"];
     return success(targets.map((app) => ({ app, ok: true })));
   }),
 
@@ -181,6 +182,14 @@ export const handlers = [
     success("/home/test/.cc-switch/skills"),
   ),
   http.post(`${TAURI_ENDPOINT}/open_cc_switch_skills_dir`, () => success(true)),
+
+  // 三应用环境快照（fork 自研，b97d7f7b）：默认空列表，保存/删除成功，应用返回空结果
+  http.post(`${TAURI_ENDPOINT}/list_app_snapshots`, () => success([])),
+  http.post(`${TAURI_ENDPOINT}/save_app_snapshot`, () => success(null)),
+  http.post(`${TAURI_ENDPOINT}/apply_app_snapshot`, () =>
+    success({ applied: [], skipped: [] }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/delete_app_snapshot`, () => success(null)),
   http.post(`${TAURI_ENDPOINT}/get_session_usage_last_sync`, () =>
     success(null),
   ),
@@ -332,8 +341,6 @@ export const handlers = [
     success({
       claude: false,
       codex: false,
-      gemini: false,
-      grokbuild: false,
     }),
   ),
 
@@ -456,18 +463,6 @@ export const handlers = [
       staleRawModels: false,
       missingRouteMappings: false,
       gatewayTokenConfigured: false,
-    }),
-  ),
-  http.post(`${TAURI_ENDPOINT}/get_hermes_memory`, async ({ request }) => {
-    const { kind } = await withJson<{ kind: string }>(request);
-    return success(kind === "user" ? "user profile" : "agent notes");
-  }),
-  http.post(`${TAURI_ENDPOINT}/get_hermes_memory_limits`, () =>
-    success({
-      memory: 2200,
-      user: 1375,
-      memoryEnabled: true,
-      userEnabled: true,
     }),
   ),
 ];

@@ -75,7 +75,10 @@ export function getRoutingReason(
       proxyRequiredReason = t("notifications.proxyReasonAnthropicMessages", {
         defaultValue: "使用 Anthropic Messages 接口格式",
       });
-    } else if (provider.meta?.isFullUrl && (app === "claude" || app === "codex")) {
+    } else if (
+      provider.meta?.isFullUrl &&
+      (app === "claude" || app === "codex")
+    ) {
       proxyRequiredReason = t("notifications.proxyReasonFullUrl", {
         defaultValue: "开启了完整 URL 连接模式",
       });

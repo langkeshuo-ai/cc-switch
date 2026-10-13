@@ -195,9 +195,7 @@ export function SessionManagerPage({
   // 下拉里只列「应用」页设为显示的应用；Claude Code 的会话在 Claude Desktop 显示时也算
   const availableApps = useMemo(() => {
     const visible = { ...DEFAULT_VISIBLE_APPS, ...settings?.visibleApps };
-    return SESSION_APP_IDS.filter(
-      (app) => visible[app] || app === appFilter,
-    );
+    return SESSION_APP_IDS.filter((app) => visible[app] || app === appFilter);
   }, [settings?.visibleApps, appFilter]);
 
   const scopedSessions = useMemo(
@@ -1190,7 +1188,6 @@ export function SessionManagerPage({
               ]}
             />
           </div>
-
 
           {appFilter === "pi" && piStatus === "requires_project_context" && (
             <div role="status" className="mx-6 mt-3 shrink-0">

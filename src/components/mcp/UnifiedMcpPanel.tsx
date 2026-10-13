@@ -82,11 +82,7 @@ const IMPORT_SOURCE_FILES: Record<
 > = {
   claude: { file: "~/.claude.json", noteKey: "mcpPage.import.claudeNote" },
   codex: { file: "~/.codex/config.toml" },
-  pi: { file: "~/.pi/agent/mcp.json" },
 };
-
-/** 先写配置文件、成功后才入库的应用：写失败时开关没变，重试要逐行重写 */
-const WRITE_THEN_SAVE_APPS: ReadonlySet<McpAppId> = new Set(["pi"]);
 
 /** 写入失败：记下想要的状态，「重试」按这个值再写一次 */
 interface WriteFailure {
@@ -307,40 +303,27 @@ const UnifiedMcpPanel: React.FC<UnifiedMcpPanelProps> = ({
       const next = { ...prev };
       for (const key of Object.keys(next)) {
         const app = key.split("\u0000")[1] as McpAppId;
-        if (okApps.has(app) && !WRITE_THEN_SAVE_APPS.has(app)) delete next[key];
+        if (okApps.has(app)) delete next[key];
       }
       return next;
     });
     return outcomes.filter((outcome) => !outcome.ok);
   };
 
-  const rowFailsFor = (app: McpAppId) =>
-    Object.entries(fails).filter(([key]) => key.endsWith(`\u0000${app}`));
-
   const retryApp = async (app: McpAppId) => {
     if (!beginWrite()) return;
+    let ok = true;
     try {
-      const entries = rowFailsFor(app);
-      let ok = true;
-      if (WRITE_THEN_SAVE_APPS.has(app) && entries.length > 0) {
-        // MiniMax Code / Pi 写失败时开关没入库：按每行想要的值再写一次
-        for (const [key, failure] of entries) {
-          const id = key.split("\u0000")[0];
-          const { failed } = await writeMany([{ id, app }], failure.desired);
-          if (failed) ok = false;
-        }
-      } else {
-        // 其余应用的开关已经入库：按这里的开关把这个应用整个重写一遍
-        try {
-          const outcomes = await resyncMutation.mutateAsync([app]);
-          ok = applyResyncOutcomes(outcomes).length === 0;
-        } catch (error) {
-          ok = false;
-          setAppFails((prev) => ({
-            ...prev,
-            [app]: extractErrorMessage(error) || String(error),
-          }));
-        }
+      // 开关已经入库：按这里的开关把这个应用整个重写一遍
+      try {
+        const outcomes = await resyncMutation.mutateAsync([app]);
+        ok = applyResyncOutcomes(outcomes).length === 0;
+      } catch (error) {
+        ok = false;
+        setAppFails((prev) => ({
+          ...prev,
+          [app]: extractErrorMessage(error) || String(error),
+        }));
       }
       if (ok) {
         toast.success(

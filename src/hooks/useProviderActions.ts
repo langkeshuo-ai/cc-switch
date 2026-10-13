@@ -2,12 +2,7 @@ import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import { useTranslation } from "react-i18next";
-import {
-  piApi,
-  providersApi,
-  settingsApi,
-  type AppId,
-} from "@/lib/api";
+import { piApi, providersApi, settingsApi, type AppId } from "@/lib/api";
 import type { Provider, UsageScript } from "@/types";
 import type { ProviderEditorSave } from "@/lib/api/providers";
 import { injectCodingPlanUsageScript } from "@/config/codingPlanProviders";
@@ -113,8 +108,7 @@ export function useProviderActions(
       // 其余应用必须开启当前应用的 takeover（只看全局进程会漏判别的应用已接管的情况）。
       // 确认框 F 里选了「仍然直连切换」的不再重复提醒。
       const routingReady =
-        isProxyTakeover === true ||
-        options?.acknowledgedRouting === true;
+        isProxyTakeover === true || options?.acknowledgedRouting === true;
       const proxyRequiredReason = routingReady
         ? null
         : getRoutingReason(activeApp, provider, t);

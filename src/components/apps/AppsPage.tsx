@@ -261,17 +261,17 @@ export function AppsPage() {
           <div className="divide-y divide-border overflow-hidden rounded-panel border border-border bg-surface">
             {ROWS.map((row) => (
               <ToolRow
-                  key={row.tool}
-                  tool={row.tool}
-                  tools={tools}
-                  expanded={expanded[row.tool] ?? false}
-                  onToggleExpanded={() =>
-                    setExpanded((prev) => ({
-                      ...prev,
-                      [row.tool]: !prev[row.tool],
-                    }))
-                  }
-                  visibility={visibilitySwitch(TOOL_APP_IDS[row.tool])}
+                key={row.tool}
+                tool={row.tool}
+                tools={tools}
+                expanded={expanded[row.tool] ?? false}
+                onToggleExpanded={() =>
+                  setExpanded((prev) => ({
+                    ...prev,
+                    [row.tool]: !prev[row.tool],
+                  }))
+                }
+                visibility={visibilitySwitch(TOOL_APP_IDS[row.tool])}
               />
             ))}
           </div>

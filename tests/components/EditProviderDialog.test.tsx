@@ -13,7 +13,6 @@ const apiMocks = vi.hoisted(() => ({
   getCurrent: vi.fn(),
   getEditorView: vi.fn(),
   getLiveProviderSettings: vi.fn(),
-  getOpenClawLiveProvider: vi.fn(),
 }));
 let mockFormReady = true;
 let mockCodexManagedAccountSelected = false;
@@ -26,9 +25,6 @@ vi.mock("@/lib/api", () => ({
   },
   vscodeApi: {
     getLiveProviderSettings: apiMocks.getLiveProviderSettings,
-  },
-  openclawApi: {
-    getLiveProvider: apiMocks.getOpenClawLiveProvider,
   },
 }));
 
@@ -151,7 +147,6 @@ describe("EditProviderDialog", () => {
       }),
     );
     apiMocks.getLiveProviderSettings.mockReset();
-    apiMocks.getOpenClawLiveProvider.mockReset();
   });
 
   it("Codex 显示后端算出的切换投影，并把它作为保存时三方比较的基准", async () => {

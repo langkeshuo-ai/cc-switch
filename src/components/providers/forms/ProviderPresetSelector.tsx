@@ -56,10 +56,7 @@ import {
 
 type PresetTranslator = (key: string) => unknown;
 
-export type AnyPreset =
-  | ProviderPreset
-  | CodexProviderPreset
-  | PiProviderPreset;
+export type AnyPreset = ProviderPreset | CodexProviderPreset | PiProviderPreset;
 
 export type PresetEntry = {
   id: string;

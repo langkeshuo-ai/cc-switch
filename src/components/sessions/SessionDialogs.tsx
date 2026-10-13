@@ -59,10 +59,6 @@ export function SessionDeleteDialog({
           defaultValue:
             "只删除这一个会话文件。Codex 桌面版的任务列表里可能仍显示它，点开会提示无法继续。",
         });
-      case "grokbuild":
-        return t("sessionManager.consequenceGrok", {
-          defaultValue: "删除这个会话的整个目录。",
-        });
       default:
         return t("sessionManager.consequenceGeneric", {
           defaultValue: "从 {{app}} 的本地记录中永久删除。",

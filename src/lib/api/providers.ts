@@ -26,21 +26,6 @@ export interface OpenTerminalOptions {
   cwd?: string;
 }
 
-export interface ClaudeDesktopStatus {
-  supported: boolean;
-  configured: boolean;
-  appliedId?: string | null;
-  profilePath?: string | null;
-  configLibraryPath?: string | null;
-  mode?: "direct" | "proxy" | null;
-  expectedBaseUrl?: string | null;
-  actualBaseUrl?: string | null;
-  proxyRunning: boolean;
-  staleRawModels: boolean;
-  missingRouteMappings: boolean;
-  gatewayTokenConfigured: boolean;
-}
-
 /** 编辑器保存时，live 里的键在编辑期间被别的程序改过怎么办。 */
 export type EditorConflictPolicy = "refuse" | "keepMine" | "keepTheirs";
 
@@ -62,12 +47,6 @@ export interface ProviderEditorInactiveField {
 export interface ProviderEditorView {
   settings: Record<string, unknown>;
   inactive: ProviderEditorInactiveField[];
-}
-
-export interface ClaudeDesktopDefaultRoute {
-  routeId: string;
-  envKey: string;
-  supports1m: boolean;
 }
 
 export const providersApi = {
@@ -147,28 +126,8 @@ export const providersApi = {
     return await invoke("import_default_config", { app: appId });
   },
 
-  async importClaudeDesktopFromClaude(): Promise<number> {
-    return await invoke("import_claude_desktop_providers_from_claude");
-  },
-
-  async ensureClaudeDesktopOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_claude_desktop_official_provider");
-  },
-
   async ensureCodexOfficialProvider(): Promise<boolean> {
     return await invoke("ensure_codex_official_provider");
-  },
-
-  async ensureGrokBuildOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_grokbuild_official_provider");
-  },
-
-  async getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
-    return await invoke("get_claude_desktop_status");
-  },
-
-  async getClaudeDesktopDefaultRoutes(): Promise<ClaudeDesktopDefaultRoute[]> {
-    return await invoke("get_claude_desktop_default_routes");
   },
 
   async updateTrayMenu(): Promise<boolean> {
@@ -207,54 +166,6 @@ export const providersApi = {
       app: appId,
       cwd,
     });
-  },
-
-  /**
-   * 从 OpenCode live 配置导入供应商到数据库
-   * OpenCode 特有功能：由于累加模式，用户可能已在 opencode.json 中配置供应商
-   */
-  async importOpenCodeFromLive(): Promise<number> {
-    return await invoke("import_opencode_providers_from_live");
-  },
-
-  /**
-   * 获取 OpenCode live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 opencode.json
-   */
-  async getOpenCodeLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_opencode_live_provider_ids");
-  },
-
-  /**
-   * 获取 OpenClaw live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 openclaw.json
-   */
-  async getOpenClawLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_openclaw_live_provider_ids");
-  },
-
-  /**
-   * 获取 Hermes live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 Hermes 配置
-   */
-  async getHermesLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_hermes_live_provider_ids");
-  },
-
-  /**
-   * 从 OpenClaw live 配置导入供应商到数据库
-   * OpenClaw 特有功能：由于累加模式，用户可能已在 openclaw.json 中配置供应商
-   */
-  async importOpenClawFromLive(): Promise<number> {
-    return await invoke("import_openclaw_providers_from_live");
-  },
-
-  /**
-   * 从 Hermes live 配置导入供应商到数据库
-   * Hermes 特有功能：由于累加模式，用户可能已在 Hermes 配置中配置供应商
-   */
-  async importHermesFromLive(): Promise<number> {
-    return await invoke("import_hermes_providers_from_live");
   },
 };
 

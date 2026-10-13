@@ -67,12 +67,8 @@ describe("useDirectorySettings", () => {
     getConfigDirMock.mockImplementation(async (app: string) => {
       if (app === "claude") return "/remote/claude";
       if (app === "codex") return "/remote/codex";
-      if (app === "gemini") return "/remote/gemini";
-      if (app === "grokbuild") return "/remote/grok";
-      if (app === "opencode") return "/remote/opencode";
-      if (app === "openclaw") return "/remote/openclaw";
       if (app === "pi") return "/remote/pi";
-      return "/remote/hermes";
+      return "/remote/unknown";
     });
     selectConfigDirectoryMock.mockReset();
   });

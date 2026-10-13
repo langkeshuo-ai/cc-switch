@@ -34,11 +34,7 @@ export interface ToolVersion {
   wsl_distro: string | null;
 }
 
-export const TOOL_NAMES = [
-  "claude",
-  "codex",
-  "pi",
-] as const;
+export const TOOL_NAMES = ["claude", "codex", "pi"] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 export type ToolLifecycleAction = "install" | "update";
 
@@ -86,7 +82,6 @@ export const ENV_BADGE_CONFIG: Record<
 
 const posixScriptInstallCommand = (url: string) =>
   `bash -c 'tmp=$(mktemp) && curl -fsSL ${url} -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'`;
-
 
 // 与后端 npm_install_command_for("claude") 保持一致：原生依赖和 postinstall 缺一不可，
 // 否则 bin/claude.exe 会保留文本占位文件，在 Windows 上报兼容性错误。

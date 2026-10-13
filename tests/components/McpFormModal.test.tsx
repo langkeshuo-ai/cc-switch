@@ -94,7 +94,7 @@ describe("McpFormModal (drawer)", () => {
       name: "my-server",
       server: { type: "stdio", command: "uvx", args: ["mcp-server-fetch"] },
     });
-    expect(entry.apps).toMatchObject({ ...ALL_ON, openclaw: false });
+    expect(entry.apps).toMatchObject({ ...ALL_ON });
     expect(onSave).toHaveBeenCalled();
   });
 
@@ -186,15 +186,15 @@ describe("McpFormModal (drawer)", () => {
   });
 
   it("keeps hidden apps' flags when overwriting an existing server from a batch", async () => {
-    // Hermes 从侧栏隐藏了：覆盖 figma 时它在 Hermes 的开关要原样带回，不能被当成关掉
+    // Codex 从侧栏隐藏了：覆盖 figma 时它在 Codex 的开关要原样带回，不能被当成关掉
     renderForm({
-      visibleAppIds: ["claude", "codex"],
+      visibleAppIds: ["claude"],
       existingServers: {
         figma: {
           id: "figma",
           name: "figma",
           server: { type: "http", url: "http://127.0.0.1:3845/mcp" },
-          apps: { claude: false, hermes: true } as McpServer["apps"],
+          apps: { claude: false, codex: true },
         },
       },
     });
@@ -221,7 +221,6 @@ describe("McpFormModal (drawer)", () => {
     expect(figma.apps).toMatchObject({
       claude: true,
       codex: true,
-      hermes: true,
     });
   });
 
@@ -286,15 +285,15 @@ describe("McpFormModal (drawer)", () => {
   it("only lists visible apps but preserves hidden ones when editing", async () => {
     renderForm({
       editingId: "x",
-      visibleAppIds: ["claude", "codex"],
+      visibleAppIds: ["claude"],
       initialData: {
         id: "x",
         name: "x",
         server: { type: "stdio", command: "uvx" },
-        apps: { claude: false, hermes: true } as McpServer["apps"],
+        apps: { claude: false, codex: true },
       },
     });
-    expect(screen.queryByText("Hermes")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("checkbox", { name: /Claude Code/ }),
     );
@@ -302,7 +301,7 @@ describe("McpFormModal (drawer)", () => {
     await waitFor(() => expect(mocks.upsert).toHaveBeenCalled());
     expect(mocks.upsert.mock.calls[0][0].apps).toMatchObject({
       claude: true,
-      hermes: true,
+      codex: true,
     });
   });
 

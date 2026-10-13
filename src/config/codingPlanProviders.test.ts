@@ -19,7 +19,7 @@ requires_openai_auth = true`;
 
 describe("detectCodingPlanProvider (OpenCode Go)", () => {
   it("matches both base variants across apps", () => {
-    // claude/claude-desktop 预设是 /zen/go，codex/opencode/pi 是 /zen/go/v1
+    // claude 预设是 /zen/go，codex/pi 是 /zen/go/v1
     expect(detectCodingPlanProvider("https://opencode.ai/zen/go")).toBe(
       "opencode_go",
     );

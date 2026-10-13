@@ -111,7 +111,6 @@ export function extractBaseUrlForUsageDetection(
   let raw: unknown;
   switch (appId) {
     case "claude":
-    case "claude-desktop":
       raw = settingsConfig.env?.ANTHROPIC_BASE_URL;
       break;
     case "codex":
@@ -120,9 +119,6 @@ export function extractBaseUrlForUsageDetection(
           ? settingsConfig.config
           : null,
       );
-      break;
-    case "opencode":
-      raw = settingsConfig.options?.baseURL;
       break;
     case "pi":
       raw = settingsConfig.baseUrl;

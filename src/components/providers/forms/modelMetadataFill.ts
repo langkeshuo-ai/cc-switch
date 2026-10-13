@@ -2,7 +2,7 @@
 // 统一规则：只补空着的字段，用户填过的值一律不动；布尔和模态只往「支持」方向补。
 
 import type { KnownModelMetadata } from "@/lib/modelMetadata";
-import type { CodexCatalogModel, OpenClawModel, OpenCodeModel } from "@/types";
+import type { CodexCatalogModel } from "@/types";
 import {
   PI_THINKING_LEVELS,
   type PiThinkingLevelMap,
@@ -15,7 +15,7 @@ export const metadataFilledAnything = (before: unknown, after: unknown) =>
 const isBlank = (value: unknown) =>
   value === undefined || value === null || String(value).trim() === "";
 
-/** 只认文字和图片两种输入（Codex / OpenClaw / Pi 的模态字段只有这两种）。 */
+/** 只认文字和图片两种输入（Codex / Pi 的模态字段只有这两种）。 */
 function textImageModalities(
   modalities: string[] | undefined,
 ): string[] | undefined {
@@ -41,65 +41,6 @@ export function fillCodexCatalogModel<T extends CodexCatalogModel>(
   }
   if (!row.inputModalities && metadata.inputModalities) {
     next.inputModalities = textImageModalities(metadata.inputModalities);
-  }
-  return next;
-}
-
-export function fillOpenClawModel(
-  model: OpenClawModel,
-  metadata: KnownModelMetadata,
-): OpenClawModel {
-  const next = { ...model };
-  if (isBlank(model.contextWindow) && metadata.contextWindow) {
-    next.contextWindow = metadata.contextWindow;
-  }
-  if (isBlank(model.maxTokens) && metadata.maxOutputTokens) {
-    next.maxTokens = metadata.maxOutputTokens;
-  }
-  if (model.reasoning === undefined && metadata.reasoning !== undefined) {
-    next.reasoning = metadata.reasoning;
-  } else if (metadata.reasoning === true) {
-    next.reasoning = true;
-  }
-  if (!model.input?.length) {
-    const input = textImageModalities(metadata.inputModalities);
-    if (input) next.input = input;
-  } else if (
-    metadata.inputModalities?.includes("image") &&
-    !model.input.includes("image")
-  ) {
-    // 新建的行默认只有 text，模型支持图片就补上。
-    next.input = [...model.input, "image"];
-  }
-  if (!model.cost && metadata.cost) {
-    next.cost = { ...metadata.cost };
-  }
-  return next;
-}
-
-export function fillOpenCodeModel(
-  model: OpenCodeModel,
-  metadata: KnownModelMetadata,
-): OpenCodeModel {
-  const next = { ...model };
-  const limit = { ...(model.limit ?? {}) };
-  if (isBlank(limit.context) && metadata.contextWindow) {
-    limit.context = metadata.contextWindow;
-  }
-  if (isBlank(limit.output) && metadata.maxOutputTokens) {
-    limit.output = metadata.maxOutputTokens;
-  }
-  if (Object.keys(limit).length > 0) next.limit = limit;
-  if (model.modalities === undefined && metadata.inputModalities) {
-    next.modalities = {
-      input: metadata.inputModalities,
-      output: metadata.outputModalities ?? ["text"],
-    };
-  }
-  // OpenCode 只给 reasoning 为真的模型生成思考档位（ctrl+t）。只补 true：
-  // 写 false 会盖住 models.dev 同名条目，用户明确写的 false 也不动。
-  if (model.reasoning === undefined && metadata.reasoning === true) {
-    next.reasoning = true;
   }
   return next;
 }

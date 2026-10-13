@@ -1322,6 +1322,7 @@ pub fn run() {
             commands::delete_mcp_server,
             commands::toggle_mcp_app,
             commands::import_mcp_from_apps,
+            commands::resync_mcp_to_apps,
             // Prompt management
             commands::get_prompts,
             commands::upsert_prompt,
@@ -1410,7 +1411,15 @@ pub fn run() {
             commands::check_skill_updates,
             commands::update_skill,
             commands::migrate_skill_storage,
+            commands::get_cc_switch_skills_dir,
+            commands::open_cc_switch_skills_dir,
+            commands::resync_skills_to_apps,
             commands::search_skills_sh,
+            // App config snapshots（三应用整体工作环境快照）
+            commands::list_app_snapshots,
+            commands::save_app_snapshot,
+            commands::apply_app_snapshot,
+            commands::delete_app_snapshot,
             // Skill management (legacy API compatibility)
             commands::get_skills,
             commands::get_skills_for_app,

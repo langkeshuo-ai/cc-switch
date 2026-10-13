@@ -58,9 +58,6 @@ const providersApiUpdateTrayMenuMock = vi.fn();
 const piApiUpdateProviderUsageScriptMock = vi.fn();
 const settingsApiGetMock = vi.fn();
 const settingsApiApplyMock = vi.fn();
-const openclawApiGetModelCatalogMock = vi.fn();
-const openclawApiGetDefaultModelMock = vi.fn();
-const openclawApiSetDefaultModelMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   piApi: {
@@ -76,14 +73,6 @@ vi.mock("@/lib/api", () => ({
     get: (...args: unknown[]) => settingsApiGetMock(...args),
     applyClaudePluginConfig: (...args: unknown[]) =>
       settingsApiApplyMock(...args),
-  },
-  openclawApi: {
-    getModelCatalog: (...args: unknown[]) =>
-      openclawApiGetModelCatalogMock(...args),
-    getDefaultModel: (...args: unknown[]) =>
-      openclawApiGetDefaultModelMock(...args),
-    setDefaultModel: (...args: unknown[]) =>
-      openclawApiSetDefaultModelMock(...args),
   },
 }));
 
@@ -121,9 +110,6 @@ beforeEach(() => {
   piApiUpdateProviderUsageScriptMock.mockReset();
   settingsApiGetMock.mockReset();
   settingsApiApplyMock.mockReset();
-  openclawApiGetModelCatalogMock.mockReset();
-  openclawApiGetDefaultModelMock.mockReset();
-  openclawApiSetDefaultModelMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
   toastInfoMock.mockReset();

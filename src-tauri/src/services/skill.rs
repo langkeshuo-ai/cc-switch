@@ -220,6 +220,27 @@ pub struct SkillUpdateInfo {
     pub remote_hash: String,
 }
 
+/// 重新同步时某个 Skill 没同步成功
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSyncFailure {
+    pub directory: String,
+    pub error: String,
+}
+
+/// 「立即重新同步」里单个应用的结果
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillAppSyncOutcome {
+    pub app: String,
+    pub ok: bool,
+    /// 整个应用没同步（如读不了应用目录）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// 应用同步了，但其中这些 Skill 失败
+    pub failed_skills: Vec<SkillSyncFailure>,
+}
+
 /// Skill 存储位置迁移结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2451,13 +2472,45 @@ impl SkillService {
     /// 同步所有已启用的 Skills 到指定应用
     pub fn sync_to_app(db: &Arc<Database>, app: &AppType) -> Result<()> {
         let _state_guard = skill_state_read_guard();
-        Self::sync_to_app_unlocked(db, app)
+        let _failed = Self::sync_to_app_unlocked(db, app)?;
+        Ok(())
+    }
+
+    /// Skills 不由 `sync_to_app` 投影的应用：Pi 没有数据库列、按目录是否存在现算，
+    /// 这些应用的 skills 目录不归 CC Switch 管，同步时一个字节都不能碰。
+    fn is_sync_managed_app(app: &AppType) -> bool {
+        !matches!(app, AppType::Pi)
+    }
+
+    /// 「立即重新同步」：按数据库里的开关和当前同步方式，把 Skill 重新投影到各应用目录，
+    /// 逐应用报告结果（Pi 不由这里同步，不在结果里）。
+    pub fn resync_all_apps(db: &Arc<Database>) -> Vec<SkillAppSyncOutcome> {
+        let _state_guard = skill_state_read_guard();
+        AppType::all()
+            .filter(Self::is_sync_managed_app)
+            .map(|app| {
+                let (error, failed_skills) = match Self::sync_to_app_unlocked(db, &app) {
+                    Ok(failed) => (None, failed),
+                    Err(err) => {
+                        log::warn!("重新同步 Skill 到 {app:?} 失败: {err:#}");
+                        (Some(format!("{err:#}")), Vec::new())
+                    }
+                };
+                SkillAppSyncOutcome {
+                    app: app.as_str().to_string(),
+                    ok: error.is_none() && failed_skills.is_empty(),
+                    error,
+                    failed_skills,
+                }
+            })
+            .collect()
     }
 
     /// Caller must hold either the Skills state read or write guard.
-    fn sync_to_app_unlocked(db: &Arc<Database>, app: &AppType) -> Result<()> {
+    /// 返回同步失败、被跳过的 Skill（整个应用失败时返回 Err）。
+    fn sync_to_app_unlocked(db: &Arc<Database>, app: &AppType) -> Result<Vec<SkillSyncFailure>> {
         if matches!(app, AppType::Pi) {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let skills = db.get_all_installed_skills()?;
@@ -2492,6 +2545,7 @@ impl SkillService {
             }
         }
 
+        let mut failed = Vec::new();
         for skill in skills.values() {
             if skill.apps.is_enabled_for(app) {
                 // 逐条容错而非 `?` 传播：本函数在切换供应商时被调用，一条脏
@@ -2502,11 +2556,15 @@ impl SkillService {
                         "同步 skill {} 到 {app:?} 失败，跳过该条: {err}",
                         skill.directory
                     );
+                    failed.push(SkillSyncFailure {
+                        directory: skill.directory.clone(),
+                        error: err.to_string(),
+                    });
                 }
             }
         }
 
-        Ok(())
+        Ok(failed)
     }
 
     // ========== 发现功能（保留原有逻辑）==========
@@ -5938,6 +5996,50 @@ mod tests {
             app_dir.join("good-skill").exists(),
             "the healthy skill must still be synced despite the poisoned row"
         );
+    }
+
+    /// 「立即重新同步」逐应用报告：坏行只算该 Skill 失败，不拖垮整个应用；
+    /// Pi 没有数据库列，不在结果里。
+    #[test]
+    #[serial_test::serial(global_env)]
+    fn resync_all_apps_reports_each_app_and_failed_skills() {
+        let home = tempdir().expect("home");
+        let _home = TestHomeGuard::set(home.path());
+        let ssot_dir = SkillService::get_ssot_dir().expect("ssot dir");
+        write_skill(&ssot_dir.join("good-skill"), "good");
+
+        let db = Arc::new(Database::memory().expect("memory db"));
+        let mut good = poisoned_skill("owner/repo:good", "good-skill");
+        good.name = "good".to_string();
+        good.apps = SkillApps::only(&AppType::Claude);
+        good.apps.codex = true;
+        db.save_skill(&good).expect("seed good row");
+        // 名字刻意让脏行排前面：查询是 `ORDER BY name ASC`，脏行必须先被处理，
+        // 否则「未修复时会中断」这个前提不成立，测试就成了摆设。
+        let mut bad = poisoned_skill("owner/repo:bad", "../../escape-sync");
+        bad.name = "a-poisoned".to_string();
+        bad.apps = SkillApps::only(&AppType::Claude);
+        db.save_skill(&bad).expect("seed poisoned row");
+
+        let outcomes = SkillService::resync_all_apps(&db);
+
+        let apps: Vec<&str> = outcomes.iter().map(|o| o.app.as_str()).collect();
+        assert!(!apps.contains(&"pi"));
+        assert!(apps.contains(&"claude") && apps.contains(&"codex"));
+
+        let claude = outcomes.iter().find(|o| o.app == "claude").unwrap();
+        assert!(!claude.ok);
+        assert!(claude.error.is_none());
+        assert_eq!(claude.failed_skills.len(), 1);
+        assert_eq!(claude.failed_skills[0].directory, "../../escape-sync");
+
+        let codex = outcomes.iter().find(|o| o.app == "codex").unwrap();
+        assert!(codex.ok, "codex should sync: {codex:?}");
+        for app in [AppType::Claude, AppType::Codex] {
+            let dir = SkillService::get_app_skills_dir(&app).expect("app dir");
+            assert!(dir.join("good-skill").join("SKILL.md").exists());
+        }
+        assert!(outcomes.iter().filter(|o| o.app != "claude").all(|o| o.ok));
     }
 
     #[test]

@@ -1,10 +1,7 @@
 import React from "react";
 import type { AppId } from "@/lib/api/types";
 import type { VisibleApps } from "@/types";
-import {
-  ClaudeIcon,
-  CodexIcon,
-} from "@/components/BrandIcons";
+import { ClaudeIcon, CodexIcon } from "@/components/BrandIcons";
 import { ProviderIcon } from "@/components/ProviderIcon";
 
 export interface AppConfig {
@@ -62,8 +59,10 @@ export function usesEditorView(appId: AppId): boolean {
 }
 
 /** 三个保留应用均由 CC Switch 管理 MCP；Pi 1.0 起内置 MCP（`~/.pi/agent/mcp.json`，上游 4.0） */
-export type McpAppId = AppId;
-export const MCP_APP_IDS: McpAppId[] = ["claude", "codex", "pi"];
+// 与 Rust `app_config::McpApps` 镜像：MCP 只支持 claude / codex
+// （Pi core 没有原生 MCP 注册表，Rust 侧 is_enabled_for(Pi) 恒 false）。
+export type McpAppId = "claude" | "codex";
+export const MCP_APP_IDS: McpAppId[] = ["claude", "codex"];
 
 export function isMcpAppId(appId: string): appId is McpAppId {
   return (MCP_APP_IDS as string[]).includes(appId);
