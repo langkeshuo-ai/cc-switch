@@ -482,4 +482,50 @@ mod tests {
             std::env::remove_var(key);
         }
     }
+
+    /// 回归：`GLOBAL_CLIENT` 未初始化时的兜底客户端不得跟随系统代理。
+    ///
+    /// 沙箱/CI 环境常注入随机端口的 loopback 死代理（HTTP_PROXY）。
+    /// `build_client(None)` 只豁免指向自家端口 15721 的代理，其他一律跟随——
+    /// 回环 upstream 请求会被送进死代理而连接失败（本机实测全量必挂 5 个
+    /// proxy 转发测试，根因即此）。本用例在「死代理 env + 本机 mock upstream」
+    /// 下锁定修复：兜底客户端必须显式直连成功。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn fallback_client_bypasses_dead_loopback_proxy() {
+        use axum::{routing::get, Router};
+
+        // serial(global_env) 已保证与其他 env 敏感测试互斥；不再叠加
+        // env_lock——std MutexGuard 不能跨 await 持有（clippy await_holding_lock）。
+
+        // 本机 mock upstream（axum serve，与 proxy/server.rs 测试同款模式）
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock upstream");
+        let upstream_port = listener.local_addr().unwrap().port();
+        let app = Router::new().route("/health", get(|| async { "ok" }));
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        // 必然无人监听的 loopback 死代理端口
+        let dead_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe dead port");
+        let dead_port = dead_probe.local_addr().unwrap().port();
+        drop(dead_probe);
+
+        // 预构造请求，把 env 操作窗口压到最小（仅 protect 并行测试）
+        let request = build_fallback_client()
+            .get(format!("http://127.0.0.1:{upstream_port}/health"))
+            .build()
+            .expect("build request");
+
+        std::env::set_var("HTTP_PROXY", format!("http://127.0.0.1:{dead_port}"));
+        let result = build_fallback_client().execute(request).await;
+        std::env::remove_var("HTTP_PROXY");
+
+        let resp = result.expect("fallback client must reach loopback upstream directly");
+        assert_eq!(resp.status(), 200);
+    }
 }
