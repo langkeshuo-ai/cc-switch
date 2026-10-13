@@ -185,14 +185,18 @@ pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// 获取全局 HTTP 客户端
 ///
 /// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
+///
+/// 未初始化时的兜底客户端**显式禁用代理**：该路径只应出现在应用启动竞态或
+/// 测试场景，把请求送进环境变量里的系统代理（可能是失效/沙箱代理）会导致
+/// 本可直连的目标（尤其是回环地址）全部失败。
 pub fn get() -> Client {
     GLOBAL_CLIENT
         .get()
         .and_then(|lock| lock.read().ok())
         .map(|c| c.clone())
         .unwrap_or_else(|| {
-            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
-            build_client(None).unwrap_or_default()
+            log::warn!("[GlobalProxy] [GP-004] Client not initialized, using direct fallback");
+            build_fallback_client()
         })
 }
 
@@ -212,9 +216,9 @@ pub fn is_proxy_enabled() -> bool {
     get_current_proxy_url().is_some()
 }
 
-/// 构建 HTTP 客户端
-fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
-    let mut builder = Client::builder()
+/// 客户端通用配置（超时、连接池、禁自动解压）
+fn base_builder() -> reqwest::ClientBuilder {
+    Client::builder()
         .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(10)
@@ -224,7 +228,12 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
         .no_gzip()
         .no_brotli()
         .no_deflate()
-        .no_zstd();
+        .no_zstd()
+}
+
+/// 构建 HTTP 客户端
+fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    let mut builder = base_builder();
 
     // 有代理地址则使用代理，否则跟随系统代理
     if let Some(url) = proxy_url {
@@ -261,6 +270,15 @@ fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
     builder
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {e}"))
+}
+
+/// 兜底客户端：显式直连，不继承任何环境代理。
+///
+/// 用于 `GLOBAL_CLIENT` 未初始化时的 `get()` 路径——应用启动竞态或测试。
+/// 这些场景下环境变量里的系统代理可能失效或指向沙箱/CI 代理，
+/// 跟随它会把本可直连的目标（尤其是回环地址）全部变成连接失败。
+fn build_fallback_client() -> Client {
+    base_builder().no_proxy().build().unwrap_or_default()
 }
 
 fn system_proxy_points_to_loopback() -> bool {

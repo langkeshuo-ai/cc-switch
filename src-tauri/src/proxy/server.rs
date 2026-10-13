@@ -459,7 +459,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = crate::proxy::test_support::local_client();
         for path in [
             "/responses",
             "/v1/responses",
@@ -540,7 +540,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = crate::proxy::test_support::local_client();
 
         let cases = [
             (
@@ -716,7 +716,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = crate::proxy::test_support::local_client();
         let aliases = [
             "/images/generations",
             "/v1/images/generations",
@@ -926,7 +926,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = crate::proxy::test_support::local_client();
         let aliases = [
             "/images/edits",
             "/v1/images/edits",
@@ -1151,7 +1151,7 @@ mod tests {
             None,
         );
         let proxy_info = proxy.start().await.expect("start test proxy");
-        let client = reqwest::Client::new();
+        let client = crate::proxy::test_support::local_client();
         let aliases = [
             "/alpha/search",
             "/v1/alpha/search",
