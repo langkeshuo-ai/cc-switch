@@ -186,8 +186,17 @@ describe("RequestLogTable", () => {
             latencyMs: 10_000,
             dataSource: "codex_session",
           },
+          // Pi 用自己的请求开始/回复写入时间估算耗时，没有首字计时。
+          {
+            ...base,
+            appType: "pi",
+            requestId: "pi-session-estimated",
+            outputTokens: 900,
+            latencyMs: 10_000,
+            dataSource: "pi_session",
+          },
         ],
-        total: 4,
+        total: 5,
         page: 0,
         pageSize: 20,
       },
@@ -204,7 +213,7 @@ describe("RequestLogTable", () => {
     );
 
     const rows = screen.getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(5);
     expect(rows[0].lastElementChild).toHaveTextContent("99tok/s");
     expect(rows[0].lastElementChild).toHaveAttribute(
       "title",
@@ -214,6 +223,12 @@ describe("RequestLogTable", () => {
     expect(rows[2].lastElementChild).toHaveTextContent("—");
     expect(rows[3].lastElementChild).toHaveTextContent("≈90tok/s");
     expect(rows[3].lastElementChild).toHaveAttribute(
+      "title",
+      "usage.estimatedTimingTip",
+    );
+    // Pi 行：耗时由自身时间戳估算，渲染与 codex 估算行一致
+    expect(rows[4].lastElementChild).toHaveTextContent("≈90tok/s");
+    expect(rows[4].lastElementChild).toHaveAttribute(
       "title",
       "usage.estimatedTimingTip",
     );
