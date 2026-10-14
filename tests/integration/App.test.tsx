@@ -254,7 +254,7 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
-  }, 10_000);
+  });
 
   it("resets provider view scroll when switching apps", async () => {
     const { default: App } = await import("@/App");
@@ -291,7 +291,7 @@ describe("App integration with MSW", () => {
     expect(mainScrollContainer.scrollLeft).toBe(0);
     expect(providerScrollContainer()!.scrollTop).toBe(0);
     expect(providerScrollContainer()!.scrollLeft).toBe(0);
-  }, 10_000);
+  });
 
   it("closes provider panels when navigating away from the app page", async () => {
     const { default: App } = await import("@/App");
@@ -335,7 +335,7 @@ describe("App integration with MSW", () => {
     fireEvent.keyDown(window, { key: ",", metaKey: true });
     expect(await screen.findByTestId("settings-page")).toBeInTheDocument();
     expect(screen.queryByTestId("add-provider-dialog")).not.toBeInTheDocument();
-  }, 10_000);
+  });
 
   it("asks before leaving an editor page with unsaved changes", async () => {
     const { default: App } = await import("@/App");
@@ -382,7 +382,7 @@ describe("App integration with MSW", () => {
     expect(
       screen.queryByTestId("edit-provider-dialog"),
     ).not.toBeInTheDocument();
-  }, 10_000);
+  });
 
   it("shows toast when auto sync fails in background", async () => {
     const { default: App } = await import("@/App");
