@@ -78,7 +78,7 @@ pub fn detect_opaque_state_rejection(
     if !config.enabled {
         return None;
     }
-    let ProxyError::UpstreamError { status, body } = error else {
+    let ProxyError::UpstreamError { status, body, .. } = error else {
         return None;
     };
 
@@ -144,6 +144,7 @@ pub fn in_stream_rejection(error: &Value, request: &Value) -> Option<ProxyError>
         ProxyError::UpstreamError {
             status: 400,
             body: Some(body.clone()),
+            retry_after: None,
         }
     })
 }
@@ -189,6 +190,8 @@ pub fn unreadable_agent_task_error() -> ProxyError {
             })
             .to_string(),
         ),
+        // 合成错误没有真实响应头，冷却回落到状态码默认值。
+        retry_after: None,
     }
 }
 
@@ -380,6 +383,7 @@ mod tests {
         ProxyError::UpstreamError {
             status,
             body: Some(body.to_string()),
+            retry_after: None,
         }
     }
 
@@ -439,6 +443,7 @@ mod tests {
         let function_output = ProxyError::UpstreamError {
             status: 502,
             body: Some(ENCRYPTED_FUNCTION_OUTPUT_REJECTION.to_string()),
+            retry_after: None,
         };
         assert!(detect(&function_output).is_some());
     }
@@ -579,6 +584,7 @@ mod tests {
         let plain_text = ProxyError::UpstreamError {
             status: 422,
             body: Some("bad input".to_string()),
+            retry_after: None,
         };
 
         assert_eq!(
@@ -774,6 +780,7 @@ mod tests {
         let ProxyError::UpstreamError {
             status,
             body: Some(body),
+            ..
         } = unreadable_agent_task_error()
         else {
             panic!("upstream error");

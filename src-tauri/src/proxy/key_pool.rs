@@ -53,9 +53,18 @@ pub struct KeySelection {
 }
 
 /// 429（限流）默认冷却 60s；402（欠费）冷却 1h——与 magpie 默认值对齐。
-/// Retry-After 响应头解析留待后续（`UpstreamError` 当前不携带，见 ADR MAG-002）。
+///
+/// 上游若在 `Retry-After` 里明确给了时长，以服务端值为准（见 [`parse_retry_after`]）；
+/// 头缺失或畸形时才回落到这两个默认值。
 const COOLDOWN_429: Duration = Duration::from_secs(60);
 const COOLDOWN_402: Duration = Duration::from_secs(3600);
+
+/// 冷却时长上限 24h。
+///
+/// 存在的意义是防上游（或中间人）给一个超大 `Retry-After`，把某把 key 事实上永久
+/// 冷掉——那等价于悄悄减少可用容量，且没有任何界面能说明原因。截到 24h 后，
+/// 最坏也只是这把 key 一天内不被选中。
+const MAX_COOLDOWN: Duration = Duration::from_secs(24 * 3600);
 
 fn cooldown_key(provider_id: &str, key_id: &str) -> String {
     format!("{provider_id}::{key_id}")
@@ -229,16 +238,20 @@ fn peek_last_used(pool: &[KeyPoolEntry], provider: &Provider, now: Instant) -> O
 
 /// 上游限流/欠费反馈：对该 provider 上次请求实际使用的池 key 记冷却。
 ///
+/// `retry_after` 是上游 `Retry-After` 头解析出的时长（见 [`parse_retry_after`]）：
+/// 有值则用它，无值则按状态码取默认冷却。**过期时间由 `Instant::now() + duration`
+/// 决定，不信任响应头里的绝对时刻**——本地时钟与上游时钟不保证一致。
+///
 /// 无池时 no-op（单 key provider 走既有 provider 级 failover）。
-pub fn note_rate_limited(provider: &Provider, status: u16) {
+pub fn note_rate_limited(provider: &Provider, status: u16, retry_after: Option<Duration>) {
     let pool = pool_of(provider);
     if pool.is_empty() {
         return;
     }
-    let duration = match status {
+    let duration = retry_after.unwrap_or(match status {
         402 => COOLDOWN_402,
         _ => COOLDOWN_429,
-    };
+    });
     let Some(idx) = peek_last_used(pool, provider, Instant::now()) else {
         return;
     };
@@ -254,6 +267,49 @@ pub fn note_rate_limited(provider: &Provider, status: u16) {
         entry.label.as_deref().unwrap_or("-"),
         duration.as_secs(),
     );
+}
+
+/// 截断冷却时长到 [`MAX_COOLDOWN`]。
+fn clamp_cooldown(duration: Duration) -> Duration {
+    if duration > MAX_COOLDOWN {
+        MAX_COOLDOWN
+    } else {
+        duration
+    }
+}
+
+/// 解析 `Retry-After` 响应头的值，返回冷却时长。
+///
+/// HTTP 规范（RFC 7231 §7.1.3）只允许两种形式：
+///
+/// - **delta-seconds**：纯十进制秒数，如 `120`
+/// - **HTTP-date**：IMF-fixdate，如 `Wed, 21 Oct 2015 07:28:00 GMT`
+///   （旧规范里的 RFC 850 与 asctime 已废弃，`parse_from_rfc2822` 覆盖前者，
+///   后者形态差异大，实际服务端不发，故不支持）
+///
+/// **任何畸形输入都返回 `None`**（调用方随之回落按状态码的默认冷却），
+/// 不 panic、不返回 0 之外的猜测值。
+///
+/// 返回值一律经 [`clamp_cooldown`] 截到 24h 上限。
+/// 已过期的 HTTP-date 截为 `Duration::ZERO`，等价于「立即恢复」——
+/// 那比把 key 冷却一个凭空的时长更符合服务端的原意。
+pub fn parse_retry_after(raw: Option<&str>) -> Option<Duration> {
+    let text = raw?.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    // delta-seconds：必须全是 ASCII 数字（负号、小数点、正号都非法）。
+    if text.bytes().all(|b| b.is_ascii_digit()) {
+        let secs: u64 = text.parse().ok()?;
+        return Some(clamp_cooldown(Duration::from_secs(secs)));
+    }
+
+    // HTTP-date（IMF-fixdate 与 RFC 2822 同形）。
+    let at = chrono::DateTime::parse_from_rfc2822(text).ok()?;
+    let delta = at.with_timezone(&chrono::Utc) - chrono::Utc::now();
+    let ms = delta.num_milliseconds().max(0) as u64;
+    Some(clamp_cooldown(Duration::from_millis(ms)))
 }
 
 #[cfg(test)]
@@ -385,7 +441,7 @@ mod tests {
 
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
 
-        note_rate_limited(&provider, 429);
+        note_rate_limited(&provider, 429, None);
         let after = select_for_provider(&provider).expect("pool is non-empty");
         assert_eq!(after.key, "sk-b");
         assert_eq!(after.key_id, "b");
@@ -399,7 +455,7 @@ mod tests {
         reset_for_tests();
         let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
 
-        note_rate_limited(&provider, 402);
+        note_rate_limited(&provider, 402, None);
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
 
         reset_for_tests();
@@ -410,7 +466,7 @@ mod tests {
     fn note_rate_limited_without_pool_is_noop() {
         reset_for_tests();
         let provider = make_provider("p1", None);
-        note_rate_limited(&provider, 429);
+        note_rate_limited(&provider, 429, None);
         assert!(cooldown_snapshot().is_empty());
         reset_for_tests();
     }
@@ -421,7 +477,7 @@ mod tests {
         reset_for_tests();
         let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
 
-        note_rate_limited(&provider, 429);
+        note_rate_limited(&provider, 429, None);
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
 
         // 手工把 a 的冷却时刻拨到过去，验证过期后回到 a
@@ -499,8 +555,8 @@ mod tests {
             KeyPoolStrategy::Rotate,
         );
 
-        note_rate_limited(&provider, 429); // a 冷却
-                                           // a 冷却期间每次都应落在 b
+        note_rate_limited(&provider, 429, None); // a 冷却
+                                                 // a 冷却期间每次都应落在 b
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
 
@@ -521,7 +577,7 @@ mod tests {
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
 
         // b 的请求收到 429：必须冷却 b 本身，而不是 order 视角下的首活 key a
-        note_rate_limited(&provider, 429);
+        note_rate_limited(&provider, 429, None);
         let snapshot = cooldown_snapshot();
         assert!(snapshot.contains_key(&cooldown_key("p1", "b")));
         assert!(!snapshot.contains_key(&cooldown_key("p1", "a")));
@@ -555,7 +611,100 @@ mod tests {
         // 未设策略（None）→ order：重复选择都落在第一把
         let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+        reset_for_tests();
+    }
+
+    // ── R2: Retry-After 解析 ───────────────────────────────────────────
+
+    /// 类别①：合法 delta-seconds。
+    #[test]
+    fn parse_retry_after_accepts_delta_seconds() {
+        assert_eq!(parse_retry_after(Some("1")), Some(Duration::from_secs(1)));
+        assert_eq!(
+            parse_retry_after(Some("120")),
+            Some(Duration::from_secs(120))
+        );
+        // 规范允许可选的前后空白（Ows）
+        assert_eq!(
+            parse_retry_after(Some("  30  ")),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(parse_retry_after(Some("0")), Some(Duration::ZERO));
+    }
+
+    /// 类别②：合法 HTTP-date（IMF-fixdate）。断言的是「量级合理」，不是精确秒数——
+    /// 解析与断言之间存在真实时间流逝，钉死数值会 flaky。
+    #[test]
+    fn parse_retry_after_accepts_http_date() {
+        let at = chrono::Utc::now() + chrono::Duration::seconds(600);
+        let header = at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        let parsed = parse_retry_after(Some(&header)).expect("IMF-fixdate 应可解析");
+        let secs = parsed.as_secs();
+        assert!((590..=600).contains(&secs), "期望约 600s，实际 {secs}s");
+    }
+
+    /// HTTP-date 已过期 → 0（立即恢复），不是 panic、也不是负数回绕。
+    #[test]
+    fn parse_retry_after_treats_past_http_date_as_immediate() {
+        let at = chrono::Utc::now() - chrono::Duration::seconds(3600);
+        let header = at.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        assert_eq!(parse_retry_after(Some(&header)), Some(Duration::ZERO));
+    }
+
+    /// 类别③：畸形值一律 None（回落默认冷却），且不 panic。
+    #[test]
+    fn parse_retry_after_rejects_malformed() {
+        for bad in [
+            "",
+            "   ",
+            "abc",
+            "-5",                            // 负数：规范不合法
+            "+5",                            // 正号：规范不合法
+            "12.5",                          // 小数：规范不合法
+            "1s",                            // 单位后缀：规范不合法
+            "99999999999999999999999999",    // 溢出 u64
+            "Wed, 32 Oct 2015 07:28:00 GMT", // 非法日期
+            "not-a-date",
+        ] {
+            assert_eq!(parse_retry_after(Some(bad)), None, "畸形值应回落：{bad:?}");
+        }
+    }
+
+    /// 类别④：头缺失。
+    #[test]
+    fn parse_retry_after_handles_absent() {
+        assert_eq!(parse_retry_after(None), None);
+    }
+
+    /// 上限：服务端给超大值不得把 key 事实上永久冷掉。
+    #[test]
+    fn parse_retry_after_clamps_to_24h() {
+        assert_eq!(
+            parse_retry_after(Some("999999999")),
+            Some(MAX_COOLDOWN),
+            "超大 delta-seconds 应截到 24h"
+        );
+        let far = chrono::Utc::now() + chrono::Duration::days(365);
+        let header = far.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        assert_eq!(parse_retry_after(Some(&header)), Some(MAX_COOLDOWN));
+    }
+
+    /// 有覆盖值时用服务端值，不叠加状态码默认冷却。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn note_rate_limited_prefers_server_retry_after() {
+        reset_for_tests();
+        let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+
+        // 429 默认 60s，但服务端说 1s → 1s 后就该恢复可用
+        note_rate_limited(&provider, 429, Some(Duration::from_secs(1)));
+        std::thread::sleep(Duration::from_millis(1100));
+        assert_eq!(
+            select_for_provider(&provider).unwrap().key,
+            "sk-a",
+            "1s 后 a 应已恢复，被选中的仍是第一把"
+        );
         reset_for_tests();
     }
 }

@@ -1232,7 +1232,7 @@ mod tests {
             "sk-pool-a"
         );
 
-        key_pool::note_rate_limited(&provider, 429);
+        key_pool::note_rate_limited(&provider, 429, None);
         assert_eq!(
             adapter.extract_auth(&provider).unwrap().api_key,
             "sk-pool-b"

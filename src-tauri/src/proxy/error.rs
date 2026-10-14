@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -43,7 +44,15 @@ pub enum ProxyError {
     ProviderUnhealthy(String),
 
     #[error("上游错误 (状态码 {status}): {body:?}")]
-    UpstreamError { status: u16, body: Option<String> },
+    UpstreamError {
+        status: u16,
+        body: Option<String>,
+        /// 上游 `Retry-After` 头解析出的冷却时长（`None` = 头缺失或畸形）。
+        ///
+        /// 只影响 key 池的冷却记账（见 `key_pool::note_rate_limited`），
+        /// 不参与错误展示与分类判定，因此不放进 `Display`。
+        retry_after: Option<Duration>,
+    },
 
     #[error("超过最大重试次数")]
     MaxRetriesExceeded,
@@ -85,6 +94,7 @@ impl IntoResponse for ProxyError {
             ProxyError::UpstreamError {
                 status: upstream_status,
                 body: upstream_body,
+                ..
             } => {
                 let http_status =
                     StatusCode::from_u16(*upstream_status).unwrap_or(StatusCode::BAD_GATEWAY);

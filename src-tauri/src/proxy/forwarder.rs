@@ -2813,6 +2813,14 @@ impl RequestForwarder {
             // 自动解压 feature，这里拿到的是原始字节；不解压的话，压缩过的错误体会
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
             let encoding = get_content_encoding(response.headers());
+            // Retry-After 必须在下方 bytes_with_limit 消费 response **之前**读出，
+            // 否则拿不到响应头。畸形/缺失一律得 None，由冷却逻辑回落状态码默认值。
+            let retry_after = super::key_pool::parse_retry_after(
+                response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok()),
+            );
             let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
             let decoded = match encoding {
                 Some(encoding) => {
@@ -2830,6 +2838,7 @@ impl RequestForwarder {
             Err(ProxyError::UpstreamError {
                 status: status_code,
                 body: body_text,
+                retry_after,
             })
         }
     }
@@ -3271,9 +3280,15 @@ impl RequestForwarder {
     fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
         // Key 池冷却反馈：上游 429/402 时把该 provider 当前生效的池 key 记冷却，
         // 后续请求改用池中其他 key（无池时 no-op，走既有 provider 级 failover）。
-        if let ProxyError::UpstreamError { status, .. } = error {
+        // 上游 Retry-After 明确给了时长就用它，否则回落按状态码的默认冷却。
+        if let ProxyError::UpstreamError {
+            status,
+            retry_after,
+            ..
+        } = error
+        {
             if *status == 429 || *status == 402 {
-                super::key_pool::note_rate_limited(provider, *status);
+                super::key_pool::note_rate_limited(provider, *status, *retry_after);
             }
         }
 
@@ -3398,7 +3413,7 @@ fn build_terminal_failure_log(
 
 fn summarize_proxy_error(error: &ProxyError) -> String {
     match error {
-        ProxyError::UpstreamError { status, body } => {
+        ProxyError::UpstreamError { status, body, .. } => {
             let body_summary = body
                 .as_deref()
                 .map(summarize_upstream_body)
@@ -4747,6 +4762,7 @@ mod tests {
         let error = ProxyError::UpstreamError {
             status: 429,
             body: Some(r#"{"error":{"message":"rate limit exceeded"}}"#.to_string()),
+            retry_after: None,
         };
 
         let (code, message) = build_retryable_failure_log("PackyCode-response", 1, 1, &error);
@@ -5512,14 +5528,17 @@ mod tests {
             ProxyError::UpstreamError {
                 status: 401,
                 body: None,
+                retry_after: None,
             },
             ProxyError::UpstreamError {
                 status: 403,
                 body: None,
+                retry_after: None,
             },
             ProxyError::UpstreamError {
                 status: 429,
                 body: None,
+                retry_after: None,
             },
             ProxyError::Timeout("timeout".to_string()),
         ] {
@@ -5549,6 +5568,7 @@ mod tests {
                 &ProxyError::UpstreamError {
                     status: 401,
                     body: None,
+                    retry_after: None,
                 },
                 &provider,
             ),
@@ -6691,6 +6711,7 @@ mod tests {
             body: Some(
                 r#"{"error":{"message":"This model does not support image input"}}"#.to_string(),
             ),
+            retry_after: None,
         }
     }
     #[test]
@@ -6782,6 +6803,7 @@ mod tests {
                 r#"{"error":{"message":"Failed to deserialize the JSON body into the target type: messages[11]: unknown variant image_url, expected text"}}"#
                     .to_string(),
             ),
+            retry_after: None,
         };
 
         assert!(fwd.media_retry_should_trigger("Codex", false, &body, &error));
@@ -6825,6 +6847,7 @@ mod tests {
         let context_error = ProxyError::UpstreamError {
             status: 400,
             body: Some(r#"{"error":{"message":"maximum context length exceeded"}}"#.to_string()),
+            retry_after: None,
         };
 
         assert!(!fwd.media_retry_should_trigger("Codex", false, &body, &context_error));
@@ -7415,6 +7438,7 @@ mod tests {
             let unsupported = ProxyError::UpstreamError {
                 status: 400,
                 body: Some("unsupported input item".to_string()),
+                retry_after: None,
             };
             let forwarder = forwarder(false);
             let gate = |app_type: AppType, provider: &Provider| {
@@ -7459,6 +7483,7 @@ mod tests {
             let unsupported = ProxyError::UpstreamError {
                 status: 400,
                 body: Some("unsupported input item".to_string()),
+                retry_after: None,
             };
 
             assert_eq!(
@@ -7623,6 +7648,7 @@ mod tests {
             let ProxyError::UpstreamError {
                 status: 400,
                 body: Some(body),
+                ..
             } = error
             else {
                 return false;

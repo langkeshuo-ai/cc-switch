@@ -599,6 +599,185 @@ mod tests {
         key_pool::reset_for_tests();
     }
 
+    /// R2 端到端：上游 429 带 `Retry-After: 1` 时，冷却只用服务端给的 1s，
+    /// 而不是按状态码兜底的 60s。
+    ///
+    /// 判据是「第三个请求回到 a」——若 Retry-After 没被采信，a 会冷却 60s，
+    /// 第三个请求仍落在 b。这个测试因此能真正区分两种行为，而不是碰巧通过。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn key_pool_honours_upstream_retry_after_seconds() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mock_app = Router::new().route(
+            "/v1/messages",
+            post({
+                let seen = seen.clone();
+                move |request: axum::extract::Request| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, _body) = request.into_parts();
+                        let auth = parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string();
+                        seen.lock().await.push(auth.clone());
+                        if auth == "Bearer sk-pool-b" {
+                            let mut headers = HeaderMap::new();
+                            headers.insert(
+                                header::CONTENT_TYPE,
+                                "application/json".parse().expect("content type"),
+                            );
+                            (
+                                StatusCode::OK,
+                                headers,
+                                r#"{"id":"msg_pool_ok","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-pool-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                            )
+                        } else {
+                            let mut headers = HeaderMap::new();
+                            headers.insert(
+                                header::CONTENT_TYPE,
+                                "application/json".parse().expect("content type"),
+                            );
+                            // R2：把服务端要求的冷却时长显式告知
+                            headers.insert(
+                                header::RETRY_AFTER,
+                                "1".parse().expect("retry-after seconds"),
+                            );
+                            (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                headers,
+                                r#"{"error":{"type":"rate_limit_error","message":"slow down"}}"#,
+                            )
+                        }
+                    }
+                }
+            }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock upstream");
+        let mock_addr = mock_listener.local_addr().expect("mock upstream address");
+        let mock_handle = tokio::spawn(async move {
+            axum::serve(mock_listener, mock_app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let provider = Provider {
+            id: "pooled-claude".to_string(),
+            name: "Pooled Claude".to_string(),
+            settings_config: json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": format!("http://{mock_addr}"),
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                    },
+                ],
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        db.save_provider("claude", &provider)
+            .expect("save test provider");
+        db.set_current_provider("claude", &provider.id)
+            .expect("select test provider");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                enable_logging: false,
+                non_streaming_timeout: 10,
+                ..ProxyConfig::default()
+            },
+            db.clone(),
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = crate::proxy::test_support::local_client();
+        let url = format!("http://127.0.0.1:{}/v1/messages", proxy_info.port);
+        let body = json!({
+            "model": "claude-pool-test",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        // 请求 1：a 被上游 429 且带了 Retry-After: 1 → 记 1s 冷却
+        let first = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("first pooled request");
+        assert_eq!(first.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // 请求 2：a 仍在 1s 冷却内 → 落到 b
+        let second = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("second pooled request");
+        assert_eq!(second.status(), StatusCode::OK);
+
+        // 等过服务端要求的 1s（略多留余量给调度抖动）
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+        // 请求 3：冷却已过 → a 重新可选。
+        // mock 对 a 恒返 429，所以这里**期望 429**——那正说明请求打的是 a。
+        // 若 Retry-After 未被采信，a 会冷却 60s，第三个请求将落到 b（200）。
+        let third = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("third pooled request");
+        assert_eq!(
+            third.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "第三个请求应重新选中 a（mock 对 a 恒返 429）"
+        );
+
+        let seen = seen.lock().await;
+        assert_eq!(
+            seen.as_slice(),
+            ["Bearer sk-pool-a", "Bearer sk-pool-b", "Bearer sk-pool-a"],
+            "Retry-After: 1 到期后应重新选中 a"
+        );
+
+        proxy.stop().await.expect("stop test proxy");
+        mock_handle.abort();
+        key_pool::reset_for_tests();
+    }
+
     /// P-C2 端到端：key 池 rotate 策略——连续三个请求应按 a → b → a 轮转。
     #[tokio::test]
     #[serial_test::serial(global_env)]
