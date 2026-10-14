@@ -33,7 +33,7 @@ impl GeminiAdapter {
     /// - GeminiCli: access_token (ya29. 开头) 或 JSON 格式凭证
     /// - Gemini: 普通 API Key
     pub fn provider_type(&self, provider: &Provider) -> ProviderType {
-        if let Some(key) = self.extract_key_raw(provider) {
+        if let Some(key) = self.extract_key(provider) {
             // OAuth access_token 以 ya29. 开头
             if key.starts_with("ya29.") {
                 return ProviderType::GeminiCli;
@@ -95,9 +95,20 @@ impl GeminiAdapter {
 
         None
     }
+}
 
+impl Default for GeminiAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderAdapter for GeminiAdapter {
+    fn name(&self) -> &'static str {
+        "Gemini"
+    }
     /// 从 Provider 配置中提取原始 API Key
-    fn extract_key_raw(&self, provider: &Provider) -> Option<String> {
+    fn extract_key(&self, provider: &Provider) -> Option<String> {
         if let Some(env) = provider.settings_config.get("env") {
             // 使用 GEMINI_API_KEY
             if let Some(key) = env
@@ -123,18 +134,6 @@ impl GeminiAdapter {
         }
 
         None
-    }
-}
-
-impl Default for GeminiAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ProviderAdapter for GeminiAdapter {
-    fn name(&self) -> &'static str {
-        "Gemini"
     }
 
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
@@ -168,7 +167,7 @@ impl ProviderAdapter for GeminiAdapter {
     }
 
     fn extract_auth(&self, provider: &Provider) -> Option<AuthInfo> {
-        let key = self.extract_key_raw(provider)?;
+        let key = self.resolve_key_with_pool(provider)?;
         let strategy = self.detect_auth_type(provider);
 
         match strategy {

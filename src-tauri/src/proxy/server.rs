@@ -446,6 +446,289 @@ mod tests {
         body: Value,
     }
 
+    /// P-C1 端到端：key 池 order 策略——上游对池 key `a` 返 429 后（触发冷却），
+    /// 同一 provider 的下一个请求应携带池 key `b`。单 provider 无 failover 目标，
+    /// 验证的是跨请求的池内切换。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn key_pool_order_switches_to_next_key_after_upstream_429() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mock_app = Router::new().route(
+            "/v1/messages",
+            post({
+                let seen = seen.clone();
+                move |request: axum::extract::Request| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, _body) = request.into_parts();
+                        let auth = parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string();
+                        seen.lock().await.push(auth.clone());
+                        if auth == "Bearer sk-pool-b" {
+                            let mut headers = HeaderMap::new();
+                            headers.insert(
+                                header::CONTENT_TYPE,
+                                "application/json".parse().expect("content type"),
+                            );
+                            (
+                                StatusCode::OK,
+                                headers,
+                                r#"{"id":"msg_pool_ok","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-pool-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                            )
+                        } else {
+                            let mut headers = HeaderMap::new();
+                            headers.insert(
+                                header::CONTENT_TYPE,
+                                "application/json".parse().expect("content type"),
+                            );
+                            (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                headers,
+                                r#"{"error":{"type":"rate_limit_error","message":"slow down"}}"#,
+                            )
+                        }
+                    }
+                }
+            }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock upstream");
+        let mock_addr = mock_listener.local_addr().expect("mock upstream address");
+        let mock_handle = tokio::spawn(async move {
+            axum::serve(mock_listener, mock_app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let provider = Provider {
+            id: "pooled-claude".to_string(),
+            name: "Pooled Claude".to_string(),
+            settings_config: json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": format!("http://{mock_addr}"),
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                    },
+                ],
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        db.save_provider("claude", &provider)
+            .expect("save test provider");
+        db.set_current_provider("claude", &provider.id)
+            .expect("select test provider");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                enable_logging: false,
+                non_streaming_timeout: 10,
+                ..ProxyConfig::default()
+            },
+            db.clone(),
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = crate::proxy::test_support::local_client();
+        let url = format!("http://127.0.0.1:{}/v1/messages", proxy_info.port);
+        let body = json!({
+            "model": "claude-pool-test",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        // 请求 1：池 key a 被上游 429 → 透传 429，同时记冷却
+        let first = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("first pooled request");
+        assert_eq!(first.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // 请求 2：a 处于冷却 → 应携带池 key b，拿到 200
+        let second = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("second pooled request");
+        assert_eq!(second.status(), StatusCode::OK);
+
+        let seen = seen.lock().await;
+        assert_eq!(
+            seen.as_slice(),
+            ["Bearer sk-pool-a", "Bearer sk-pool-b"],
+            "上游看到的 Authorization 应先 a（429）后 b（200）"
+        );
+
+        proxy.stop().await.expect("stop test proxy");
+        mock_handle.abort();
+        key_pool::reset_for_tests();
+    }
+
+    /// P-C2 端到端：key 池 rotate 策略——连续三个请求应按 a → b → a 轮转。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn key_pool_rotate_cycles_keys_across_requests() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mock_app = Router::new().route(
+            "/v1/messages",
+            post({
+                let seen = seen.clone();
+                move |request: axum::extract::Request| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, _body) = request.into_parts();
+                        let auth = parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string();
+                        seen.lock().await.push(auth);
+                        let mut headers = HeaderMap::new();
+                        headers.insert(
+                            header::CONTENT_TYPE,
+                            "application/json".parse().expect("content type"),
+                        );
+                        (
+                            StatusCode::OK,
+                            headers,
+                            r#"{"id":"msg_rot_ok","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-rot-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock upstream");
+        let mock_addr = mock_listener.local_addr().expect("mock upstream address");
+        let mock_handle = tokio::spawn(async move {
+            axum::serve(mock_listener, mock_app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let provider = Provider {
+            id: "rotating-claude".to_string(),
+            name: "Rotating Claude".to_string(),
+            settings_config: json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": format!("http://{mock_addr}"),
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-rot-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-rot-b".to_string(),
+                        label: None,
+                    },
+                ],
+                key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Rotate),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        db.save_provider("claude", &provider)
+            .expect("save test provider");
+        db.set_current_provider("claude", &provider.id)
+            .expect("select test provider");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                enable_logging: false,
+                non_streaming_timeout: 10,
+                ..ProxyConfig::default()
+            },
+            db.clone(),
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = crate::proxy::test_support::local_client();
+        let url = format!("http://127.0.0.1:{}/v1/messages", proxy_info.port);
+        let body = json!({
+            "model": "claude-rot-test",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        for _ in 0..3 {
+            let response = client
+                .post(&url)
+                .header(header::CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send()
+                .await
+                .expect("rotating pooled request");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let seen = seen.lock().await;
+        assert_eq!(
+            seen.as_slice(),
+            ["Bearer sk-rot-a", "Bearer sk-rot-b", "Bearer sk-rot-a"],
+            "rotate 策略下三个请求应轮转 a → b → a"
+        );
+
+        proxy.stop().await.expect("stop test proxy");
+        mock_handle.abort();
+        key_pool::reset_for_tests();
+    }
+
     /// Codex 内置的 openai 先用 WebSocket 连 Responses：握手回 426 它才立刻改走 HTTP。
     #[tokio::test]
     async fn responses_websocket_handshake_is_answered_with_upgrade_required() {

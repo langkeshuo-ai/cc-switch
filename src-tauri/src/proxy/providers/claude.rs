@@ -593,6 +593,44 @@ impl ClaudeAdapter {
         false
     }
 
+    /// 根据 env 中填写的变量名推断 Anthropic 默认走哪种鉴权策略。
+    ///
+    /// 与 Anthropic SDK 原生语义保持一致：
+    /// - `ANTHROPIC_AUTH_TOKEN` → `ClaudeAuth`（发送 `Authorization: Bearer`）
+    /// - `ANTHROPIC_API_KEY`    → `Anthropic` （发送 `x-api-key`）
+    ///
+    /// 优先级与 [`extract_key`] 一致；两者都缺时返回 `None` 由调用方决定 fallback。
+    fn infer_anthropic_auth_strategy(&self, provider: &Provider) -> Option<AuthStrategy> {
+        let env = provider.settings_config.get("env")?;
+
+        let has_value = |key: &str| -> bool {
+            env.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_some()
+        };
+
+        if has_value("ANTHROPIC_AUTH_TOKEN") {
+            return Some(AuthStrategy::ClaudeAuth);
+        }
+        if has_value("ANTHROPIC_API_KEY") {
+            return Some(AuthStrategy::Anthropic);
+        }
+        None
+    }
+}
+
+impl Default for ClaudeAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderAdapter for ClaudeAdapter {
+    fn name(&self) -> &'static str {
+        "Claude"
+    }
     /// 从 Provider 配置中提取 API Key
     fn extract_key(&self, provider: &Provider) -> Option<String> {
         if let Some(env) = provider.settings_config.get("env") {
@@ -675,45 +713,6 @@ impl ClaudeAdapter {
         None
     }
 
-    /// 根据 env 中填写的变量名推断 Anthropic 默认走哪种鉴权策略。
-    ///
-    /// 与 Anthropic SDK 原生语义保持一致：
-    /// - `ANTHROPIC_AUTH_TOKEN` → `ClaudeAuth`（发送 `Authorization: Bearer`）
-    /// - `ANTHROPIC_API_KEY`    → `Anthropic` （发送 `x-api-key`）
-    ///
-    /// 优先级与 [`extract_key`] 一致；两者都缺时返回 `None` 由调用方决定 fallback。
-    fn infer_anthropic_auth_strategy(&self, provider: &Provider) -> Option<AuthStrategy> {
-        let env = provider.settings_config.get("env")?;
-
-        let has_value = |key: &str| -> bool {
-            env.get(key)
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_some()
-        };
-
-        if has_value("ANTHROPIC_AUTH_TOKEN") {
-            return Some(AuthStrategy::ClaudeAuth);
-        }
-        if has_value("ANTHROPIC_API_KEY") {
-            return Some(AuthStrategy::Anthropic);
-        }
-        None
-    }
-}
-
-impl Default for ClaudeAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ProviderAdapter for ClaudeAdapter {
-    fn name(&self) -> &'static str {
-        "Claude"
-    }
-
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
         // Codex OAuth: 强制使用 ChatGPT 后端 API 端点（忽略用户配置的 base_url）
         if self.is_codex_oauth(provider) {
@@ -792,7 +791,7 @@ impl ProviderAdapter for ClaudeAdapter {
             ));
         }
 
-        let key = self.extract_key(provider)?;
+        let key = self.resolve_key_with_pool(provider)?;
 
         match provider_type {
             ProviderType::GeminiCli => {
@@ -1162,6 +1161,98 @@ mod tests {
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].0.as_str(), "x-api-key");
         assert_eq!(headers[0].1.to_str().unwrap(), "sk-ant-test");
+    }
+
+    #[test]
+    fn test_extract_auth_prefers_key_pool_first_entry() {
+        use crate::proxy::key_pool::KeyPoolEntry;
+
+        let adapter = ClaudeAdapter::new();
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        let auth = adapter.extract_auth(&provider).unwrap();
+        assert_eq!(auth.api_key, "sk-pool-a");
+    }
+
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn test_extract_auth_key_pool_switches_after_rate_limit() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+        let adapter = ClaudeAdapter::new();
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            adapter.extract_auth(&provider).unwrap().api_key,
+            "sk-pool-a"
+        );
+
+        key_pool::note_rate_limited(&provider, 429);
+        assert_eq!(
+            adapter.extract_auth(&provider).unwrap().api_key,
+            "sk-pool-b"
+        );
+
+        key_pool::reset_for_tests();
+    }
+
+    #[test]
+    fn test_extract_auth_without_pool_keeps_single_key_path() {
+        let adapter = ClaudeAdapter::new();
+        let provider = create_provider(json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+            }
+        }));
+
+        let auth = adapter.extract_auth(&provider).unwrap();
+        assert_eq!(auth.api_key, "sk-primary");
     }
 
     #[test]

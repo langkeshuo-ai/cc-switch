@@ -945,7 +945,18 @@ impl CodexAdapter {
     pub fn new() -> Self {
         Self
     }
+}
 
+impl Default for CodexAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProviderAdapter for CodexAdapter {
+    fn name(&self) -> &'static str {
+        "Codex"
+    }
     /// 从 Provider 配置中提取 API Key
     fn extract_key(&self, provider: &Provider) -> Option<String> {
         // 1. 尝试从 env 中获取
@@ -1001,18 +1012,6 @@ impl CodexAdapter {
         }
 
         None
-    }
-}
-
-impl Default for CodexAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ProviderAdapter for CodexAdapter {
-    fn name(&self) -> &'static str {
-        "Codex"
     }
 
     fn extract_base_url(&self, provider: &Provider) -> Result<String, ProxyError> {
@@ -1113,7 +1112,7 @@ impl ProviderAdapter for CodexAdapter {
         } else {
             AuthStrategy::Bearer
         };
-        self.extract_key(provider)
+        self.resolve_key_with_pool(provider)
             .map(|key| AuthInfo::new(key, strategy))
     }
 

@@ -453,6 +453,18 @@ pub struct ProviderMeta {
     /// 请求地址管理：测速后自动选择最佳端点
     #[serde(rename = "endpointAutoSelect", skip_serializing_if = "Option::is_none")]
     pub endpoint_auto_select: Option<bool>,
+    /// 多 key 池：同一 provider 多把 API key 的顺序故障转移（P-C1）。
+    /// 空池走单 key 路径；存放于 meta（合并引擎不写入 agent 配置）。
+    /// 策略细节见 `proxy::key_pool`。
+    #[serde(default, rename = "keyPool", skip_serializing_if = "Vec::is_empty")]
+    pub key_pool: Vec<crate::proxy::key_pool::KeyPoolEntry>,
+    /// Key 池路由策略（缺省 order）。仅 `keyPool` 非空时生效。
+    #[serde(
+        default,
+        rename = "keyPoolStrategy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub key_pool_strategy: Option<crate::proxy::key_pool::KeyPoolStrategy>,
     /// 合作伙伴标记（前端使用 isPartner，保持字段名一致）
     #[serde(rename = "isPartner", skip_serializing_if = "Option::is_none")]
     pub is_partner: Option<bool>,

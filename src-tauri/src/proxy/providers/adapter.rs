@@ -54,6 +54,29 @@ pub trait ProviderAdapter: Send + Sync {
     fn transform_response(&self, body: Value) -> Result<Value, ProxyError> {
         Ok(body)
     }
+
+    /// Key 解析（带池）：provider 配置了 `meta.keyPool` 时按 order 策略选池中
+    /// 第一把未冷却的 key；无池时回落适配器自己的单 key 提取逻辑。
+    ///
+    /// 默认实现让所有适配器免费获得 key 池能力；`extract_auth` 应改调本方法
+    /// 而非私有 `extract_key`（OAuth 类 placeholder 分支先行返回，天然不走池）。
+    fn resolve_key_with_pool(&self, provider: &Provider) -> Option<String> {
+        match crate::proxy::key_pool::select_for_provider(provider) {
+            Some(selection) => {
+                log::debug!(
+                    "[KeyPool] provider `{}` 选用池 key `{}`",
+                    provider.id,
+                    selection.key_id
+                );
+                Some(selection.key)
+            }
+            None => self.extract_key(provider),
+        }
+    }
+
+    /// 适配器的单 key 提取（无池路径）。由 [`Self::resolve_key_with_pool`]
+    /// 在无池时回落调用；各适配器必须实现。
+    fn extract_key(&self, provider: &Provider) -> Option<String>;
 }
 
 /// Build an HTTP `HeaderValue` from a credential / token string.

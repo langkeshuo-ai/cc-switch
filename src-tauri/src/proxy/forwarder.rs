@@ -3269,6 +3269,14 @@ impl RequestForwarder {
     }
 
     fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
+        // Key 池冷却反馈：上游 429/402 时把该 provider 当前生效的池 key 记冷却，
+        // 后续请求改用池中其他 key（无池时 no-op，走既有 provider 级 failover）。
+        if let ProxyError::UpstreamError { status, .. } = error {
+            if *status == 429 || *status == 402 {
+                super::key_pool::note_rate_limited(provider, *status);
+            }
+        }
+
         // Authentication belongs to the Codex client for an official route.
         // Every retry would reuse the selected account's inbound Authorization
         // header against another card, so no official-route error may fail over.
