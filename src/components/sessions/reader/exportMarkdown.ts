@@ -24,20 +24,20 @@ export interface MarkdownExportOptions {
   appName: string;
   youLabel: string;
   projectDir?: string;
-  t: Translate;
+  rt: Translate;
   includeThinking?: boolean;
 }
 
-const metaText = (meta: StepMeta, t: Translate) => {
+const metaText = (meta: StepMeta, rt: Translate) => {
   const parts: string[] = [];
-  if (isFailureStatus(meta.status)) parts.push(t(`status.${meta.status}`));
+  if (isFailureStatus(meta.status)) parts.push(rt(`status.${meta.status}`));
   if (meta.exitCode !== undefined) {
-    parts.push(t("exitCode", { code: meta.exitCode }));
+    parts.push(rt("exitCode", { code: meta.exitCode }));
   }
   if (meta.diff) parts.push(`+${meta.diff.added} −${meta.diff.removed}`);
   if (meta.durationMs) parts.push(formatDuration(meta.durationMs));
   if (meta.tokens !== undefined) {
-    parts.push(t("summaryTokens", { tokens: formatTokens(meta.tokens) }));
+    parts.push(rt("summaryTokens", { tokens: formatTokens(meta.tokens) }));
   }
   if (meta.costUsd !== undefined) parts.push(formatCost(meta.costUsd));
   return parts.length ? ` — ${parts.join(" · ")}` : "";
@@ -56,19 +56,19 @@ const stepLines = (
   options: MarkdownExportOptions,
   depth = 0,
 ): string[] => {
-  const { style, t, projectDir } = options;
+  const { style, rt, projectDir } = options;
   const pad = "  ".repeat(depth);
   switch (step.kind) {
     case "tool": {
-      const title = formatStepTitle(step, style, { projectDir, t });
+      const title = formatStepTitle(step, style, { projectDir, t: rt });
       const meta = formatStepMeta(step, style);
-      return [`${pad}- ${meta.glyph} ${title.text}${metaText(meta, t)}`];
+      return [`${pad}- ${meta.glyph} ${title.text}${metaText(meta, rt)}`];
     }
     case "merged": {
       const title = formatMergedTitle(step);
       const meta = formatStepMeta(step, style);
       return [
-        `${pad}- ${meta.glyph} ${title.text}${metaText(meta, t)}`,
+        `${pad}- ${meta.glyph} ${title.text}${metaText(meta, rt)}`,
         ...step.children.flatMap((child) =>
           stepLines(child, options, depth + 1),
         ),
@@ -76,7 +76,7 @@ const stepLines = (
     }
     case "thinking": {
       if (!options.includeThinking) return [];
-      const label = t(style.thinkingLabelKey);
+      const label = rt(style.thinkingLabelKey);
       const body = step.block.text || step.block.summary || "";
       const glyph = style.thinkingGlyph ? `${style.thinkingGlyph} ` : "";
       return [
@@ -86,16 +86,16 @@ const stepLines = (
     case "note":
       return [`${pad}- ${indentBody(step.text, `${pad}  `)}`];
     case "image":
-      return [`${pad}- [${step.image.alt || t("image.alt", { index: 1 })}]`];
+      return [`${pad}- [${step.image.alt || rt("image.alt", { index: 1 })}]`];
     case "event": {
-      const { label, detail } = describeEvent(step.block, t, step.body);
+      const { label, detail } = describeEvent(step.block, rt, step.body);
       return [`${pad}- ${label}${detail ? `: ${indentBody(detail)}` : ""}`];
     }
   }
 };
 
-const eventLine = (event: TurnEvent, t: Translate) => {
-  const { label, detail } = describeEvent(event.block, t, event.body);
+const eventLine = (event: TurnEvent, rt: Translate) => {
+  const { label, detail } = describeEvent(event.block, rt, event.body);
   const url = event.block.kind === "pr_link" && event.block.url;
   return `> ${label}${url ? ` (${url})` : ""}${detail ? `\n>\n> ${detail.replace(/\n/g, "\n> ")}` : ""}`;
 };
@@ -107,13 +107,13 @@ export const turnToMarkdown = (
   turn: SessionTurn,
   options: MarkdownExportOptions,
 ): string => {
-  const { t } = options;
+  const { rt } = options;
   const sections: string[] = [];
-  turn.leadingEvents.forEach((event) => sections.push(eventLine(event, t)));
+  turn.leadingEvents.forEach((event) => sections.push(eventLine(event, rt)));
   if (turn.question) {
     const images = turn.question.images.map(
       (image, index) =>
-        `[${image.alt || t("image.alt", { index: index + 1 })}]`,
+        `[${image.alt || rt("image.alt", { index: index + 1 })}]`,
     );
     sections.push(
       [
@@ -132,7 +132,7 @@ export const turnToMarkdown = (
       `${heading(options.appName, turn.final.ts)}\n\n${turn.final.text}`,
     );
   }
-  turn.trailingEvents.forEach((event) => sections.push(eventLine(event, t)));
+  turn.trailingEvents.forEach((event) => sections.push(eventLine(event, rt)));
   return sections.join("\n\n");
 };
 

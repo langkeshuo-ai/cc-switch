@@ -395,7 +395,7 @@ export function SessionReader({
       appName,
       youLabel: t("sessionManager.you", { defaultValue: "你" }),
       projectDir: session.projectDir ?? undefined,
-      t: rt,
+      rt,
       includeThinking,
     }),
     [appName, includeThinking, rt, session.projectDir, style, t],

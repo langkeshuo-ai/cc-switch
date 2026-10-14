@@ -50,6 +50,17 @@ const DYNAMIC_KEY_PREFIXES = [
 const T_FUNCS = /\b(?:t|i18nKey)\(\s*(['"])((?:(?!\1)[^\\])*)\1/g;
 
 /**
+ * 阅读页专用翻译函数 rt()（useReaderT）：key 若非 sessionManager. 开头，
+ * 自动拼 sessionManager.reader. 前缀。此处镜像该规则做存在性校验——
+ * exportMarkdown 等处的形参名为 t 实为 rt 替身，曾因按全局键查找误报漏键。
+ */
+const RT_FUNCS = /\brt\(\s*(['"])((?:(?!\1)[^\\])*)\1/g;
+const RT_TEMPLATE = /\brt\(\s*`([^`]*)`/g;
+const READER_NS = "sessionManager.reader.";
+const rtFullKey = (key) =>
+  key.startsWith("sessionManager.") ? key : `${READER_NS}${key}`;
+
+/**
  * 模板字面量键：t(`prefix.${expr}`)。
  * 取 `${` 之前的静态前缀作为动态命名空间（如 `profiles.createDescription.`），
  * 使该前缀下所有键都被视为"已引用"。无法静态推断（前缀为空，如
@@ -87,12 +98,19 @@ for (const dir of scanRoots) {
     const text = readFileSync(file, "utf8");
     sourceTexts.push(text);
     for (const m of text.matchAll(T_FUNCS)) usedKeys.add(m[2]);
+    for (const m of text.matchAll(RT_FUNCS)) usedKeys.add(rtFullKey(m[2]));
     for (const m of text.matchAll(T_TEMPLATE)) {
       const at = m[1].indexOf("${");
       const prefix = (at >= 0 ? m[1].slice(0, at) : m[1]).trim();
       // 无插值 → 完整字面量键；有插值 → 前缀覆盖该命名空间
       if (at < 0) usedKeys.add(prefix);
       else if (prefix) templatePrefixes.add(prefix);
+    }
+    for (const m of text.matchAll(RT_TEMPLATE)) {
+      const at = m[1].indexOf("${");
+      const prefix = (at >= 0 ? m[1].slice(0, at) : m[1]).trim();
+      if (at < 0) usedKeys.add(rtFullKey(prefix));
+      else if (prefix) templatePrefixes.add(rtFullKey(prefix));
     }
   }
 }
