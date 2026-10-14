@@ -1112,8 +1112,11 @@ impl ProviderAdapter for CodexAdapter {
         } else {
             AuthStrategy::Bearer
         };
-        self.resolve_key_with_pool(provider)
-            .map(|key| AuthInfo::new(key, strategy))
+        self.resolve_key_with_pool(provider).map(|selection| {
+            // key_id 为空串表示未走池（extract_key 回落路径），此时不归属
+            let key_id = (!selection.key_id.is_empty()).then_some(selection.key_id);
+            AuthInfo::new(selection.key, strategy).with_key_id(key_id)
+        })
     }
 
     fn build_url(&self, base_url: &str, endpoint: &str) -> String {

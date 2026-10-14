@@ -778,6 +778,211 @@ mod tests {
         key_pool::reset_for_tests();
     }
 
+    /// R1 端到端：usage 路由策略——按各 key 的实际 token 消耗选累计更少的那把。
+    ///
+    /// 判据是 Authorization 序列 `[a, b, b]`：
+    /// 1. 初始两把都 0 → 选 a；mock 对 a 返 **大 usage**（5000 input）
+    /// 2. a 累计 5000 > b 的 0 → 选 b；mock 对 b 返小 usage（1 input）
+    /// 3. a 仍 5000 > b 的 1 → 继续选 b
+    ///
+    /// 若 usage 未被采信（例如退化成 order），序列会变成 [a, b, a] 或
+    /// [a, a, ...]，本测试因此能真正区分两种行为。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn key_pool_usage_prefers_least_consumed_key() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mock_app = Router::new().route(
+            "/v1/messages",
+            post({
+                let seen = seen.clone();
+                move |request: axum::extract::Request| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, _body) = request.into_parts();
+                        let auth = parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string();
+                        seen.lock().await.push(auth.clone());
+                        // a 返大 usage，b 返小 usage——制造消耗差。
+                        // b 的 input 逐次 +1：规避 UsageSemantic 去重
+                        // （同 provider/model/tokens/status 的重复行会被
+                        // INSERT OR IGNORE 静默合并，第 2、3 次会变成一行）。
+                        let usage = if auth == "Bearer sk-pool-b" {
+                            let n = {
+                                let seen = seen.clone();
+                                let seen = seen.lock().await;
+                                seen.len()
+                            };
+                            format!(r#""usage":{{"input_tokens":{n},"output_tokens":1}}"#)
+                        } else {
+                            r#""usage":{"input_tokens":5000,"output_tokens":1}"#.to_string()
+                        };
+                        let mut headers = HeaderMap::new();
+                        headers.insert(
+                            header::CONTENT_TYPE,
+                            "application/json".parse().expect("content type"),
+                        );
+                        (
+                            StatusCode::OK,
+                            headers,
+                            format!(r#"{{"id":"msg_usage","type":"message","role":"assistant","content":[{{"type":"text","text":"ok"}}],"model":"claude-pool-test","stop_reason":"end_turn",{usage}}}"#),
+                        )
+                    }
+                }
+            }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock upstream");
+        let mock_addr = mock_listener.local_addr().expect("mock upstream address");
+        let mock_handle = tokio::spawn(async move {
+            axum::serve(mock_listener, mock_app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let provider = Provider {
+            id: "pooled-claude".to_string(),
+            name: "Pooled Claude".to_string(),
+            settings_config: json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": format!("http://{mock_addr}"),
+                    "ANTHROPIC_AUTH_TOKEN": "sk-primary"
+                }
+            }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                    },
+                ],
+                key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Usage),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        db.save_provider("claude", &provider)
+            .expect("save test provider");
+        db.set_current_provider("claude", &provider.id)
+            .expect("select test provider");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                // 必须开：usage 落库（→ record_usage）是 usage 路由的数据来源。
+                // P-C 的两个 e2e 不需要 usage 数据故设 false；本测试设 true，
+                // 与 1318 行那个验证 usage 落库的既有 e2e 一致。
+                enable_logging: true,
+                non_streaming_timeout: 10,
+                ..ProxyConfig::default()
+            },
+            db.clone(),
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = crate::proxy::test_support::local_client();
+        let url = format!("http://127.0.0.1:{}/v1/messages", proxy_info.port);
+        let body = json!({
+            "model": "claude-pool-test",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        // 三个请求：a（大 usage）→ b（小 usage）→ b（a 累计仍更多）
+        for expected in [200u16, 200, 200] {
+            let resp = client
+                .post(&url)
+                .header(header::CONTENT_TYPE, "application/json")
+                .json(&body)
+                .send()
+                .await
+                .expect("pooled usage request");
+            assert_eq!(resp.status(), expected);
+            // usage 落库是 tokio::spawn 异步的，且要拿 DB 阻塞锁做磁盘 IO。
+            // 固定 sleep 不可靠（本机实测 10ms 不够），改为轮询等行数达标。
+            let want = {
+                let conn = db.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT COUNT(*) FROM proxy_request_logs WHERE provider_id = 'pooled-claude'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+            } + 1;
+            for _ in 0..100 {
+                let got = {
+                    let conn = db.conn.lock().unwrap();
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM proxy_request_logs WHERE provider_id = 'pooled-claude'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+                };
+                if got >= want {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+
+        let seen = seen.lock().await;
+        assert_eq!(
+            seen.as_slice(),
+            ["Bearer sk-pool-a", "Bearer sk-pool-b", "Bearer sk-pool-b"],
+            "usage 策略应按累计消耗选 key：a 打满 5000 后转 b 并保持"
+        );
+
+        // key_id 归属必须逐行正确：第一行 a，后两行 b。
+        // 这一条专门守 `peek_last_used` 的 Usage 分支——它曾用空表预览，
+        // 导致「实际用 b、归属写 a」，usage 全记到一把 key 头上。
+        let key_ids: Vec<Option<String>> = {
+            let conn = db.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT key_id FROM proxy_request_logs ORDER BY rowid")
+                .expect("prepare key_id query");
+            let rows = stmt
+                .query_map([], |row| row.get::<_, Option<String>>(0))
+                .expect("query key_ids");
+            rows.collect::<Result<_, _>>().expect("collect key_ids")
+        };
+        assert_eq!(
+            key_ids,
+            vec![
+                Some("a".to_string()),
+                Some("b".to_string()),
+                Some("b".to_string())
+            ],
+            "key_id 归属应与实际使用的 key 一致"
+        );
+
+        proxy.stop().await.expect("stop test proxy");
+        mock_handle.abort();
+        key_pool::reset_for_tests();
+    }
+
     /// P-C2 端到端：key 池 rotate 策略——连续三个请求应按 a → b → a 轮转。
     #[tokio::test]
     #[serial_test::serial(global_env)]

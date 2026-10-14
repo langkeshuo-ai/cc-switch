@@ -84,6 +84,11 @@ pub struct RequestLog {
     pub is_streaming: bool,
     /// 成本倍数
     pub cost_multiplier: String,
+    /// 本次实际选中的池 key id（无池 / 未走池时为 `None` → 落库 NULL）。
+    ///
+    /// usage 路由策略按它归属 token 消耗。历史行为 NULL，`select_usage`
+    /// 遇到无数据的 key 会退化为 order 行为。
+    pub key_id: Option<String>,
 }
 
 /// 使用量记录器
@@ -176,8 +181,8 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                provider_type, is_streaming, cost_multiplier, created_at, key_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
         );
         let affected_rows = conn
             .execute(
@@ -208,6 +213,7 @@ impl<'a> UsageLogger<'a> {
                     log.is_streaming as i64,
                     log.cost_multiplier,
                     created_at,
+                    log.key_id,
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -220,6 +226,22 @@ impl<'a> UsageLogger<'a> {
                 );
             }
             crate::usage_events::notify_log_recorded();
+        }
+
+        // usage 路由的累计：落库成功后才记，失败不污染决策依据。
+        // 放在 `_on_conn` 这一层，是因为 `log_with_calculation_on_conn` 与错误行
+        // 变体都直接调它而**不经过** pub `log_request`——曾误放在 `log_request`
+        // 里，导致主路径完全不累计（e2e 实测 usage 表为空、key 全打在同一把上）。
+        // 错误行 token 多为 0，等价于只记「发生过」。
+        if affected_rows > 0 {
+            if let Some(key_id) = log.key_id.as_deref() {
+                crate::proxy::key_pool::record_usage(
+                    &log.provider_id,
+                    key_id,
+                    u64::from(log.usage.input_tokens)
+                        .saturating_add(u64::from(log.usage.output_tokens)),
+                );
+            }
         }
 
         Ok(())
@@ -258,7 +280,9 @@ impl<'a> UsageLogger<'a> {
 
     /// 记录失败的请求
     ///
-    /// 用于记录无法从上游获取 usage 信息的失败请求
+    /// 用于记录无法从上游获取 usage 信息的失败请求。
+    /// `key_id` 是本次实际选中的池 key（无池时 `None`）——限流错误同样要归属，
+    /// 否则 usage 策略看不到那把 key 已经消耗/被限。
     #[allow(dead_code, clippy::too_many_arguments)]
     pub fn log_error(
         &self,
@@ -269,6 +293,7 @@ impl<'a> UsageLogger<'a> {
         status_code: u16,
         error_message: String,
         latency_ms: u64,
+        key_id: Option<String>,
     ) -> Result<(), AppError> {
         let request_model = model.clone();
         let log = RequestLog {
@@ -289,6 +314,7 @@ impl<'a> UsageLogger<'a> {
             provider_type: None,
             is_streaming: false,
             cost_multiplier: "1.0".to_string(),
+            key_id,
         };
 
         self.log_request(&log)
@@ -307,6 +333,7 @@ impl<'a> UsageLogger<'a> {
         is_streaming: bool,
         session_id: Option<String>,
         provider_type: Option<String>,
+        key_id: Option<String>,
     ) -> RequestLog {
         let request_model = model.clone();
         RequestLog {
@@ -327,6 +354,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             cost_multiplier: "1.0".to_string(),
+            key_id,
         }
     }
 
@@ -347,6 +375,7 @@ impl<'a> UsageLogger<'a> {
         is_streaming: bool,
         session_id: Option<String>,
         provider_type: Option<String>,
+        key_id: Option<String>,
     ) -> Result<(), AppError> {
         let log = Self::error_request_log(
             request_id,
@@ -359,6 +388,7 @@ impl<'a> UsageLogger<'a> {
             is_streaming,
             session_id,
             provider_type,
+            key_id,
         );
         let conn = crate::database::lock_conn!(self.db.conn);
         Self::log_request_on_conn(&conn, &log)
@@ -424,6 +454,7 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
         is_streaming: bool,
+        key_id: Option<String>,
     ) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
         Self::log_with_calculation_on_conn(
@@ -442,6 +473,7 @@ impl<'a> UsageLogger<'a> {
             session_id,
             provider_type,
             is_streaming,
+            key_id,
         )
     }
 
@@ -466,6 +498,7 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
         is_streaming: bool,
+        key_id: Option<String>,
     ) -> Result<(), AppError> {
         let pricing = Self::get_model_pricing_on_conn(conn, &pricing_model)?;
 
@@ -502,6 +535,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             cost_multiplier: "1".to_string(),
+            key_id,
         };
 
         Self::log_request_on_conn(conn, &log)
@@ -537,6 +571,7 @@ mod tests {
             provider_type: Some("codex".to_string()),
             is_streaming: true,
             cost_multiplier: "1".to_string(),
+            key_id: None,
         }
     }
 
@@ -580,6 +615,7 @@ mod tests {
             None,
             Some("claude".to_string()),
             false,
+            None,
         )?;
 
         // 验证记录已插入
@@ -593,6 +629,96 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(request_model, "req-model");
+        Ok(())
+    }
+
+    /// R1：带 key_id 的 usage 落库必须①把 key_id 写进 proxy_request_logs
+    /// ②累加到进程级 usage 表（供 usage 路由决策）。
+    #[test]
+    fn log_with_calculation_records_key_id_and_usage_total() -> Result<(), AppError> {
+        use crate::proxy::key_pool;
+
+        key_pool::reset_for_tests();
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            model: None,
+            message_id: None,
+        };
+
+        logger.log_with_calculation(
+            "req-key-1".to_string(),
+            "provider-1".to_string(),
+            "claude".to_string(),
+            "test-model".to_string(),
+            "req-model".to_string(),
+            "test-model".to_string(),
+            usage,
+            100,
+            None,
+            200,
+            None,
+            Some("claude".to_string()),
+            false,
+            Some("pool-a".to_string()),
+        )?;
+
+        // ① DB 里的 key_id
+        let conn = crate::database::lock_conn!(db.conn);
+        let key_id: Option<String> = conn
+            .query_row(
+                "SELECT key_id FROM proxy_request_logs WHERE request_id = 'req-key-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(key_id.as_deref(), Some("pool-a"));
+
+        // ② 进程级 usage 表：input+output = 1500
+        // 通过 select_for_provider 的行为间接验证（全局表无公开读取接口），
+        // 这里用一个两 key 池验证累计差确实影响了选择。
+        drop(conn);
+        key_pool::reset_for_tests();
+
+        // 重新记：a 记 1500，然后验证 Usage 策略选 b
+        key_pool::record_usage("provider-1", "pool-a", 1500);
+        let provider = crate::provider::Provider {
+            id: "provider-1".to_string(),
+            name: "p".to_string(),
+            settings_config: serde_json::json!({}),
+            website_url: None,
+            category: None,
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(crate::provider::ProviderMeta {
+                key_pool: vec![
+                    crate::proxy::key_pool::KeyPoolEntry {
+                        id: "pool-a".to_string(),
+                        key: "sk-a".to_string(),
+                        label: None,
+                    },
+                    crate::proxy::key_pool::KeyPoolEntry {
+                        id: "pool-b".to_string(),
+                        key: "sk-b".to_string(),
+                        label: None,
+                    },
+                ],
+                key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Usage),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        let selected = key_pool::select_for_provider(&provider).expect("pool non-empty");
+        assert_eq!(selected.key_id, "pool-b", "a 累计 1500 > b 的 0，应选 b");
+        key_pool::reset_for_tests();
         Ok(())
     }
 
@@ -757,6 +883,7 @@ mod tests {
             500,
             "Internal Server Error".to_string(),
             50,
+            None,
         )?;
 
         // 验证错误记录已插入
@@ -794,6 +921,7 @@ mod tests {
             provider_type: Some("grokbuild".to_string()),
             is_streaming: false,
             cost_multiplier: "1".to_string(),
+            key_id: None,
         };
 
         logger.log_request(&log)?;

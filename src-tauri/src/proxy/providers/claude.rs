@@ -791,8 +791,12 @@ impl ProviderAdapter for ClaudeAdapter {
             ));
         }
 
-        let key = self.resolve_key_with_pool(provider)?;
+        let selection = self.resolve_key_with_pool(provider)?;
+        let key_id = (!selection.key_id.is_empty()).then_some(selection.key_id);
+        let key = selection.key;
 
+        // 池路径选中的 key_id 统一贴到每个分支的 AuthInfo 上（无池时 key_id
+        // 为 None，等价于不归属）。在外面包一层，避免七个分支各写一遍。
         match provider_type {
             ProviderType::GeminiCli => {
                 // Parse stored OAuth JSON and only attach access_token when
@@ -837,6 +841,7 @@ impl ProviderAdapter for ClaudeAdapter {
                 Some(AuthInfo::new(key, strategy))
             }
         }
+        .map(|auth| auth.with_key_id(key_id))
     }
 
     fn build_url(&self, base_url: &str, endpoint: &str) -> String {

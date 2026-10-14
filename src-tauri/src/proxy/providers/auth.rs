@@ -13,6 +13,13 @@ pub struct AuthInfo {
     pub strategy: AuthStrategy,
     /// OAuth access_token（用于 GoogleOAuth 策略）
     pub access_token: Option<String>,
+    /// 本次实际选中的池 key id（`meta.keyPool` 非空时）。
+    ///
+    /// 供 usage 落库按 key 归属计量，进而让 usage 路由策略能算出每把 key
+    /// 的真实消耗。无池 / 未走池路径时为 `None`——对应
+    /// `proxy_request_logs.key_id` 的 NULL，usage 策略遇到它会退化为 order
+    /// 行为（见 `select_usage` 契约）。
+    pub key_id: Option<String>,
 }
 
 impl AuthInfo {
@@ -22,6 +29,7 @@ impl AuthInfo {
             api_key,
             strategy,
             access_token: None,
+            key_id: None,
         }
     }
 
@@ -31,7 +39,14 @@ impl AuthInfo {
             api_key,
             strategy: AuthStrategy::GoogleOAuth,
             access_token: Some(access_token),
+            key_id: None,
         }
+    }
+
+    /// 标记本次认证实际选中的池 key id（builder 风格，便于链式调用）。
+    pub fn with_key_id(mut self, key_id: Option<String>) -> Self {
+        self.key_id = key_id;
+        self
     }
 
     /// 返回遮蔽后的 API Key（用于日志输出）

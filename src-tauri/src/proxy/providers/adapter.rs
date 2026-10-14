@@ -5,6 +5,7 @@
 use super::auth::AuthInfo;
 use crate::provider::Provider;
 use crate::proxy::error::ProxyError;
+use crate::proxy::key_pool::KeySelection;
 use serde_json::Value;
 
 /// 供应商适配器 Trait
@@ -55,12 +56,15 @@ pub trait ProviderAdapter: Send + Sync {
         Ok(body)
     }
 
-    /// Key 解析（带池）：provider 配置了 `meta.keyPool` 时按 order 策略选池中
-    /// 第一把未冷却的 key；无池时回落适配器自己的单 key 提取逻辑。
+    /// Key 解析（带池）：provider 配置了 `meta.keyPool` 时按策略选池中一把
+    /// 未冷却的 key；无池时回落适配器自己的单 key 提取逻辑。
+    ///
+    /// 返回 [`KeySelection`]（含 `key_id`）而非裸 `String`：`extract_auth` 需要
+    /// 把 key_id 装进 `AuthInfo`，usage 落库才能按 key 归属计量。
     ///
     /// 默认实现让所有适配器免费获得 key 池能力；`extract_auth` 应改调本方法
     /// 而非私有 `extract_key`（OAuth 类 placeholder 分支先行返回，天然不走池）。
-    fn resolve_key_with_pool(&self, provider: &Provider) -> Option<String> {
+    fn resolve_key_with_pool(&self, provider: &Provider) -> Option<KeySelection> {
         match crate::proxy::key_pool::select_for_provider(provider) {
             Some(selection) => {
                 log::debug!(
@@ -68,9 +72,12 @@ pub trait ProviderAdapter: Send + Sync {
                     provider.id,
                     selection.key_id
                 );
-                Some(selection.key)
+                Some(selection)
             }
-            None => self.extract_key(provider),
+            None => self.extract_key(provider).map(|key| KeySelection {
+                key,
+                key_id: String::new(),
+            }),
         }
     }
 

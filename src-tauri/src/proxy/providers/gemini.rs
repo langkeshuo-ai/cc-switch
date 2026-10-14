@@ -167,20 +167,22 @@ impl ProviderAdapter for GeminiAdapter {
     }
 
     fn extract_auth(&self, provider: &Provider) -> Option<AuthInfo> {
-        let key = self.resolve_key_with_pool(provider)?;
+        let selection = self.resolve_key_with_pool(provider)?;
+        let key_id = (!selection.key_id.is_empty()).then_some(selection.key_id);
+        let key = selection.key;
         let strategy = self.detect_auth_type(provider);
 
         match strategy {
             AuthStrategy::GoogleOAuth => {
                 // 解析 OAuth 凭证
                 if let Some(creds) = self.parse_oauth_credentials(&key) {
-                    Some(AuthInfo::with_access_token(key, creds.access_token))
+                    Some(AuthInfo::with_access_token(key, creds.access_token).with_key_id(key_id))
                 } else {
                     // 回退到普通 API Key
-                    Some(AuthInfo::new(key, AuthStrategy::Google))
+                    Some(AuthInfo::new(key, AuthStrategy::Google).with_key_id(key_id))
                 }
             }
-            _ => Some(AuthInfo::new(key, AuthStrategy::Google)),
+            _ => Some(AuthInfo::new(key, AuthStrategy::Google).with_key_id(key_id)),
         }
     }
 

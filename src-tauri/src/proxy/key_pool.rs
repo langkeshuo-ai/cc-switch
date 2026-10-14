@@ -43,6 +43,8 @@ pub enum KeyPoolStrategy {
     Order,
     /// 轮转：每次选下一把未冷却的 key（主动分摊）
     Rotate,
+    /// 按实际消耗：选窗口内 token 累计最少的未冷却 key（用多少补多少）
+    Usage,
 }
 
 /// 一次池选择的结果。`key_id` 供冷却反馈归属（当前 P-C1 仅用于日志）。
@@ -84,6 +86,46 @@ fn cursors() -> &'static Mutex<HashMap<String, usize>> {
     &CURSORS
 }
 
+/// 进程级 usage 累计表：`provider_id::key_id` -> 窗口内 input+output tokens。
+///
+/// 与冷却注册表同构（同样是 `LazyLock` + 全局键），因为 `select_for_provider`
+/// 不持有数据库句柄，而 order/rotate 本来就是从全局状态取输入的。把 usage
+/// 也放进全局表，Usage 策略才能在不改 trait 签名的前提下生效。
+fn usage_totals() -> &'static Mutex<HashMap<String, u64>> {
+    static USAGE: LazyLock<Mutex<HashMap<String, u64>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &USAGE
+}
+
+/// 把一次请求的 token 消耗累加到指定 key 上（usage 落库后调用）。
+///
+/// 由 `proxy_request_logs` 的写入方调用（成功行与错误行都算——限流同样
+/// 是真实消耗）。累加到进程级表，供 [`select_usage`] 决策。
+pub fn record_usage(provider_id: &str, key_id: &str, tokens: u64) {
+    if key_id.is_empty() {
+        return; // 未走池：无归属可记
+    }
+    if let Ok(mut guard) = usage_totals().lock() {
+        *guard.entry(cooldown_key(provider_id, key_id)).or_insert(0) += tokens;
+    }
+}
+
+/// 读取某个 provider 的池 usage 表（key_id -> tokens）。
+///
+/// 只返回池内 key 的累计；缺失的 key 不放入表（`select_usage` 视为 0）。
+fn usage_snapshot(provider_id: &str, pool: &[KeyPoolEntry]) -> HashMap<String, u64> {
+    let Ok(guard) = usage_totals().lock() else {
+        return HashMap::new();
+    };
+    let mut out = HashMap::new();
+    for entry in pool {
+        if let Some(total) = guard.get(&cooldown_key(provider_id, &entry.id)).copied() {
+            out.insert(entry.id.clone(), total);
+        }
+    }
+    out
+}
+
 /// 冷却快照（测试与 select 共用）。过期条目不在此处清理，由 select 时跳过。
 pub fn cooldown_snapshot() -> HashMap<String, Instant> {
     registry()
@@ -99,6 +141,9 @@ pub fn reset_for_tests() {
         guard.clear();
     }
     if let Ok(mut guard) = cursors().lock() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = usage_totals().lock() {
         guard.clear();
     }
 }
@@ -186,8 +231,38 @@ pub fn pool_of(provider: &Provider) -> &[KeyPoolEntry] {
         .unwrap_or(&[])
 }
 
+/// usage 选择：未冷却的 key 里选 token 累计最少的；并列取更靠前的。
+///
+/// 纯函数（usage 表由调用方注入，与 `cooldown`/`now` 同一风格），便于测试。
+/// 契约与 order/rotate 对齐：
+/// - 空池 -> `None`
+/// - 全冷却 -> 回落第一把
+/// - 无 usage 数据 -> 等价于首把（退化成 order 行为，老库不报错）
+///
+/// `usage` 的键是 **key_id**（不是 key 本身）；缺失的 key 记 0。
+pub fn select_usage(
+    pool: &[KeyPoolEntry],
+    cooldown: &HashMap<String, Instant>,
+    provider_id: &str,
+    now: Instant,
+    usage: &HashMap<String, u64>,
+) -> Option<usize> {
+    if pool.is_empty() {
+        return None;
+    }
+    let live = (0..pool.len()).find(|&idx| is_live(pool, cooldown, provider_id, idx, now));
+    let candidates = live.map_or(0..1, |first| first..pool.len());
+    // 全部冷却时 live 为 None，回落第一把；否则在未冷却的 key 里取累计最少。
+    candidates
+        .filter(|&idx| idx == 0 || live.is_some_and(|first| idx >= first))
+        .min_by_key(|&idx| (usage.get(&pool[idx].id).copied().unwrap_or(0), idx))
+}
+
 /// 池选择（glue 层）：池非空时返回选中 key，否则 `None`（调用方回落单 key 路径）。
 /// 策略取自 `meta.keyPoolStrategy`，缺省 `Order`。
+///
+/// 三策的输入全部来自进程级状态（冷却注册表 / 轮转游标 / usage 累计表），
+/// 本函数不持有数据库句柄——与 order/rotate 的实现同构。
 pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
     let pool = pool_of(provider);
     let strategy = provider
@@ -201,6 +276,18 @@ pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
         }
         KeyPoolStrategy::Rotate => {
             select_rotate(pool, &cooldown_snapshot(), &provider.id, Instant::now())?
+        }
+        KeyPoolStrategy::Usage => {
+            // usage 累计来自进程级表（由 usage 落库处 record_usage 更新），
+            // 与冷却/游标同源——select_for_provider 不持 db 句柄。
+            let usage = usage_snapshot(&provider.id, pool);
+            select_usage(
+                pool,
+                &cooldown_snapshot(),
+                &provider.id,
+                Instant::now(),
+                &usage,
+            )?
         }
     };
     let entry = &pool[idx];
@@ -233,7 +320,26 @@ fn peek_last_used(pool: &[KeyPoolEntry], provider: &Provider, now: Instant) -> O
                 .and_then(|g| g.get(&provider.id).copied());
             select_rotate_from(pool, &cooldown, &provider.id, now, last.unwrap_or(0))
         }
+        // usage 的选择确定（累计最少的活 key）——预览必须与请求时同源，
+        // 因此读真实 usage 表。用空表会永远返回首把，导致归属错记到 a 头上
+        // （e2e 实测：第二行明明是 b 的 usage，key_id 却写成 a）。
+        KeyPoolStrategy::Usage => {
+            let usage = usage_snapshot(&provider.id, pool);
+            select_usage(pool, &cooldown, &provider.id, now, &usage)
+        }
     }
+}
+
+/// 预览「上次请求实际使用的池 key」的 id（不推进 rotate 游标、不改状态）。
+///
+/// 与 [`peek_last_used`] 同源，但直接给 id 并**公开**：
+/// 错误行的 usage 归属需要它——错误发生时 `AuthInfo` 早已不在作用域
+/// （见 `handlers::log_forward_error`），而限流错误恰恰是 usage 策略
+/// 最需要归属的数据。无池 / 从未请求过时返回 `None`（→ 落库 NULL）。
+pub fn last_used_key_id(provider: &Provider) -> Option<String> {
+    let pool = pool_of(provider);
+    let idx = peek_last_used(pool, provider, Instant::now())?;
+    Some(pool[idx].id.clone())
 }
 
 /// 上游限流/欠费反馈：对该 provider 上次请求实际使用的池 key 记冷却。
@@ -604,6 +710,129 @@ mod tests {
         reset_for_tests();
     }
 
+    // ── R1: usage 路由策略 ─────────────────────────────────────────────
+
+    /// 排序核心：未冷却的 key 里选 token 累计最少的；并列取更靠前的（稳定性）。
+    #[test]
+    fn select_usage_picks_least_consumed_live_key() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b"), entry("c", "sk-c")];
+        let cooldown = HashMap::new();
+        let now = Instant::now();
+        let usage = HashMap::from([
+            ("a".to_string(), 500u64),
+            ("b".to_string(), 100u64),
+            ("c".to_string(), 900u64),
+        ]);
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", now, &usage),
+            Some(1),
+            "b 累计最少，应被选中"
+        );
+    }
+
+    /// 并列时取更靠前的一把——保证行为确定、可复现（不做随机/轮转兜底）。
+    #[test]
+    fn select_usage_breaks_ties_by_pool_order() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let cooldown = HashMap::new();
+        let now = Instant::now();
+        let usage = HashMap::from([("a".to_string(), 300u64), ("b".to_string(), 300u64)]);
+        assert_eq!(select_usage(&pool, &cooldown, "p1", now, &usage), Some(0));
+    }
+
+    /// 全冷却时回落第一把——与 order/rotate 一致（宁可撞一次限流也不阻塞）。
+    #[test]
+    fn select_usage_falls_back_to_first_when_all_cooled() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let now = Instant::now();
+        let cooldown = HashMap::from([
+            (cooldown_key("p1", "a"), now + Duration::from_secs(60)),
+            (cooldown_key("p1", "b"), now + Duration::from_secs(60)),
+        ]);
+        let usage = HashMap::from([("b".to_string(), 1u64)]);
+        assert_eq!(select_usage(&pool, &cooldown, "p1", now, &usage), Some(0));
+    }
+
+    /// 无 usage 数据时降级为 order 行为（首把）——老库/新表没数据时不报错。
+    #[test]
+    fn select_usage_without_data_degrades_to_first() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let cooldown = HashMap::new();
+        let usage = HashMap::new();
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", Instant::now(), &usage),
+            Some(0)
+        );
+    }
+
+    /// 冷却是硬约束：累计最少的 key 若在冷却中，跳过它选下一把。
+    #[test]
+    fn select_usage_skips_cooled_key_even_if_least_used() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let now = Instant::now();
+        let cooldown = HashMap::from([(cooldown_key("p1", "a"), now + Duration::from_secs(60))]);
+        let usage = HashMap::from([("a".to_string(), 1u64), ("b".to_string(), 9999u64)]);
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", now, &usage),
+            Some(1),
+            "a 虽累计最少但在冷却，应选 b"
+        );
+    }
+
+    /// 空池 → None。
+    #[test]
+    fn select_usage_empty_pool_returns_none() {
+        let pool: Vec<KeyPoolEntry> = vec![];
+        let cooldown = HashMap::new();
+        let usage = HashMap::new();
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", Instant::now(), &usage),
+            None
+        );
+    }
+
+    /// glue 层全链：record_usage 累计 → select_for_provider 按 Usage 策略
+    /// 选中累计更少的那把。这是 R1 的验收核心（任务书 e2e 的单测版）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn usage_strategy_selects_least_consumed_via_global_table() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Usage,
+        );
+
+        // 初始无数据：两把都记 0 → 取第一把（与 order 同形，保证确定性）
+        assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+
+        // a 累计 5000，b 仍 0 → 应选 b
+        record_usage(&provider.id, "a", 5000);
+        assert_eq!(select_for_provider(&provider).unwrap().key, "sk-b");
+
+        // b 也累计 6000（比 a 多）→ 选回 a
+        record_usage(&provider.id, "b", 6000);
+        assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+
+        // a 追加 1 后仍少于 b（5001 < 6000）→ 稳定在 a
+        record_usage(&provider.id, "a", 1);
+        assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+        reset_for_tests();
+    }
+
+    /// 老数据（无任何 usage 记录）时 Usage 策略不报错，退化为首把。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn usage_strategy_without_any_data_degrades_to_first() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Usage,
+        );
+        assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+        reset_for_tests();
+    }
+
+    /// glue 层：策略缺省仍为 Order（存量池零感知），显式 Usage 才走新路径。
     #[serial_test::serial(global_env)]
     #[test]
     fn strategy_defaults_to_order_when_absent() {

@@ -210,7 +210,8 @@ impl Database {
             duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
             provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
             cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy'
+            data_source TEXT NOT NULL DEFAULT 'proxy',
+            key_id TEXT
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
@@ -577,6 +578,23 @@ impl Database {
                         }
                         Self::set_user_version(conn, 20)?;
                     }
+                    20 => {
+                        // key 池 usage 策略：请求明细需要记住本次用了哪把 key，
+                        // 否则无法按 key 归属累计 token、usage 路由无数据可算。
+                        // NULL = 无池 / 未走池 / v21 前的历史行（回填不可知），
+                        // 故可空且不设默认值——存量库零感知升级。
+                        log::info!("迁移数据库从 v20 到 v21（proxy_request_logs 添加 key_id 列）");
+                        if Self::table_exists(conn, "proxy_request_logs")? {
+                            Self::add_column_if_missing(
+                                conn,
+                                "proxy_request_logs",
+                                "key_id",
+                                "TEXT",
+                            )?;
+                            Self::create_request_logs_key_id_index_if_supported(conn)?;
+                        }
+                        Self::set_user_version(conn, 21)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -774,6 +792,10 @@ impl Database {
         )?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "first_token_ms", "INTEGER")?;
         Self::add_column_if_missing(conn, "proxy_request_logs", "duration_ms", "INTEGER")?;
+        // key_id：本次请求实际使用的池 key（NULL = 无池/未走池/历史行）。
+        // usage 路由策略按它算每把 key 的真实消耗；可空保证存量库零感知。
+        Self::add_column_if_missing(conn, "proxy_request_logs", "key_id", "TEXT")?;
+        Self::create_request_logs_key_id_index_if_supported(conn)?;
 
         // model_pricing 表
         conn.execute(
@@ -3638,6 +3660,28 @@ impl Database {
         Ok(())
     }
 
+    /// `proxy_request_logs.key_id` 的查询索引。
+    ///
+    /// usage 路由策略每次选 key 都要按 (provider_id, app_type, key_id) 聚合
+    /// 近期 token 累计，没有这个索引会全表扫描。列缺失时静默跳过（老库未迁移）。
+    fn create_request_logs_key_id_index_if_supported(conn: &Connection) -> Result<(), AppError> {
+        if !Self::table_exists(conn, "proxy_request_logs")? {
+            return Ok(());
+        }
+        for column in ["key_id", "provider_id", "app_type", "created_at"] {
+            if !Self::has_column(conn, "proxy_request_logs", column)? {
+                return Ok(());
+            }
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_key_id
+             ON proxy_request_logs(provider_id, app_type, key_id, created_at)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 key_id 使用量索引失败: {e}")))?;
+        Ok(())
+    }
+
     fn validate_identifier(s: &str, kind: &str) -> Result<(), AppError> {
         if s.is_empty() {
             return Err(AppError::Database(format!("{kind} 不能为空")));
@@ -3790,6 +3834,30 @@ mod tests {
         )?;
         assert_eq!(codex_values, (1, 9));
 
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v20_to_v21_adds_request_log_key_id_column() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute(
+            "CREATE TABLE proxy_request_logs (request_id TEXT PRIMARY KEY)",
+            [],
+        )?;
+        Database::set_user_version(&conn, 20)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        assert!(Database::has_column(&conn, "proxy_request_logs", "key_id")?);
+        // 必须可空：v21 之前的历史行没有 key 归属概念，回填不可知
+        let not_null: i64 = conn.query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('proxy_request_logs')
+             WHERE name = 'key_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(not_null, 0, "key_id 必须可空（NULL = 无池/历史行）");
         Ok(())
     }
 
