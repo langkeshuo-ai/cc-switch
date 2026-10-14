@@ -51,6 +51,9 @@ import {
   ClaudeStackModelsField,
   type ClaudeStackModelRow,
 } from "./ClaudeStackModelsField";
+import { KeyPoolField } from "./KeyPoolField";
+import type { KeyPoolRow } from "./KeyPoolField";
+import type { KeyPoolStrategy } from "@/types";
 import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import type {
   ProviderCategory,
@@ -172,6 +175,12 @@ interface ClaudeFormFieldsProps {
   /** Stack 布局的模型列表（第一行是这家的默认模型）。 */
   stackModelRows?: ClaudeStackModelRow[];
   onStackModelRowsChange?: (rows: ClaudeStackModelRow[]) => void;
+  /** Key 池行（P-C / R1）。空数组时整块不渲染。 */
+  keyPoolRows?: KeyPoolRow[];
+  onKeyPoolRowsChange?: (rows: KeyPoolRow[]) => void;
+  /** Key 池路由策略。缺省 order。 */
+  keyPoolStrategy?: KeyPoolStrategy;
+  onKeyPoolStrategyChange?: (strategy: KeyPoolStrategy) => void;
 }
 
 export function ClaudeFormFields({
@@ -241,6 +250,10 @@ export function ClaudeFormFields({
   variant = "classic",
   stackModelRows = [],
   onStackModelRowsChange,
+  keyPoolRows = [],
+  onKeyPoolRowsChange,
+  keyPoolStrategy = "order",
+  onKeyPoolStrategyChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
   const hasRequestOverrides = Boolean(
@@ -936,6 +949,17 @@ export function ClaudeFormFields({
             fetchedModels={stackFetchedModels}
             onFetchModels={handleModelFetchClick}
             isFetchingModels={modelFetchLoading}
+          />
+        )}
+
+        {/* Key 池（P-C / R1）：配了才渲染——空池走单 key 路径，
+            不该在表单里多一块看不懂的东西。 */}
+        {onKeyPoolRowsChange && keyPoolRows.length > 0 && (
+          <KeyPoolField
+            rows={keyPoolRows}
+            onRowsChange={onKeyPoolRowsChange}
+            strategy={keyPoolStrategy}
+            onStrategyChange={onKeyPoolStrategyChange ?? (() => {})}
           />
         )}
 

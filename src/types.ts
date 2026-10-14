@@ -239,7 +239,25 @@ export interface ProviderMeta {
   githubAccountId?: string;
   // Stack 模式下这家 Claude Code 供应商发布的模型；没有时按模型映射发布，空列表什么都不发布
   stackModels?: ClaudeStackModel[];
+  // 多 key 池：同一 provider 多把 API key 的路由（P-C）。空数组走单 key 路径。
+  // 字段名与 serde rename 对齐（Rust 侧 key_pool → "keyPool"）。
+  keyPool?: KeyPoolEntry[];
+  // Key 池路由策略。缺省 order（存量池零感知升级）；仅 keyPool 非空时生效。
+  keyPoolStrategy?: KeyPoolStrategy;
 }
+
+// Key 池中的一把 API key（P-C / R1）。`id` 是稳定标识，供冷却与 usage 归属。
+export interface KeyPoolEntry {
+  id: string;
+  key: string;
+  label?: string;
+}
+
+// Key 池路由策略。camelCase 序列化，与 Rust 侧 KeyPoolStrategy 对齐。
+// - order: 每个请求选第一把未冷却的 key（故障转移）
+// - rotate: 每次选下一把未冷却的 key（主动分摊）
+// - usage: 选窗口内 token 累计最少的未冷却 key（按实际消耗摊平，R1）
+export type KeyPoolStrategy = "order" | "rotate" | "usage";
 
 // Stack 模式下 Claude Code 供应商发布的一个模型
 export interface ClaudeStackModel {

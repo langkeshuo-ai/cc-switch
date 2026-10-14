@@ -61,6 +61,12 @@ import {
   normalizeClaudeStackModels,
   type ClaudeStackModelRow,
 } from "./ClaudeStackModelsField";
+import {
+  createKeyPoolRow,
+  normalizeKeyPool,
+  type KeyPoolRow,
+} from "./KeyPoolField";
+import type { KeyPoolStrategy } from "@/types";
 import { setClaudeOneMMarker } from "./hooks/useModelState";
 import { useAppMode } from "@/lib/query/proxy";
 import { PiProviderForm } from "./PiProviderForm";
@@ -375,6 +381,12 @@ function ProviderFormFull({
       ),
     );
     setClaudeStackRows(initialClaudeStackRows(initialData?.meta?.stackModels));
+    setKeyPoolRows(
+      (initialData?.meta?.keyPool ?? []).map((entry) =>
+        createKeyPoolRow(entry),
+      ),
+    );
+    setKeyPoolStrategy(initialData?.meta?.keyPoolStrategy ?? "order");
   }, [appId, initialData, supportsFullUrl]);
 
   const defaultValues: ProviderFormData = useMemo(
@@ -585,6 +597,14 @@ function ProviderFormFull({
   const [claudeStackRows, setClaudeStackRows] = useState<
     ClaudeStackModelRow[] | null
   >(() => initialClaudeStackRows(initialData?.meta?.stackModels));
+  // Key 池（P-C / R1）：存 meta.keyPool + meta.keyPoolStrategy。
+  // 空池时 rows 为空数组——ClaudeFormFields 据此整块不渲染。
+  const [keyPoolRows, setKeyPoolRows] = useState<KeyPoolRow[]>(() =>
+    (initialData?.meta?.keyPool ?? []).map((entry) => createKeyPoolRow(entry)),
+  );
+  const [keyPoolStrategy, setKeyPoolStrategy] = useState<KeyPoolStrategy>(
+    () => initialData?.meta?.keyPoolStrategy ?? "order",
+  );
   // 按行里实际写的映射算（和后端一样），不用 useModelState 回填过的值。
   const claudeSettingsConfig =
     appId === "claude" ? form.watch("settingsConfig") : "";
@@ -1286,6 +1306,15 @@ function ProviderFormFull({
           ? initialData?.meta?.commonConfigEnabled
           : undefined,
       endpointAutoSelect,
+      // Key 池（P-C / R1）：normalizeKeyPool 掉空行、补 id。
+      // 空数组时不写这两个字段——与 Rust 侧 skip_serializing_if 对齐，
+      // 老库不会被塞入空的 keyPool。
+      ...(keyPoolRows.length > 0
+        ? {
+            keyPool: normalizeKeyPool(keyPoolRows),
+            keyPoolStrategy,
+          }
+        : {}),
       // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
       providerType,
       authBinding: isCopilotProvider
@@ -1670,6 +1699,10 @@ function ProviderFormFull({
               variant={useStackLayout ? "stack" : "classic"}
               stackModelRows={shownClaudeStackRows}
               onStackModelRowsChange={handleClaudeStackRowsChange}
+              keyPoolRows={keyPoolRows}
+              onKeyPoolRowsChange={setKeyPoolRows}
+              keyPoolStrategy={keyPoolStrategy}
+              onKeyPoolStrategyChange={setKeyPoolStrategy}
             />
           )}
 
