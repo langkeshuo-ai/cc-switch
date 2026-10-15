@@ -166,6 +166,7 @@ impl Database {
                         circuit_timeout_seconds: row.get::<_, i32>(9)? as u32,
                         circuit_error_rate_threshold: row.get(10)?,
                         circuit_min_requests: row.get::<_, i32>(11)? as u32,
+                        patience_enabled: true,
                     })
                 },
             )
@@ -190,6 +191,7 @@ impl Database {
                     circuit_timeout_seconds: 60,
                     circuit_error_rate_threshold: 0.6,
                     circuit_min_requests: 10,
+                    patience_enabled: true,
                 })
             }
             Err(e) => Err(AppError::Database(e.to_string())),
@@ -362,6 +364,7 @@ impl Database {
                         streaming_first_byte_timeout: row.get::<_, i32>(4).unwrap_or(60) as u64,
                         streaming_idle_timeout: row.get::<_, i32>(5).unwrap_or(120) as u64,
                         non_streaming_timeout: row.get::<_, i32>(6).unwrap_or(600) as u64,
+                        patience_enabled: true,
                     })
                 },
             )

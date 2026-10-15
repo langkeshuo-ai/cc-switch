@@ -622,6 +622,69 @@ pub fn last_used_key_and_reason(provider: &Provider) -> Option<(String, String)>
     Some((pool[idx].id.clone(), reason))
 }
 
+/// 群体耐心的判定结果（R9）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum PatienceVerdict {
+    /// 至少一把 key 活着——正常路由，不需要耐心。
+    Available,
+    /// 全冷却但都是短冷却（429 类）：等到最早解禁时刻再试值得。
+    /// `Duration` = 建议等待时长（最早解禁距今，已封顶）。
+    Wait(Duration),
+    /// 全冷却且存在长冷却（402/24h）或无池：耐心没有意义，立刻失败。
+    GiveUp,
+}
+
+/// 群体耐心单轮等待上限（R9）：比 magpie 的 240s 保守——三 CLI 个人工具，
+/// 最坏情形多等 30s 比把请求挂 4 分钟合适。
+const PATIENCE_MAX_WAIT: Duration = Duration::from_secs(30);
+
+/// 群体耐心判定（R9，含 probeOne 语义）：池全冷却时，若全部冷却都来自
+/// 「短冷却」（≤60s，即 429 类），返回最早解禁时刻的等待建议——等待期间
+/// 由调用方保活。长冷却（402 类 ≥1h）在池里说明不是瞬时拥堵，等待无意义。
+///
+/// probeOne 语义：返回的等待时长就是「最早到期那把」的解禁——调用方重试时
+/// 只会探到它（首活回落的第一把即它），与 magpie #1799 的单把探测一致。
+pub fn patience_verdict(provider: &Provider) -> PatienceVerdict {
+    let pool = pool_of(provider);
+    if pool.is_empty() {
+        return PatienceVerdict::GiveUp;
+    }
+    let cooldown = cooldown_snapshot();
+    let now = Instant::now();
+    let mut all_cooling = true;
+    let mut has_long = false;
+    let mut soonest: Option<Instant> = None;
+    for entry in pool {
+        match cooldown.get(&cooldown_key(&provider.id, &entry.id)) {
+            Some(until) if *until > now => {
+                // 冷却中。冷却时长（按 note_rate_limited 的默认值判长短）：
+                // 402 默认 1h、Retry-After clamp 后最长 24h——超过短阈值即长冷却。
+                if *until - now > Duration::from_secs(60) {
+                    has_long = true;
+                }
+                soonest = Some(soonest.map_or(*until, |s: Instant| s.min(*until)));
+            }
+            _ => {
+                all_cooling = false;
+                break;
+            }
+        }
+    }
+    if !all_cooling {
+        return PatienceVerdict::Available;
+    }
+    if has_long {
+        return PatienceVerdict::GiveUp;
+    }
+    match soonest {
+        Some(until) => {
+            let wait = until.saturating_duration_since(now);
+            PatienceVerdict::Wait(wait.min(PATIENCE_MAX_WAIT))
+        }
+        None => PatienceVerdict::GiveUp,
+    }
+}
+
 /// 上游限流/欠费反馈：对该 provider 上次请求实际使用的池 key 记冷却。
 ///
 /// `retry_after` 是上游 `Retry-After` 头解析出的时长（见 [`parse_retry_after`]）：
@@ -1535,6 +1598,69 @@ mod tests {
         let sel = select_for_provider(&provider).unwrap();
         assert_eq!(sel.key_id, "b", "a 冷却中，亲和让位给约束");
         reset_for_tests();
+    }
+
+    // ── R9: 群体耐心（含 probeOne 语义） ─────────────────────────────
+
+    /// 池有活 key → Available（不需要耐心）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn patience_available_when_any_key_live() {
+        reset_for_tests();
+        let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
+        note_rate_limited(&provider, 429, None); // a 冷却 60s，b 活着
+        assert_eq!(patience_verdict(&provider), PatienceVerdict::Available);
+        reset_for_tests();
+    }
+
+    /// 全冷却且都是短冷却（≤60s）→ Wait(最早解禁)。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn patience_waits_when_all_short_cooled() {
+        reset_for_tests();
+        let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
+        note_rate_limited(&provider, 429, None);
+        // 把 b 也手动拨进短冷却
+        {
+            let mut guard = registry().lock().unwrap();
+            guard.insert(
+                cooldown_key("p1", "b"),
+                Instant::now() + Duration::from_secs(30),
+            );
+        }
+        match patience_verdict(&provider) {
+            PatienceVerdict::Wait(d) => {
+                assert!(d <= Duration::from_secs(30), "等待应封顶 30s: {d:?}");
+                assert!(d <= Duration::from_secs(31), "最早解禁的 b 是 30s: {d:?}");
+            }
+            other => panic!("应判 Wait，实际 {other:?}"),
+        }
+        reset_for_tests();
+    }
+
+    /// 存在长冷却（402 类）→ GiveUp：不是瞬时拥堵，等待无意义。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn patience_gives_up_on_long_cooldown() {
+        reset_for_tests();
+        let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
+        note_rate_limited(&provider, 402, None); // 1h 长冷却
+        {
+            let mut guard = registry().lock().unwrap();
+            guard.insert(
+                cooldown_key("p1", "b"),
+                Instant::now() + Duration::from_secs(30),
+            );
+        }
+        assert_eq!(patience_verdict(&provider), PatienceVerdict::GiveUp);
+        reset_for_tests();
+    }
+
+    /// 无池 → GiveUp。
+    #[test]
+    fn patience_gives_up_without_pool() {
+        let provider = make_provider("p1", None);
+        assert_eq!(patience_verdict(&provider), PatienceVerdict::GiveUp);
     }
 
     /// 无亲和记录 / session 未登记 → 完全走原策略（存量行为零变化）。

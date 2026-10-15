@@ -22,6 +22,10 @@ pub struct ProxyConfig {
     /// 非流式总超时（秒）- 非流式请求的总超时时间，范围 60-1200 秒，默认 600 秒（10 分钟）
     #[serde(default = "default_non_streaming_timeout")]
     pub non_streaming_timeout: u64,
+    /// R9 群体耐心：池全冷却且均为短冷却（429 类）时等一轮（≤30s）再探一次，
+    /// 而不是立刻失败。默认开启；关掉则维持「全冷却回落第一把撞一次」的原行为。
+    #[serde(default = "default_true")]
+    pub patience_enabled: bool,
 }
 
 fn default_streaming_first_byte_timeout() -> u64 {
@@ -47,6 +51,7 @@ impl Default for ProxyConfig {
             streaming_first_byte_timeout: 60,
             streaming_idle_timeout: 120,
             non_streaming_timeout: 600,
+            patience_enabled: true,
         }
     }
 }
@@ -176,6 +181,9 @@ pub struct AppProxyConfig {
     pub circuit_error_rate_threshold: f64,
     /// 计算错误率的最小请求数
     pub circuit_min_requests: u32,
+    /// R9 群体耐心：池全冷却且均为短冷却时等一轮（≤30s）再探一次。缺省 true。
+    #[serde(default = "default_true")]
+    pub patience_enabled: bool,
 }
 
 /// 整流器配置

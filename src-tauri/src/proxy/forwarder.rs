@@ -373,6 +373,8 @@ pub struct RequestForwarder {
     /// Stack 模型的请求（`mode::stack`）：挂在结构体上，整流器重试再次调用 `forward()` 时照样
     /// 生效。见 [`Self::routing_state_enabled`]。
     stack_request: bool,
+    /// R9 群体耐心开关（ProxyConfig 传入）
+    patience_enabled: bool,
 }
 
 impl RequestForwarder {
@@ -464,6 +466,7 @@ impl RequestForwarder {
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
         max_retries: u32,
+        patience_enabled: bool,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
         // saturating_add 防止 u32::MAX + 1 溢出。
@@ -487,6 +490,7 @@ impl RequestForwarder {
                 streaming_first_byte_timeout,
             ),
             max_attempts,
+            patience_enabled,
             stack_request: false,
         }
     }
@@ -1357,6 +1361,58 @@ impl RequestForwarder {
                 error: ProxyError::NoAvailableProvider,
                 provider: None,
             });
+        }
+
+        // R9 群体耐心：最后一个供应商的失败是「池全冷却且都是短冷却」时，
+        // 请求不立刻失败——按最早解禁时刻等一轮（上限 30s），重选一次。
+        // probeOne 语义：等的就是最早到期那把，重试探到它，答案信息量最大。
+        // 硬失败（401/402/内容拒绝）走 NonRetryable 早退，到不了这里。
+        if self.patience_enabled {
+            if let Some(last_provider) = last_provider.as_ref() {
+                if let super::key_pool::PatienceVerdict::Wait(wait) =
+                    super::key_pool::patience_verdict(last_provider)
+                {
+                    log::info!(
+                        "[{app_type_str}] [Patience] 池全冷却且均为短冷却，等待 {wait:?} 后重试一次（最早解禁的 key）"
+                    );
+                    tokio::time::sleep(wait).await;
+                    if let Some(provider) = providers.first() {
+                        let mut attempted_codex_upstream_format = None;
+                        match self
+                            .forward(
+                                app_type,
+                                &method,
+                                provider,
+                                endpoint,
+                                &body,
+                                &headers,
+                                &extensions,
+                                adapter.as_ref(),
+                                &mut attempted_codex_upstream_format,
+                            )
+                            .await
+                        {
+                            Ok(forwarded) => {
+                                return Ok(self
+                                    .finish_success(
+                                        provider,
+                                        app_type_str,
+                                        false,
+                                        forwarded,
+                                        attempted_codex_upstream_format,
+                                    )
+                                    .await);
+                            }
+                            Err(retry_err) => {
+                                log::warn!(
+                                    "[{app_type_str}] [Patience] 耐心重试仍失败: {retry_err}"
+                                );
+                                last_error = Some(retry_err);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 所有供应商都失败了
@@ -4737,6 +4793,7 @@ mod tests {
             streaming_first_byte_timeout,
             max_attempts: 1,
             stack_request: false,
+            patience_enabled: true,
         }
     }
 

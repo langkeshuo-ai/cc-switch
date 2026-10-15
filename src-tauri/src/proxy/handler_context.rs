@@ -277,6 +277,8 @@ impl RequestContext {
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
             max_retries,
+            // R9 群体耐心开关：跟随应用级 ProxyConfig（缺省 true）
+            self.app_config.patience_enabled,
         )
         .stack_request(self.is_stack)
     }
