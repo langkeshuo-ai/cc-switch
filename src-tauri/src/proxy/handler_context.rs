@@ -187,6 +187,9 @@ impl RequestContext {
                         })?
                 };
 
+                // R12 会话亲和性：池 key 粒度的亲和不存在 provider 亲和——但
+                // provider 级排序不动（failover 队列语义）。key 级亲和在
+                // forwarder 的 key_pool 选择里生效（key_pool 读 affinity）。
                 let provider = providers
                     .first()
                     .cloned()

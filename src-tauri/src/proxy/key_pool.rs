@@ -304,6 +304,9 @@ pub fn reset_for_tests() {
     if let Ok(mut guard) = upstream_pressure().lock() {
         guard.clear();
     }
+    if let Ok(mut guard) = AFFINITY_SESSION.lock() {
+        *guard = None;
+    }
 }
 
 fn is_live(
@@ -424,6 +427,61 @@ pub fn pool_of(provider: &Provider) -> &[KeyPoolEntry] {
         .unwrap_or(&[])
 }
 
+/// 本请求的 session id 槽：forwarder（每请求一个实例）在开始时设置。
+/// RequestForwarder 不是跨请求复用的，set-once 语义由调用方保证。
+static AFFINITY_SESSION: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+
+/// forwarder 在请求开始时登记本请求的 session_id（R12）。
+pub fn set_affinity_session(session_id: Option<String>) {
+    if let Ok(mut guard) = AFFINITY_SESSION.lock() {
+        *guard = session_id;
+    }
+}
+
+fn current_affinity_session() -> Option<String> {
+    AFFINITY_SESSION.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// 亲和选择：session 有既往 key、该 key 在池里且活着 → 返回它（R12）。
+///
+/// 亲和只在「key 活着」时生效——冷却/限额/压力等软硬约束照样把它挡掉，
+/// 那说明这把 key 现在不能用，缓存损失是约束的代价而非亲和失效。
+fn select_affinity_if_live(
+    pool: &[KeyPoolEntry],
+    provider: &Provider,
+    session_id: Option<&str>,
+) -> Option<KeySelection> {
+    let session_id = session_id?;
+    let key_id = crate::proxy::session_affinity::SessionAffinity::global().get(session_id)?;
+    let idx = pool.iter().position(|entry| entry.id == key_id)?;
+    let cooldown = cooldown_snapshot();
+    let now = Instant::now();
+    if !is_live(pool, &cooldown, &provider.id, idx, now) {
+        return None; // 既往 key 被约束挡住：回落正常策略
+    }
+    log::debug!(
+        "[KeyPool] provider `{}` session 亲和粘住 key `{key_id}`",
+        provider.id
+    );
+    let entry = &pool[idx];
+    Some(KeySelection {
+        key: entry.key.clone(),
+        key_id: entry.id.clone(),
+        reason: format!("affinity:会话粘住[{key_id}]"),
+    })
+}
+
+/// 请求成功后把 session -> key_id 写进亲和表（R12）。
+///
+/// 由 forwarder 收尾处调用；session_id 为空（客户端没提供）时不记——
+/// 生成的临时 id 跨请求不稳定，记了也是死条目。
+pub fn record_affinity(session_id: &str, key_id: &str) {
+    if session_id.is_empty() || key_id.is_empty() {
+        return;
+    }
+    crate::proxy::session_affinity::SessionAffinity::global().put(session_id, key_id);
+}
+
 /// usage 选择：未冷却的 key 里选 token 累计最少的；并列取更靠前的。
 ///
 /// 纯函数（usage 表由调用方注入，与 `cooldown`/`now` 同一风格），便于测试。
@@ -470,6 +528,12 @@ pub fn select_usage(
 /// 本函数不持有数据库句柄——与 order/rotate 的实现同构。
 pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
     let pool = pool_of(provider);
+    // R12 会话亲和性：forwarder 在本请求开始时经 [`set_affinity_session`]
+    // 登记了 session_id，亲和表里记着既往 key 且该 key 仍活着 → 直接粘住。
+    let session_id = current_affinity_session();
+    if let Some(sel) = select_affinity_if_live(pool, provider, session_id.as_deref()) {
+        return Some(sel);
+    }
     let strategy = provider
         .meta
         .as_ref()
@@ -1433,6 +1497,58 @@ mod tests {
             KeyPoolStrategy::Usage,
         );
         note_upstream_pressure("p1", "a", 89);
+        assert_eq!(select_for_provider(&provider).unwrap().key_id, "a");
+        reset_for_tests();
+    }
+
+    // ── R12: 会话亲和性落盘 ──────────────────────────────────────────
+
+    /// 记了亲和 → 同 session 粘回同 key（绕过策略计算）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn affinity_sticks_session_to_last_key() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Rotate, // rotate 会轮到 b；亲和必须压过它
+        );
+        record_affinity("sess-1", "a");
+        set_affinity_session(Some("sess-1".to_string()));
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "a", "亲和应粘住 a，即使 rotate 想轮到 b");
+        assert!(sel.reason.contains("affinity"), "{}", sel.reason);
+        reset_for_tests();
+    }
+
+    /// 既往 key 被冷却 → 亲和失效，回落正常策略。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn affinity_yields_to_cooldown() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Order,
+        );
+        record_affinity("sess-2", "a");
+        note_rate_limited(&provider, 429, None); // a 进冷却
+        set_affinity_session(Some("sess-2".to_string()));
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "a 冷却中，亲和让位给约束");
+        reset_for_tests();
+    }
+
+    /// 无亲和记录 / session 未登记 → 完全走原策略（存量行为零变化）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn affinity_absent_falls_through_to_strategy() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Order,
+        );
+        set_affinity_session(Some("sess-never-seen".to_string()));
+        assert_eq!(select_for_provider(&provider).unwrap().key_id, "a");
+        set_affinity_session(None);
         assert_eq!(select_for_provider(&provider).unwrap().key_id, "a");
         reset_for_tests();
     }

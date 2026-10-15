@@ -619,6 +619,14 @@ impl RequestForwarder {
         ),
         codex_upstream_format: Option<CodexUpstreamFormat>,
     ) -> ForwardResult {
+        // R12 会话亲和性：客户端提供过 session_id 且走了池 key 时记录归属，
+        // 重启后同会话仍粘回同 key（保 vendor prompt cache）。
+        if self.session_client_provided {
+            let key_id = super::key_pool::last_used_key_and_reason(provider)
+                .map(|(id, _)| id)
+                .unwrap_or_default();
+            super::key_pool::record_affinity(&self.session_id, &key_id);
+        }
         let result = ForwardResult {
             response,
             provider: provider.clone(),
@@ -786,6 +794,11 @@ impl RequestForwarder {
         extensions: Extensions,
         providers: Vec<Provider>,
     ) -> Result<ForwardResult, ForwardError> {
+        // R12 会话亲和性：把本请求的 session_id 交给 key_pool（每请求实例，set-once）。
+        super::key_pool::set_affinity_session(
+            self.session_client_provided
+                .then_some(self.session_id.clone()),
+        );
         // 获取适配器
         let adapter = get_adapter(app_type).ok_or_else(|| ForwardError {
             error: ProxyError::ConfigError(format!(
