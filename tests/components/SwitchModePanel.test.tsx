@@ -121,8 +121,18 @@ describe("SwitchModePanel — Stack mode", () => {
         HttpResponse.json({
           active: true,
           members: [
-            { providerId: "route", modelIds: ["m-route"], route: true },
-            { providerId: "kimi", modelIds: ["m-kimi"], route: false },
+            {
+              providerId: "route",
+              modelIds: ["m-route"],
+              route: true,
+              memberModels: 1,
+            },
+            {
+              providerId: "kimi",
+              modelIds: ["m-kimi"],
+              route: false,
+              memberModels: 1,
+            },
           ],
         }),
       ),
@@ -156,7 +166,14 @@ describe("SwitchModePanel — Stack mode", () => {
       http.post(`${TAURI_ENDPOINT}/get_proxy_stack`, () =>
         HttpResponse.json({
           active: true,
-          members: [{ providerId: "route", modelIds: [], route: true }],
+          members: [
+            {
+              providerId: "route",
+              modelIds: [],
+              route: true,
+              memberModels: 0,
+            },
+          ],
           notice: "officialModelsUnavailable",
           noticeReasons: ["loginStale", "noCli"],
         }),
@@ -180,7 +197,14 @@ describe("SwitchModePanel — Stack mode", () => {
       http.post(`${TAURI_ENDPOINT}/get_proxy_stack`, () =>
         HttpResponse.json({
           active,
-          members: [{ providerId: "route", modelIds: [], route: true }],
+          members: [
+            {
+              providerId: "route",
+              modelIds: [],
+              route: true,
+              memberModels: 0,
+            },
+          ],
           staleClients: { daemon: true, others: false },
         }),
       );
@@ -384,8 +408,18 @@ describe("SwitchModePanel — mode layer", () => {
         HttpResponse.json({
           active: true,
           members: [
-            { providerId: "route", modelIds: ["m-route"], route: true },
-            { providerId: "kimi", modelIds: ["m-kimi"], route: false },
+            {
+              providerId: "route",
+              modelIds: ["m-route"],
+              route: true,
+              memberModels: 1,
+            },
+            {
+              providerId: "kimi",
+              modelIds: ["m-kimi"],
+              route: false,
+              memberModels: 1,
+            },
           ],
         }),
       ),
