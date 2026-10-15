@@ -1,0 +1,33 @@
+{
+  "version": "4.0.7",
+  "items": [
+    {
+      "type": "new",
+      "zh": "Key 池：多 key 路由 + 单 key 限额，超限自动让路",
+      "zh-TW": "Key 池：多 key 路由 + 單 key 限額，超限自動讓路",
+      "en": "Key pool: multi-key routing with per-key limits",
+      "ja": "Key プール：複数 key ルーティング＋key ごとの上限"
+    },
+    {
+      "type": "new",
+      "zh": "限流头回读避热 key；短冷却时群体耐心稍等再试",
+      "zh-TW": "限流頭回讀避熱 key；短冷卻時群體耐心稍等再試",
+      "en": "Reads rate-limit headers; patience when cooling",
+      "ja": "レート制限ヘッダで回避、冷却時は少し待って再試行"
+    },
+    {
+      "type": "new",
+      "zh": "会话亲和落盘：重启后仍用同 key，保住提示词缓存",
+      "zh-TW": "會話親和落盤：重啟後仍用同 key，保住提示詞快取",
+      "en": "Session affinity on disk keeps prompt cache warm",
+      "ja": "セッション親和性を保存、再起動後もキャッシュを維持"
+    },
+    {
+      "type": "new",
+      "zh": "路由决策留痕、卡片冷却倒计时、USD/CNY 计价",
+      "zh-TW": "路由決策留痕、卡片冷卻倒計時、USD/CNY 計價",
+      "en": "Routing trace, cooldown badges, USD/CNY pricing",
+      "ja": "ルーティング記録、冷却カウントダウン、USD/CNY 表示"
+    }
+  ]
+}
