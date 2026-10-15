@@ -1014,6 +1014,154 @@ mod tests {
         key_pool::reset_for_tests();
     }
 
+    /// R8 端到端：上游成功响应带 95% 压力头 → 下一请求应避开该 key（软冷却）。
+    #[tokio::test]
+    #[serial_test::serial(global_env)]
+    async fn key_pool_upstream_pressure_header_avoids_hot_key() {
+        use crate::proxy::key_pool::{self, KeyPoolEntry};
+
+        key_pool::reset_for_tests();
+
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mock_app = Router::new().route(
+            "/v1/messages",
+            post({
+                let seen = seen.clone();
+                move |request: axum::extract::Request| {
+                    let seen = seen.clone();
+                    async move {
+                        let (parts, _body) = request.into_parts();
+                        let auth = parts
+                            .headers
+                            .get(header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string();
+                        seen.lock().await.push(auth.clone());
+                        let mut headers = HeaderMap::new();
+                        headers.insert(
+                            header::CONTENT_TYPE,
+                            "application/json".parse().expect("content type"),
+                        );
+                        // a 的成功响应报 95% 已用——R8 应让下一请求避开 a
+                        if auth == "Bearer sk-pool-a" {
+                            headers.insert(
+                                "x-codex-primary-used-percent",
+                                "95".parse().expect("pressure header"),
+                            );
+                        }
+                        (
+                            StatusCode::OK,
+                            headers,
+                            r#"{"id":"msg_r8","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"claude-pool-test","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                        )
+                    }
+                }
+            }),
+        );
+        let mock_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock upstream");
+        let mock_addr = mock_listener.local_addr().expect("mock upstream address");
+        let mock_handle = tokio::spawn(async move {
+            axum::serve(mock_listener, mock_app)
+                .await
+                .expect("serve mock upstream");
+        });
+
+        let db = Arc::new(Database::memory().expect("in-memory db"));
+        let provider = Provider {
+            id: "pooled-claude".to_string(),
+            name: "Pooled Claude".to_string(),
+            settings_config: serde_json::json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": format!("http://{mock_addr}"),
+                    "ANTHROPIC_AUTH_TOKEN": "unused"
+                }
+            }),
+            website_url: None,
+            category: Some("claude".to_string()),
+            created_at: None,
+            sort_index: None,
+            notes: None,
+            meta: Some(ProviderMeta {
+                key_pool: vec![
+                    KeyPoolEntry {
+                        id: "a".to_string(),
+                        key: "sk-pool-a".to_string(),
+                        label: None,
+                        daily_limit_usd: None,
+                    },
+                    KeyPoolEntry {
+                        id: "b".to_string(),
+                        key: "sk-pool-b".to_string(),
+                        label: None,
+                        daily_limit_usd: None,
+                    },
+                ],
+                // order：无 usage/限额干扰，压力软冷却是唯一变量
+                key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Order),
+                ..Default::default()
+            }),
+            icon: None,
+            icon_color: None,
+            in_failover_queue: false,
+        };
+        db.save_provider("claude", &provider)
+            .expect("save test provider");
+        db.set_current_provider("claude", &provider.id)
+            .expect("select test provider");
+
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_port: 0,
+                enable_logging: true,
+                non_streaming_timeout: 10,
+                ..ProxyConfig::default()
+            },
+            db.clone(),
+            None,
+        );
+        let proxy_info = proxy.start().await.expect("start test proxy");
+        let client = crate::proxy::test_support::local_client();
+        let url = format!("http://127.0.0.1:{}/v1/messages", proxy_info.port);
+        let body = json!({
+            "model": "claude-pool-test",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+
+        // 请求 1：order 起手选 a，200 + 95% 压力头
+        let first = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("first pressure request");
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // 请求 2：a 因压力头被软冷却 → 应选 b
+        let second = client
+            .post(&url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("second pressure request");
+        assert_eq!(second.status(), StatusCode::OK);
+
+        assert_eq!(
+            seen.lock().await.as_slice(),
+            ["Bearer sk-pool-a", "Bearer sk-pool-b"],
+            "R8：压力头 95% 应让下一请求避开 a 改用 b"
+        );
+
+        proxy.stop().await.expect("stop test proxy");
+        mock_handle.abort();
+        key_pool::reset_for_tests();
+    }
+
     /// P-C2 端到端：key 池 rotate 策略——连续三个请求应按 a → b → a 轮转。
     #[tokio::test]
     #[serial_test::serial(global_env)]

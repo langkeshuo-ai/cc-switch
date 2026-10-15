@@ -2767,6 +2767,15 @@ impl RequestForwarder {
         // 检查响应状态
         let status = response.status();
 
+        // R8：上游限流头回读——成功与 429 的头都带压力信号。必须在 response 被
+        // 消费（bytes_with_limit / prime_streaming）之前读头。
+        if let Some(used_pct) = super::key_pool::parse_upstream_pressure(response.headers()) {
+            let key_id = super::key_pool::last_used_key_and_reason(provider)
+                .map(|(id, _)| id)
+                .unwrap_or_default();
+            super::key_pool::note_upstream_pressure(&provider.id, &key_id, used_pct);
+        }
+
         if status.is_success() {
             let mut response = self
                 .prepare_success_response_for_failover(response, request_is_streaming)

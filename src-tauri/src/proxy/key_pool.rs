@@ -168,6 +168,74 @@ pub fn record_daily_cost(provider_id: &str, key_id: &str, cost_usd: f64) {
     }
 }
 
+/// 进程级上游限流压力表（R8）：`provider_id::key_id` -> 上游报告的已用百分比（0-100）。
+///
+/// 来自上游响应头（`x-codex-primary-used-percent` / `anthropic-ratelimit-*` 等）。
+/// 让冷却机制从「被动 429 反馈」升级为「主动预判」：≥ [`PRESSURE_AVOID_PCT`]
+/// 的 key 在路由时视作软冷却，提前避开限流。无头/无数据 = 无影响。
+fn upstream_pressure() -> &'static Mutex<HashMap<String, u8>> {
+    static PRESSURE: LazyLock<Mutex<HashMap<String, u8>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &PRESSURE
+}
+
+/// 软冷却阈值：上游报已用 ≥ 90% 时路由提前避开。
+const PRESSURE_AVOID_PCT: u8 = 90;
+
+/// 记录上游限流头报告的已用百分比（R8）。
+///
+/// forwarder 收到上游响应头时调用（成功与 429 都算——429 的头往往带着更准的余量）。
+/// 值截到 0-100；解析失败静默忽略（各厂头名不统一，未知头本来就不传进来）。
+pub fn note_upstream_pressure(provider_id: &str, key_id: &str, used_pct: u8) {
+    if key_id.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = upstream_pressure().lock() {
+        guard.insert(cooldown_key(provider_id, key_id), used_pct.min(100));
+    }
+}
+
+/// 从上游响应头提取已用百分比（R8）。
+///
+/// 已知头（按优先级）：
+/// - `x-codex-primary-used-percent`（ChatGPT backend，Codex 0.160.1 RateLimitEvent 同源）
+/// - `anthropic-ratelimit-unified-5h-utilization`（Anthropic unified 限流头的百分比）
+/// - `x-ratelimit-remaining-requests` + `x-ratelimit-limit-requests`（OpenAI 风格，算余量）
+pub fn parse_upstream_pressure(headers: &http::HeaderMap) -> Option<u8> {
+    if let Some(v) = headers
+        .get("x-codex-primary-used-percent")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+    {
+        return Some(v.clamp(0.0, 100.0) as u8);
+    }
+    if let Some(v) = headers
+        .get("anthropic-ratelimit-unified-5h-utilization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+    {
+        // Anthropic 的 utilization 是 0-1 小数（0.95 = 95%）；>1 的值按百分数容错
+        let pct = if v <= 1.0 { v * 100.0 } else { v };
+        return Some(pct.clamp(0.0, 100.0) as u8);
+    }
+    // OpenAI 风格：remaining/limit → 已用百分比
+    let remaining = headers
+        .get("x-ratelimit-remaining-requests")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok());
+    let limit = headers
+        .get("x-ratelimit-limit-requests")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<f64>().ok());
+    if let (Some(remaining), Some(limit)) = (remaining, limit) {
+        if limit > 0.0 {
+            let used = ((limit - remaining) / limit * 100.0).clamp(0.0, 100.0);
+            return Some(used as u8);
+        }
+    }
+    None
+}
+
 /// 某把 key 今日已花是否达到其日限额（N2）。
 ///
 /// 未设限额 / 解析失败（非法数字视作未设，不静默把 key 锁死）→ false。
@@ -233,6 +301,9 @@ pub fn reset_for_tests() {
     if let Ok(mut guard) = daily_cost_totals().lock() {
         guard.clear();
     }
+    if let Ok(mut guard) = upstream_pressure().lock() {
+        guard.clear();
+    }
 }
 
 fn is_live(
@@ -251,7 +322,27 @@ fn is_live(
     // N2 软限制：达到日限额的 key 视同冷却（走同一条跳过路径）。
     // 全部超限时各 select 的「回落第一把」兜底仍然生效——宁可让超限 key
     // 再打一次（上游会 429 反馈），也不让请求无 key 可用。
-    !over_daily_limit(&pool[idx], provider_id)
+    if over_daily_limit(&pool[idx], provider_id) {
+        return false;
+    }
+    // R8 上游压力：≥90% 已用的 key 提前避开（同一软冷却路径）。
+    if is_under_pressure(pool, provider_id, idx) {
+        return false;
+    }
+    true
+}
+
+/// R8：该 key 的上游报告压力是否达到避开阈值。
+fn is_under_pressure(pool: &[KeyPoolEntry], provider_id: &str, idx: usize) -> bool {
+    upstream_pressure()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .get(&cooldown_key(provider_id, &pool[idx].id))
+                .copied()
+        })
+        .is_some_and(|pct| pct >= PRESSURE_AVOID_PCT)
 }
 
 /// order 选择：池中第一把未冷却的 key。
@@ -1241,6 +1332,108 @@ mod tests {
             "a",
             "跨天后 a 的当日成本归零，恢复可用"
         );
+        reset_for_tests();
+    }
+
+    // ── R8: 上游限流头回读（软冷却阈值 90%） ─────────────────────────
+
+    fn header_map(pairs: &[(&str, &str)]) -> http::HeaderMap {
+        let mut map = http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        map
+    }
+
+    /// 类别①：x-codex-primary-used-percent（含可选 % 后缀）。
+    #[test]
+    fn parse_upstream_pressure_codex_header() {
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[("x-codex-primary-used-percent", "93")])),
+            Some(93)
+        );
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[("x-codex-primary-used-percent", "42.7%")])),
+            Some(42)
+        );
+        // 越界截到 0-100
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[("x-codex-primary-used-percent", "150")])),
+            Some(100)
+        );
+    }
+
+    /// 类别②：Anthropic unified 利用率头。
+    #[test]
+    fn parse_upstream_pressure_anthropic_header() {
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[(
+                "anthropic-ratelimit-unified-5h-utilization",
+                "0.95"
+            )])),
+            Some(95)
+        );
+    }
+
+    /// 类别③：OpenAI 风格 remaining/limit 换算已用百分比。
+    #[test]
+    fn parse_upstream_pressure_openai_pair() {
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[
+                ("x-ratelimit-remaining-requests", "2"),
+                ("x-ratelimit-limit-requests", "20"),
+            ])),
+            Some(90)
+        );
+    }
+
+    /// 类别④：无已知头 / 畸形值 → None，不 panic。
+    #[test]
+    fn parse_upstream_pressure_absent_or_malformed() {
+        assert_eq!(parse_upstream_pressure(&header_map(&[])), None);
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[("x-codex-primary-used-percent", "abc")])),
+            None
+        );
+        // limit 为 0 时除法保护
+        assert_eq!(
+            parse_upstream_pressure(&header_map(&[
+                ("x-ratelimit-remaining-requests", "1"),
+                ("x-ratelimit-limit-requests", "0"),
+            ])),
+            None
+        );
+    }
+
+    /// 软冷却行为：≥90% 的 key 被路由避开，另一把接手。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn upstream_pressure_avoids_hot_key() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Usage,
+        );
+        note_upstream_pressure("p1", "a", 90);
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "a 已达 90% 压力，应避开选 b");
+        reset_for_tests();
+    }
+
+    /// 低于阈值不影响；无数据的 key 不受影响。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn upstream_pressure_below_threshold_is_ignored() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Usage,
+        );
+        note_upstream_pressure("p1", "a", 89);
+        assert_eq!(select_for_provider(&provider).unwrap().key_id, "a");
         reset_for_tests();
     }
 }
