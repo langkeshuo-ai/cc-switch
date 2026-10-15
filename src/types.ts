@@ -446,6 +446,9 @@ export interface Settings {
   commonConfigConfirmed?: boolean;
   // 首选语言（可选，默认中文）
   language?: "en" | "zh" | "zh-TW" | "ja";
+  // 计价展示货币（R3）。仅展示层：不改变存储与计算，只影响用量页 / 限额输入 /
+  // 供应商卡片上渲染的货币符号。缺省 "USD"——自定义价格数字按原语义视为美元。
+  displayCurrency?: "USD" | "CNY";
 
   // 主页面显示的应用（默认全部显示）
   visibleApps?: VisibleApps;

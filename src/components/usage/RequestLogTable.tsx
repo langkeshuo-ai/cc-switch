@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRequestLogs } from "@/lib/query/usage";
+import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { TablePagination } from "./TablePagination";
 import { HelpTip } from "@/components/ui/help-tip";
 import { AppGlyph, APP_DISPLAY_NAME } from "@/components/shell/AppGlyph";
@@ -103,6 +104,7 @@ export function RequestLogTable({
   onOpenDetail,
 }: RequestLogTableProps) {
   const { t, i18n } = useTranslation();
+  const { symbol: currencySymbolStr } = useDisplayCurrency();
   const [page, setPage] = useState(0);
   const pageSize = 20;
 
@@ -298,7 +300,9 @@ export function RequestLogTable({
               : undefined
           }
         >
-          {unpriced ? t("usage.unpriced") : fmtUsd(log.totalCostUsd, 4)}
+          {unpriced
+            ? t("usage.unpriced")
+            : fmtUsd(log.totalCostUsd, 4, "--", currencySymbolStr)}
         </td>
         <td
           className={cn(usageTable.tdEnd, tps == null && usageTable.muted)}

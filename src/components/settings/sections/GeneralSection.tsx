@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Monitor, Moon, Sun } from "lucide-react";
 import type { SettingsFormState } from "@/hooks/useSettings";
+import type { DisplayCurrency } from "@/components/usage/format";
 import { useTheme } from "@/components/theme-provider";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import {
@@ -68,6 +69,34 @@ export function GeneralSection({
                       {t(language.labelKey)}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            }
+          />
+          <SettingsRow
+            label={t("settings.displayCurrency", {
+              defaultValue: "计价展示货币",
+            })}
+            control={
+              <Select
+                value={settings.displayCurrency ?? "USD"}
+                onValueChange={(value) =>
+                  void onAutoSave({
+                    displayCurrency: value as DisplayCurrency,
+                  })
+                }
+              >
+                <SelectTrigger
+                  className="h-8 w-[160px]"
+                  aria-label={t("settings.displayCurrency", {
+                    defaultValue: "计价展示货币",
+                  })}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD ($)</SelectItem>
+                  <SelectItem value="CNY">CNY (¥)</SelectItem>
                 </SelectContent>
               </Select>
             }

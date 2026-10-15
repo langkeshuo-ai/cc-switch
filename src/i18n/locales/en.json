@@ -445,6 +445,7 @@
       }
     },
     "language": "Language",
+    "displayCurrency": "Pricing currency",
     "languageHint": "Preview interface language immediately after switching, takes effect permanently after saving.",
     "theme": "Light & dark",
     "themeHint": "Choose the appearance theme for the app, takes effect immediately.",

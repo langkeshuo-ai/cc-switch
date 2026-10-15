@@ -445,6 +445,7 @@
       }
     },
     "language": "界面语言",
+    "displayCurrency": "计价展示货币",
     "languageHint": "切换后立即预览界面语言，保存后永久生效。",
     "theme": "明暗",
     "themeHint": "选择应用的外观主题，立即生效。",

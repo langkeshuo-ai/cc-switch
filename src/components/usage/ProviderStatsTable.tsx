@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderStats } from "@/lib/query/usage";
+import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { TablePagination, useClientPagination } from "./TablePagination";
 import { cn } from "@/lib/utils";
 import {
@@ -32,6 +33,7 @@ export function ProviderStatsTable({
 }: ProviderStatsTableProps) {
   const { t, i18n } = useTranslation();
   const locale = getLocaleFromLanguage(getResolvedLang(i18n));
+  const { symbol: currencySymbolStr } = useDisplayCurrency();
   const { data: stats, isLoading } = useProviderStats(
     range,
     { appType, providerName, model },
@@ -104,9 +106,9 @@ export function ProviderStatsTable({
                     </td>
                     <td
                       className={cn(usageTable.tdEnd, "font-medium")}
-                      title={fmtUsd(stat.totalCost, 6)}
+                      title={fmtUsd(stat.totalCost, 6, "--", currencySymbolStr)}
                     >
-                      {fmtUsd(stat.totalCost, 2)}
+                      {fmtUsd(stat.totalCost, 2, "--", currencySymbolStr)}
                     </td>
                     <SuccessSpeedCells stat={stat} />
                   </tr>

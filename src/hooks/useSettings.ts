@@ -11,6 +11,7 @@ import {
 } from "@/lib/query";
 import type { Settings } from "@/types";
 import { useSettingsForm, type SettingsFormState } from "./useSettingsForm";
+import { persistDisplayCurrency } from "./useDisplayCurrency";
 import {
   useDirectorySettings,
   type DirectoryAppId,
@@ -278,6 +279,19 @@ export function useSettings(): UseSettingsResult {
           );
         }
 
+        // 镜像计价展示货币到 localStorage：用量页图表读它而不是 settings
+        // query（那些组件会被无 QueryClientProvider 的测试直接渲染）
+        try {
+          if (typeof window !== "undefined") {
+            persistDisplayCurrency(payload.displayCurrency);
+          }
+        } catch (error) {
+          console.warn(
+            "[useSettings] Failed to persist display currency",
+            error,
+          );
+        }
+
         // 更新托盘菜单
         try {
           await providersApi.updateTrayMenu();
@@ -400,6 +414,18 @@ export function useSettings(): UseSettingsResult {
         } catch (error) {
           console.warn(
             "[useSettings] Failed to persist language preference",
+            error,
+          );
+        }
+
+        // 镜像计价展示货币（同 autoSave 的理由）
+        try {
+          if (typeof window !== "undefined") {
+            persistDisplayCurrency(payload.displayCurrency);
+          }
+        } catch (error) {
+          console.warn(
+            "[useSettings] Failed to persist display currency",
             error,
           );
         }

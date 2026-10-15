@@ -21,14 +21,25 @@ export function fmtInt(
   return new Intl.NumberFormat(locale).format(Math.trunc(num));
 }
 
+/** 计价展示货币（R3）。仅影响渲染的符号，存储与计算仍是原始数字。 */
+export type DisplayCurrency = "USD" | "CNY";
+
+export const DEFAULT_DISPLAY_CURRENCY: DisplayCurrency = "USD";
+
+/** 货币符号。CNY 用全角人民币符号，避免与美元的半角 $ 混淆。 */
+export function currencySymbol(currency: DisplayCurrency): string {
+  return currency === "CNY" ? "¥" : "$";
+}
+
 export function fmtUsd(
   value: unknown,
   digits: number,
   fallback: string = "--",
+  symbol: string = "$",
 ): string {
   const num = parseFiniteNumber(value);
   if (num == null) return fallback;
-  return `$${num.toFixed(digits)}`;
+  return `${symbol}${num.toFixed(digits)}`;
 }
 
 /** 输出少于这个数的请求（工具调用这类）不算速度：0.1 秒回 15 个 token 会算出离谱的数。 */

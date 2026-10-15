@@ -445,6 +445,7 @@
       }
     },
     "language": "言語",
+    "displayCurrency": "表示通貨",
     "languageHint": "切り替えるとすぐにプレビューされ、保存後に永続化されます。",
     "theme": "明暗",
     "themeHint": "アプリのテーマを選択します。すぐに反映されます。",

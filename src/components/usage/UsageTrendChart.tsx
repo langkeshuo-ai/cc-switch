@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useUsageTrends } from "@/lib/query/usage";
+import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { Loader2 } from "lucide-react";
 import {
   fmtInt,
@@ -179,6 +180,7 @@ export function UsageTrendChart({
   refreshIntervalMs,
 }: UsageTrendChartProps) {
   const { t, i18n } = useTranslation();
+  const { symbol: currencySymbolStr } = useDisplayCurrency();
   const [metric, setMetric] = useState<TrendMetric>("tokens");
   const { startDate, endDate } = resolveUsageRange(range);
   const { data: trends, isLoading } = useUsageTrends(
@@ -218,10 +220,12 @@ export function UsageTrendChart({
         : t("usage.trend.cost");
 
   const formatMetric = (value: unknown) =>
-    metric === "cost" ? fmtUsd(value, 4) : fmtInt(value, dateLocale);
+    metric === "cost"
+      ? fmtUsd(value, 4, "--", currencySymbolStr)
+      : fmtInt(value, dateLocale);
   const formatYTick = (value: unknown) =>
     metric === "cost"
-      ? `$${parseFiniteNumber(value) ?? 0}`
+      ? `${currencySymbolStr}${parseFiniteNumber(value) ?? 0}`
       : formatUsageTrendTokenTickLabel(value, tokenTickFormatter);
 
   const renderTooltip = ({ active, payload }: any) => {

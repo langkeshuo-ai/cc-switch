@@ -4,6 +4,7 @@ import { ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { useUsageFirstDate, useUsageTrends } from "@/lib/query/usage";
+import { useDisplayCurrency } from "@/hooks/useDisplayCurrency";
 import { cn } from "@/lib/utils";
 import type { UsageRangeSelection } from "@/types/usage";
 import {
@@ -231,6 +232,7 @@ export function UsageHeatmap({
   refreshIntervalMs,
 }: UsageHeatmapProps) {
   const { t, i18n } = useTranslation();
+  const { symbol: currencySymbolStr } = useDisplayCurrency();
   const [metric, setMetric] = useState<HeatMetric>("tokens");
   const sectionRef = useRef<HTMLElement>(null);
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -343,7 +345,7 @@ export function UsageHeatmap({
                 {t("usage.heatmap.spanSummary", {
                   tokens: formatTokensShort(span.totals.tokens, language),
                   requests: formatTokensShort(span.totals.requests, language),
-                  cost: fmtUsd(span.totals.cost, 2),
+                  cost: fmtUsd(span.totals.cost, 2, "--", currencySymbolStr),
                 })}
               </span>
             </div>
@@ -427,6 +429,7 @@ export function UsageHeatmap({
             tokens={hover.cell.tokens}
             requests={hover.cell.requests}
             cost={hover.cell.cost}
+            symbol={currencySymbolStr}
           />
         </div>
       )}

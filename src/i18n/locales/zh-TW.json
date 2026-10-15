@@ -445,6 +445,7 @@
       }
     },
     "language": "介面語言",
+    "displayCurrency": "計價展示貨幣",
     "languageHint": "切換後立即預覽介面語言，儲存後永久生效。",
     "theme": "明暗",
     "themeHint": "選擇應用程式的外觀主題，立即生效。",

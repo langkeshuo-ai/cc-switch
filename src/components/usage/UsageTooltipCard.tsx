@@ -7,6 +7,8 @@ interface UsageTooltipCardProps {
   requests: number;
   /** 美元；null 表示没有可计价的数据 */
   cost: number | null;
+  /** 货币符号（R3）。由父级从设置读入，缺省美元。 */
+  symbol?: string;
 }
 
 /** 热力图格子、趋势柱的悬停卡片：同一时间段的 Token、请求数和费用一起看。 */
@@ -15,6 +17,7 @@ export function UsageTooltipCard({
   tokens,
   requests,
   cost,
+  symbol = "$",
 }: UsageTooltipCardProps) {
   const { t, i18n } = useTranslation();
   const language = i18n.resolvedLanguage || i18n.language || "en";
@@ -29,7 +32,7 @@ export function UsageTooltipCard({
     },
     {
       label: t("usage.trend.cost"),
-      value: cost == null ? "--" : fmtUsd(cost, 2),
+      value: cost == null ? "--" : fmtUsd(cost, 2, "--", symbol),
     },
   ];
 
