@@ -1186,11 +1186,13 @@ mod tests {
                         id: "a".to_string(),
                         key: "sk-pool-a".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
                         key: "sk-pool-b".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                 ],
                 ..Default::default()
@@ -1221,11 +1223,13 @@ mod tests {
                         id: "a".to_string(),
                         key: "sk-pool-a".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
                         key: "sk-pool-b".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                 ],
                 ..Default::default()

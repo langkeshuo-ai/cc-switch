@@ -245,6 +245,13 @@ impl<'a> UsageLogger<'a> {
                     u64::from(log.usage.input_tokens)
                         .saturating_add(u64::from(log.usage.output_tokens)),
                 );
+                // N2 per-key 日限额的当日成本累计：同一落库点、同一成功闸门。
+                // 成本为 0（未计价/错误行）也记——0 加 0 无害，但保持单出口。
+                crate::proxy::key_pool::record_daily_cost(
+                    &log.provider_id,
+                    key_id,
+                    total_cost.parse::<f64>().unwrap_or(0.0),
+                );
             }
         }
 
@@ -729,11 +736,13 @@ mod tests {
                         id: "pool-a".to_string(),
                         key: "sk-a".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                     crate::proxy::key_pool::KeyPoolEntry {
                         id: "pool-b".to_string(),
                         key: "sk-b".to_string(),
                         label: None,
+                        daily_limit_usd: None,
                     },
                 ],
                 key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Usage),

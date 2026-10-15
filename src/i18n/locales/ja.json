@@ -1636,7 +1636,9 @@
     "fetchModelsNotSupported": "このプロバイダーはモデル一覧の取得に対応していません",
     "fetchModelsEndpointNotFound": "利用可能なモデル一覧エンドポイントが見つかりません。Base URL を確認するか、プロバイダーが該当 API を公開しているかご確認ください",
     "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
-    "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください"
+    "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください",
+    "keyPoolDailyLimitLabel": "日次上限 $（任意）",
+    "keyPoolDailyLimitPlaceholder": "例: 5 = 每日 $5"
   },
   "copilot": {
     "authSection": "GitHub Copilot 認証",

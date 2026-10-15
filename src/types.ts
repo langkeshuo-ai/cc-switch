@@ -251,6 +251,9 @@ export interface KeyPoolEntry {
   id: string;
   key: string;
   label?: string;
+  // N2：单把 key 的日限额（USD 字符串，与 provider 级 limitDailyUsd 同格式）。
+  // 达到限额的 key 视同冷却（软限制）。缺省 = 不限。
+  dailyLimitUsd?: string;
 }
 
 // Key 池路由策略。camelCase 序列化，与 Rust 侧 KeyPoolStrategy 对齐。

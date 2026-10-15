@@ -59,6 +59,16 @@ describe("normalizeKeyPool", () => {
     expect(normalizeKeyPool([])).toEqual([]);
   });
 
+  it("N2：日限额保留、空白剥除、留空剥除字段", () => {
+    const rows: KeyPoolRow[] = [
+      createKeyPoolRow({ id: "a", key: "sk-a", dailyLimitUsd: " 5 " }),
+      createKeyPoolRow({ id: "b", key: "sk-b", dailyLimitUsd: "   " }),
+    ];
+    const result = normalizeKeyPool(rows);
+    expect(result[0]).toEqual({ id: "a", key: "sk-a", dailyLimitUsd: "5" });
+    expect("dailyLimitUsd" in result[1]).toBe(false);
+  });
+
   it("序列化往返：normalize 的产物可直接作为 meta.keyPool", () => {
     const rows: KeyPoolRow[] = [
       createKeyPoolRow({ id: "a", key: "sk-a", label: "主 key" }),

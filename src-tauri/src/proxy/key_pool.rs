@@ -32,6 +32,17 @@ pub struct KeyPoolEntry {
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// 单把 key 的日限额（USD 字符串，与 provider 级 limitDailyUsd 同格式）。
+    ///
+    /// N2：多 key 摊平的真实动机常是「每把 key 各有日免费额度」——usage 策略
+    /// 会把流量推向最空的 key 直到它撞限流。软限制让超限 key 直接视同冷却
+    /// （走既有 is_live 路径），不用等上游 429 被动反馈。None = 不限。
+    #[serde(
+        default,
+        rename = "dailyLimitUsd",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub daily_limit_usd: Option<String>,
 }
 
 /// 池路由策略。缺省 `Order`（与 P-C1 首发行为一致，存量池零感知升级）。
@@ -114,6 +125,75 @@ pub fn record_usage(provider_id: &str, key_id: &str, tokens: u64) {
     }
 }
 
+/// 进程级当日成本表：`provider_id::key_id` -> 今日已花 USD（f64 累计）。
+///
+/// N2：`select_for_provider` 不持 db 句柄（与 usage_totals 同构的根因），
+/// per-key 日限额的「今日已花」也走进程级表。跨进程重启后归零——软限制
+/// 少算半个进程生命周期的量属可接受误差，等下一次上游反馈会修正。
+fn daily_cost_totals() -> &'static Mutex<HashMap<String, f64>> {
+    static DAILY: LazyLock<Mutex<HashMap<String, f64>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &DAILY
+}
+
+/// 记录日期的进程级锚点：跨天时整表作废重来（day-stamped 表的自然替代——
+/// 存「日期 + 表」二元组成本最低）。
+fn daily_cost_day() -> &'static Mutex<i64> {
+    static DAY: LazyLock<Mutex<i64>> =
+        LazyLock::new(|| Mutex::new(chrono::Utc::now().timestamp_millis() / 86_400_000));
+    &DAY
+}
+
+/// 把一次请求的成本累加到指定 key 的当日累计上（N2）。
+///
+/// 与 [`record_usage`] 同一调用点（usage 落库成功后）——落库失败不记，
+/// 不污染限额判断。跨天自动清零。
+pub fn record_daily_cost(provider_id: &str, key_id: &str, cost_usd: f64) {
+    if key_id.is_empty() {
+        return;
+    }
+    let today = chrono::Utc::now().timestamp_millis() / 86_400_000;
+    if let Ok(mut day) = daily_cost_day().lock() {
+        if *day != today {
+            *day = today;
+            if let Ok(mut guard) = daily_cost_totals().lock() {
+                guard.clear();
+            }
+        }
+    }
+    if let Ok(mut guard) = daily_cost_totals().lock() {
+        *guard
+            .entry(cooldown_key(provider_id, key_id))
+            .or_insert(0.0) += cost_usd;
+    }
+}
+
+/// 某把 key 今日已花是否达到其日限额（N2）。
+///
+/// 未设限额 / 解析失败（非法数字视作未设，不静默把 key 锁死）→ false。
+/// select 路径同样校验锚点日期：表是「昨天」的就视作 0——否则跨天后
+/// 昨日超限的 key 永远恢复不了（锚点只在 record 路径更新，select 时
+/// 可能尚未有任何新落库来触发清零）。
+fn over_daily_limit(entry: &KeyPoolEntry, provider_id: &str) -> bool {
+    let Some(limit) = entry
+        .daily_limit_usd
+        .as_deref()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+    else {
+        return false;
+    };
+    let today = chrono::Utc::now().timestamp_millis() / 86_400_000;
+    let spent = match (daily_cost_day().lock(), daily_cost_totals().lock()) {
+        (Ok(day), Ok(guard)) if *day == today => guard
+            .get(&cooldown_key(provider_id, &entry.id))
+            .copied()
+            .unwrap_or(0.0),
+        _ => 0.0, // 无数据 / 表已过期 / 锁中毒：视作今日未花
+    };
+    spent >= limit
+}
+
 /// 读取某个 provider 的池 usage 表（key_id -> tokens）。
 ///
 /// 只返回池内 key 的累计；缺失的 key 不放入表（`select_usage` 视为 0）。
@@ -150,6 +230,9 @@ pub fn reset_for_tests() {
     if let Ok(mut guard) = usage_totals().lock() {
         guard.clear();
     }
+    if let Ok(mut guard) = daily_cost_totals().lock() {
+        guard.clear();
+    }
 }
 
 fn is_live(
@@ -159,9 +242,16 @@ fn is_live(
     idx: usize,
     now: Instant,
 ) -> bool {
-    cooldown
+    if cooldown
         .get(&cooldown_key(provider_id, &pool[idx].id))
-        .is_none_or(|until| *until <= now)
+        .is_some_and(|until| *until > now)
+    {
+        return false;
+    }
+    // N2 软限制：达到日限额的 key 视同冷却（走同一条跳过路径）。
+    // 全部超限时各 select 的「回落第一把」兜底仍然生效——宁可让超限 key
+    // 再打一次（上游会 429 反馈），也不让请求无 key 可用。
+    !over_daily_limit(&pool[idx], provider_id)
 }
 
 /// order 选择：池中第一把未冷却的 key。
@@ -464,6 +554,7 @@ mod tests {
             id: id.to_string(),
             key: key.to_string(),
             label: None,
+            daily_limit_usd: None,
         }
     }
 
@@ -1046,6 +1137,109 @@ mod tests {
             select_for_provider(&provider).unwrap().key,
             "sk-a",
             "1s 后 a 应已恢复，被选中的仍是第一把"
+        );
+        reset_for_tests();
+    }
+
+    // ── N2: per-key 日限额（软限制视同冷却） ──────────────────────────
+
+    fn entry_with_limit(id: &str, key: &str, limit: Option<&str>) -> KeyPoolEntry {
+        KeyPoolEntry {
+            id: id.to_string(),
+            key: key.to_string(),
+            label: None,
+            daily_limit_usd: limit.map(str::to_string),
+        }
+    }
+
+    /// 超限 key 被跳过——usage 策略不把流量推向已到日额度的 key。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn daily_limit_skips_over_limit_key() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![
+                entry_with_limit("a", "sk-a", Some("0.001")),
+                entry_with_limit("b", "sk-b", None),
+            ],
+            KeyPoolStrategy::Usage,
+        );
+        // a 首次被选（都为空时取首把），落库后累计成本达到限额
+        assert_eq!(select_for_provider(&provider).unwrap().key_id, "a");
+        record_daily_cost("p1", "a", 0.01);
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "a 已超限（0.01 >= 0.001），应选 b");
+        assert!(sel.reason.contains("->选[b]"), "{}", sel.reason);
+        reset_for_tests();
+    }
+
+    /// 未设限额 / 非法数字 / 0 与负数：一律不限，不静默把 key 锁死。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn daily_limit_invalid_values_mean_unlimited() {
+        reset_for_tests();
+        for bad in [None, Some("abc"), Some("0"), Some("-5"), Some("  ")] {
+            let provider = provider_with_pool_and_strategy(
+                vec![
+                    entry_with_limit("a", "sk-a", bad),
+                    entry_with_limit("b", "sk-b", None),
+                ],
+                KeyPoolStrategy::Usage,
+            );
+            record_daily_cost("p1", "a", 999.0);
+            assert_eq!(
+                select_for_provider(&provider).unwrap().key_id,
+                "a",
+                "限额值 {bad:?} 应视作不限"
+            );
+            reset_for_tests();
+        }
+    }
+
+    /// 全部 key 都超限时回落第一把（与全冷却回落同构）——宁可超限再打一次
+    /// 让上游反馈，也不让请求无 key 可用。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn daily_limit_all_over_limit_falls_back_to_first() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![
+                entry_with_limit("a", "sk-a", Some("0.5")),
+                entry_with_limit("b", "sk-b", Some("0.5")),
+            ],
+            KeyPoolStrategy::Usage,
+        );
+        record_daily_cost("p1", "a", 1.0);
+        record_daily_cost("p1", "b", 1.0);
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "a", "全超限回落第一把 a");
+        assert!(sel.reason.contains("usage:全冷却回落"), "{}", sel.reason);
+        reset_for_tests();
+    }
+
+    /// 跨天清零：昨日超限的 key 今天恢复可用（模拟：直接改锚点日期）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn daily_limit_resets_next_day() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![
+                entry_with_limit("a", "sk-a", Some("0.001")),
+                entry_with_limit("b", "sk-b", None),
+            ],
+            KeyPoolStrategy::Usage,
+        );
+        record_daily_cost("p1", "a", 1.0);
+        assert_eq!(select_for_provider(&provider).unwrap().key_id, "b");
+        // 手工把锚点拨到昨天，触发跨天清零
+        {
+            let mut day = daily_cost_day().lock().unwrap();
+            *day -= 1;
+        }
+        assert_eq!(
+            select_for_provider(&provider).unwrap().key_id,
+            "a",
+            "跨天后 a 的当日成本归零，恢复可用"
         );
         reset_for_tests();
     }

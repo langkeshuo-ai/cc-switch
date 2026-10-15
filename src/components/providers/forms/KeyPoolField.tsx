@@ -31,10 +31,13 @@ export function normalizeKeyPool(rows: KeyPoolRow[]): KeyPoolEntry[] {
     if (!key) return;
     const id = row.id.trim() || `key-${index + 1}`;
     const label = row.label?.trim() || undefined;
+    // N2：日限额留空 = 不限（序列化时剥除，与 Rust skip_serializing_if 对齐）
+    const dailyLimitUsd = row.dailyLimitUsd?.trim() || undefined;
     result.push({
       id,
       key,
       ...(label ? { label } : {}),
+      ...(dailyLimitUsd ? { dailyLimitUsd } : {}),
     });
   });
   return result;
@@ -153,12 +156,17 @@ export function KeyPoolField({
         </p>
       ) : (
         <div className="space-y-2">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
             <span>
               {t("providerForm.keyPoolKeyLabel", { defaultValue: "API Key" })}
             </span>
             <span>
               {t("providerForm.keyPoolNameLabel", { defaultValue: "备注名" })}
+            </span>
+            <span>
+              {t("providerForm.keyPoolDailyLimitLabel", {
+                defaultValue: "日限额 $（可选）",
+              })}
             </span>
             <span />
           </div>
@@ -192,7 +200,7 @@ function KeyPoolRowInputs({
   const [showKey, setShowKey] = useState(false);
 
   return (
-    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px]">
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_36px]">
       <div className="relative">
         <Input
           type={showKey ? "text" : "password"}
@@ -226,6 +234,19 @@ function KeyPoolRowInputs({
         })}
         aria-label={t("providerForm.keyPoolNameLabel", {
           defaultValue: "备注名",
+        })}
+        autoComplete="off"
+      />
+      <Input
+        type="text"
+        inputMode="decimal"
+        value={row.dailyLimitUsd ?? ""}
+        onChange={(event) => onPatch({ dailyLimitUsd: event.target.value })}
+        placeholder={t("providerForm.keyPoolDailyLimitPlaceholder", {
+          defaultValue: "如 5 = 每日 $5",
+        })}
+        aria-label={t("providerForm.keyPoolDailyLimitLabel", {
+          defaultValue: "日限额 $（可选）",
         })}
         autoComplete="off"
       />
