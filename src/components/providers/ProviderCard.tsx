@@ -13,7 +13,7 @@ import type {
 } from "@dnd-kit/core";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
-import { authApi } from "@/lib/api";
+import { authApi, usageApi } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ProviderIconBox } from "@/components/ProviderIconBox";
 import { HoverTip } from "@/components/ui/hover-tip";
@@ -92,6 +92,36 @@ export function CardChipBadge({ chip }: { chip: CardChip }) {
       {chip.label}
     </span>
   );
+}
+
+/** R5：池 key 冷却徽章。异步数据不进同步 presentation 链——组件自持 useQuery。 */
+function CooldownChip({ providerId }: { providerId: string }) {
+  const { t } = useTranslation();
+  const { data: cooldowns } = useQuery({
+    queryKey: ["key-pool-cooldown", providerId],
+    queryFn: () => usageApi.getKeyPoolCooldown(providerId),
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  });
+  if (!cooldowns || cooldowns.length === 0) {
+    return null;
+  }
+  const maxSecs = Math.max(...cooldowns.map((c) => c.remainingSecs));
+  const label =
+    cooldowns.length === 1
+      ? t("keyPool.cooldownBadgeOne", {
+          keyId: cooldowns[0].keyId,
+          secs: maxSecs,
+          defaultValue: "Key {{keyId}} 冷却 {{secs}}s",
+          interpolation: { escapeValue: false },
+        })
+      : t("keyPool.cooldownBadgeMany", {
+          count: cooldowns.length,
+          secs: maxSecs,
+          defaultValue: "{{count}} 把 key 冷却 最长 {{secs}}s",
+          interpolation: { escapeValue: false },
+        });
+  return <CardChipBadge chip={{ key: "cooldown", label, tone: "danger" }} />;
 }
 
 function HealthChip({
@@ -344,6 +374,10 @@ export function ProviderCard({
                 isHealthy={health.is_healthy}
               />
             )}
+            {isProxyAppId(appId) &&
+              (provider.meta?.keyPool?.length ?? 0) > 0 && (
+                <CooldownChip providerId={provider.id} />
+              )}
           </div>
 
           {codexOfficialIdentity && codexOfficialIdentity !== "api_key" ? (

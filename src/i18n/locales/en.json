@@ -4337,5 +4337,9 @@
       "refresh": "Refresh quota",
       "refreshAria": "Refresh quota for {{login}}"
     }
+  },
+  "keyPool": {
+    "cooldownBadgeOne": "Key {{keyId}} cooldown {{secs}}s",
+    "cooldownBadgeMany": "{{count}} keys cooling, max {{secs}}s"
   }
 }

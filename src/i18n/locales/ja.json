@@ -4337,5 +4337,9 @@
       "refresh": "残量を更新",
       "refreshAria": "{{login}} の残量を更新"
     }
+  },
+  "keyPool": {
+    "cooldownBadgeOne": "Key {{keyId}} クールダウン {{secs}}s",
+    "cooldownBadgeMany": "{{count}} 個のkeyクールダウン 最長{{secs}}s"
   }
 }

@@ -4337,5 +4337,9 @@
       "refresh": "刷新额度",
       "refreshAria": "刷新 {{login}} 的额度"
     }
+  },
+  "keyPool": {
+    "cooldownBadgeOne": "Key {{keyId}} 冷却 {{secs}}s",
+    "cooldownBadgeMany": "{{count}} 把 key 冷却 最长 {{secs}}s"
   }
 }
