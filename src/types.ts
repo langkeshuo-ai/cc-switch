@@ -254,6 +254,9 @@ export interface KeyPoolEntry {
   // N2：单把 key 的日限额（USD 字符串，与 provider 级 limitDailyUsd 同格式）。
   // 达到限额的 key 视同冷却（软限制）。缺省 = 不限。
   dailyLimitUsd?: string;
+  // R7：单把 key 的并发上限。在途请求达上限的 key 视作「忙」跳过（不进冷却）。
+  // 缺省 / 0 = 不限。
+  maxConcurrency?: number;
 }
 
 // Key 池路由策略。camelCase 序列化，与 Rust 侧 KeyPoolStrategy 对齐。

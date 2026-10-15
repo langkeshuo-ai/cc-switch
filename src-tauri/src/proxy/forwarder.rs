@@ -2138,7 +2138,15 @@ impl RequestForwarder {
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
         let mut log_secrets: Vec<String> = Vec::new();
-        let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
+        // R7 per-key 并发上限：extract_auth 完成池选择后，若选中的 key 配置了
+        // maxConcurrency 则占一个名额；guard 活到 forward() 返回（响应头/首块
+        // 已到），Drop 归还名额。满额不报错——回落路径自然跳过满额 key。
+        let mut auth_opt = adapter.extract_auth(provider);
+        let _concurrency_guard = auth_opt
+            .as_ref()
+            .and_then(|auth| auth.key_id.clone())
+            .and_then(|key_id| super::key_pool::acquire_concurrency(provider, &key_id));
+        let mut auth_headers = if let Some(mut auth) = auth_opt.take() {
             // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
             if auth.strategy == AuthStrategy::GitHubCopilot {
                 if let Some(app_handle) = &self.app_handle {

@@ -43,6 +43,15 @@ pub struct KeyPoolEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub daily_limit_usd: Option<String>,
+    /// 单把 key 的并发上限（R7）。在途请求达到上限的 key 视作「忙」而非「坏」：
+    /// 排队等一个名额释放（走耐心/回落路径），不触发冷却、不记失败。
+    /// None = 不限。
+    #[serde(
+        default,
+        rename = "maxConcurrency",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_concurrency: Option<u32>,
 }
 
 /// 池路由策略。缺省 `Order`（与 P-C1 首发行为一致，存量池零感知升级）。
@@ -236,6 +245,89 @@ pub fn parse_upstream_pressure(headers: &http::HeaderMap) -> Option<u8> {
     None
 }
 
+/// 进程级在途请求表（R7）：`provider_id::key_id` -> 当前在途数。
+fn in_flight() -> &'static Mutex<HashMap<String, usize>> {
+    static INFLIGHT: LazyLock<Mutex<HashMap<String, usize>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &INFLIGHT
+}
+
+/// 某把 key 是否已达并发上限（R7）。
+///
+/// 未设上限 / 上限为 0 视作不限（0 会让 key 永远不可用，按配置错误处理为不限）。
+fn at_concurrency_cap(pool: &[KeyPoolEntry], provider_id: &str, idx: usize) -> bool {
+    let Some(cap) = pool[idx].max_concurrency.filter(|c| *c > 0) else {
+        return false;
+    };
+    let inflight = in_flight()
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .get(&cooldown_key(provider_id, &pool[idx].id))
+                .copied()
+        })
+        .unwrap_or(0);
+    inflight >= cap as usize
+}
+
+/// R7 并发名额的 RAII guard：持有即占用一个名额，Drop 归还——覆盖响应的
+/// 全部终态（成功读完/上游错误/客户端断连/任务 panic），杜绝名额泄漏
+/// 静默耗干池。
+pub struct ConcurrencyGuard {
+    slot: String,
+}
+
+impl ConcurrencyGuard {
+    /// 尝试为该 provider 的第 `idx` 把 key 占一个并发名额（R7）。
+    ///
+    /// 已达上限返回 `None`（调用方走回落/等待路径）。名额在 guard Drop 时归还。
+    pub fn acquire(
+        pool: &[KeyPoolEntry],
+        provider_id: &str,
+        idx: usize,
+    ) -> Option<ConcurrencyGuard> {
+        if at_concurrency_cap(pool, provider_id, idx) {
+            return None;
+        }
+        let slot = cooldown_key(provider_id, &pool[idx].id);
+        if let Ok(mut guard) = in_flight().lock() {
+            *guard.entry(slot.clone()).or_insert(0) += 1;
+        }
+        Some(ConcurrencyGuard { slot })
+    }
+}
+
+impl Drop for ConcurrencyGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = in_flight().lock() {
+            if let Some(count) = guard.get_mut(&self.slot) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    guard.remove(&self.slot);
+                }
+            }
+        }
+    }
+}
+
+/// forwarder 便捷入口（R7）：按 key_id 找池下标并尝试占名额。
+pub fn acquire_concurrency(provider: &Provider, key_id: &str) -> Option<ConcurrencyGuard> {
+    let pool = pool_of(provider);
+    let idx = pool.iter().position(|entry| entry.id == key_id)?;
+    ConcurrencyGuard::acquire(pool, &provider.id, idx)
+}
+
+/// 测试专用读取（并发断言用）。
+#[cfg(test)]
+pub fn in_flight_of(provider_id: &str, key_id: &str) -> usize {
+    in_flight()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&cooldown_key(provider_id, key_id)).copied())
+        .unwrap_or(0)
+}
+
 /// 某把 key 今日已花是否达到其日限额（N2）。
 ///
 /// 未设限额 / 解析失败（非法数字视作未设，不静默把 key 锁死）→ false。
@@ -307,6 +399,9 @@ pub fn reset_for_tests() {
     if let Ok(mut guard) = AFFINITY_SESSION.lock() {
         *guard = None;
     }
+    if let Ok(mut guard) = in_flight().lock() {
+        guard.clear();
+    }
 }
 
 fn is_live(
@@ -330,6 +425,11 @@ fn is_live(
     }
     // R8 上游压力：≥90% 已用的 key 提前避开（同一软冷却路径）。
     if is_under_pressure(pool, provider_id, idx) {
+        return false;
+    }
+    // R7 并发上限：满额的 key 视作「忙」——不是失败，不进冷却，
+    // 名额释放（guard Drop）后立刻恢复可用。
+    if at_concurrency_cap(pool, provider_id, idx) {
         return false;
     }
     true
@@ -773,6 +873,7 @@ mod tests {
             key: key.to_string(),
             label: None,
             daily_limit_usd: None,
+            max_concurrency: None,
         }
     }
 
@@ -1367,6 +1468,7 @@ mod tests {
             key: key.to_string(),
             label: None,
             daily_limit_usd: limit.map(str::to_string),
+            max_concurrency: None,
         }
     }
 
@@ -1597,6 +1699,75 @@ mod tests {
         set_affinity_session(Some("sess-2".to_string()));
         let sel = select_for_provider(&provider).unwrap();
         assert_eq!(sel.key_id, "b", "a 冷却中，亲和让位给约束");
+        reset_for_tests();
+    }
+
+    // ── R7: per-key 并发上限 ─────────────────────────────────────────
+
+    /// 满额 key 被 is_live 挡掉（视作忙，不进冷却）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn concurrency_cap_skips_busy_key() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        pool[0].max_concurrency = Some(1);
+        let provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        let guard = acquire_concurrency(&provider, "a").expect("首名额应可获取");
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "a 满额（1/1），应选 b");
+        drop(guard);
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "a", "名额归还后 a 恢复可用");
+        reset_for_tests();
+    }
+
+    /// guard Drop 归还名额（RAII 防泄漏核心断言）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn concurrency_guard_releases_on_drop() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a")];
+        pool[0].max_concurrency = Some(1);
+        let provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        assert_eq!(in_flight_of("p1", "a"), 0);
+        let guard = acquire_concurrency(&provider, "a").unwrap();
+        assert_eq!(in_flight_of("p1", "a"), 1);
+        drop(guard);
+        assert_eq!(in_flight_of("p1", "a"), 0, "Drop 必须归还名额");
+        reset_for_tests();
+    }
+
+    /// cap=0 / 未设上限视作不限（0 会锁死 key，按配置错误处理）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn concurrency_cap_zero_or_absent_means_unlimited() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        pool[0].max_concurrency = Some(0);
+        pool[1].max_concurrency = None;
+        let provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        let g1 = acquire_concurrency(&provider, "a").unwrap();
+        let g2 = acquire_concurrency(&provider, "a").unwrap();
+        let g3 = acquire_concurrency(&provider, "b").unwrap();
+        assert_eq!(in_flight_of("p1", "a"), 2, "cap=0 不限");
+        assert_eq!(in_flight_of("p1", "b"), 1, "未设不限");
+        drop((g1, g2, g3));
+        reset_for_tests();
+    }
+
+    /// 满额 key 也进不了亲和——忙就是不能用。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn concurrency_cap_blocks_affinity_too() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        pool[0].max_concurrency = Some(1);
+        let provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        record_affinity("sess-c", "a");
+        let _guard = acquire_concurrency(&provider, "a").unwrap();
+        set_affinity_session(Some("sess-c".to_string()));
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "满额 key 连亲和也进不了");
         reset_for_tests();
     }
 

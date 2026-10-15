@@ -33,11 +33,16 @@ export function normalizeKeyPool(rows: KeyPoolRow[]): KeyPoolEntry[] {
     const label = row.label?.trim() || undefined;
     // N2：日限额留空 = 不限（序列化时剥除，与 Rust skip_serializing_if 对齐）
     const dailyLimitUsd = row.dailyLimitUsd?.trim() || undefined;
+    // R7：并发上限留空 / 0 / 非数字 = 不限（与 Rust 端同语义）
+    const parsedCap = Number.parseInt(String(row.maxConcurrency ?? ""), 10);
+    const maxConcurrency =
+      Number.isFinite(parsedCap) && parsedCap > 0 ? parsedCap : undefined;
     result.push({
       id,
       key,
       ...(label ? { label } : {}),
       ...(dailyLimitUsd ? { dailyLimitUsd } : {}),
+      ...(maxConcurrency ? { maxConcurrency } : {}),
     });
   });
   return result;
@@ -156,7 +161,7 @@ export function KeyPoolField({
         </p>
       ) : (
         <div className="space-y-2">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
             <span>
               {t("providerForm.keyPoolKeyLabel", { defaultValue: "API Key" })}
             </span>
@@ -166,6 +171,11 @@ export function KeyPoolField({
             <span>
               {t("providerForm.keyPoolDailyLimitLabel", {
                 defaultValue: "日限额 $（可选）",
+              })}
+            </span>
+            <span>
+              {t("providerForm.keyPoolMaxConcurrencyLabel", {
+                defaultValue: "并发上限（可选）",
               })}
             </span>
             <span />
@@ -200,7 +210,7 @@ function KeyPoolRowInputs({
   const [showKey, setShowKey] = useState(false);
 
   return (
-    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_36px]">
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_36px]">
       <div className="relative">
         <Input
           type={showKey ? "text" : "password"}
@@ -247,6 +257,24 @@ function KeyPoolRowInputs({
         })}
         aria-label={t("providerForm.keyPoolDailyLimitLabel", {
           defaultValue: "日限额 $（可选）",
+        })}
+        autoComplete="off"
+      />
+      <Input
+        type="text"
+        inputMode="numeric"
+        value={row.maxConcurrency?.toString() ?? ""}
+        onChange={(event) => {
+          const parsed = Number.parseInt(event.target.value, 10);
+          onPatch({
+            maxConcurrency: Number.isFinite(parsed) ? parsed : undefined,
+          });
+        }}
+        placeholder={t("providerForm.keyPoolMaxConcurrencyPlaceholder", {
+          defaultValue: "如 3",
+        })}
+        aria-label={t("providerForm.keyPoolMaxConcurrencyLabel", {
+          defaultValue: "并发上限（可选）",
         })}
         autoComplete="off"
       />

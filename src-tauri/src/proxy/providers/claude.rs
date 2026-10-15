@@ -1187,12 +1187,14 @@ mod tests {
                         key: "sk-pool-a".to_string(),
                         label: None,
                         daily_limit_usd: None,
+                        max_concurrency: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
                         key: "sk-pool-b".to_string(),
                         label: None,
                         daily_limit_usd: None,
+                        max_concurrency: None,
                     },
                 ],
                 ..Default::default()
@@ -1224,12 +1226,14 @@ mod tests {
                         key: "sk-pool-a".to_string(),
                         label: None,
                         daily_limit_usd: None,
+                        max_concurrency: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
                         key: "sk-pool-b".to_string(),
                         label: None,
                         daily_limit_usd: None,
+                        max_concurrency: None,
                     },
                 ],
                 ..Default::default()

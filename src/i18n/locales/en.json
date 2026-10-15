@@ -1638,7 +1638,9 @@
     "fetchModelsTimeout": "Request timed out, please check network connection",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
     "keyPoolDailyLimitLabel": "Daily limit $ (optional)",
-    "keyPoolDailyLimitPlaceholder": "e.g. 5 = $5/day"
+    "keyPoolDailyLimitPlaceholder": "e.g. 5 = $5/day",
+    "keyPoolMaxConcurrencyLabel": "Max concurrency (optional)",
+    "keyPoolMaxConcurrencyPlaceholder": "e.g. 3"
   },
   "copilot": {
     "authSection": "GitHub Copilot Authentication",

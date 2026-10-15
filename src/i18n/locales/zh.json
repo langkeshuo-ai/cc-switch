@@ -1638,7 +1638,9 @@
     "fetchModelsTimeout": "请求超时，请检查网络连接",
     "requiredFields": "请填写供应商名称、API 地址、API Key 和模型",
     "keyPoolDailyLimitLabel": "日限额 $（可选）",
-    "keyPoolDailyLimitPlaceholder": "如 5 = 每日 $5"
+    "keyPoolDailyLimitPlaceholder": "如 5 = 每日 $5",
+    "keyPoolMaxConcurrencyLabel": "并发上限（可选）",
+    "keyPoolMaxConcurrencyPlaceholder": "如 3"
   },
   "copilot": {
     "authSection": "GitHub Copilot 认证",
