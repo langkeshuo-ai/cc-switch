@@ -36,6 +36,8 @@ export interface RequestLog {
   dataSource?: string;
   /** 本次实际使用的池 key id（R1）。缺省 = 无池 / 未走池 / v21 前的历史行。 */
   keyId?: string;
+  /** N1 路由决策留痕：本次为什么选了这把 key。缺省 = 无池 / 未走池 / v22 前。 */
+  routeReason?: string;
 }
 
 export interface SessionSyncResult {

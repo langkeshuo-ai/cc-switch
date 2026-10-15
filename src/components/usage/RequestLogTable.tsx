@@ -259,7 +259,7 @@ export function RequestLogTable({
             "w-[8%] max-w-0",
             !log.keyId && usageTable.muted,
           )}
-          title={log.keyId ?? undefined}
+          title={log.routeReason ?? log.keyId ?? undefined}
         >
           <span className="block truncate">{log.keyId ?? "—"}</span>
         </td>

@@ -77,6 +77,8 @@ pub trait ProviderAdapter: Send + Sync {
             None => self.extract_key(provider).map(|key| KeySelection {
                 key,
                 key_id: String::new(),
+                // 无池路径没有决策，留空（不落 route_reason）
+                reason: String::new(),
             }),
         }
     }

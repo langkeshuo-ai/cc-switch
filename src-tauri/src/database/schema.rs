@@ -211,7 +211,8 @@ impl Database {
             provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
             cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
             data_source TEXT NOT NULL DEFAULT 'proxy',
-            key_id TEXT
+            key_id TEXT,
+            route_reason TEXT
         )", []).map_err(|e| AppError::Database(e.to_string()))?;
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
@@ -594,6 +595,24 @@ impl Database {
                             Self::create_request_logs_key_id_index_if_supported(conn)?;
                         }
                         Self::set_user_version(conn, 21)?;
+                    }
+                    21 => {
+                        // N1 路由决策留痕：本次为什么选了这把 key（如
+                        // `usage:a=5001,b=0->选[b]`）。与 key_id 同行写入，
+                        // 策略行为才可解释可排查。NULL = 无池 / 未走池 / v22 前
+                        // 的历史行；可空且不设默认值，存量库零感知升级。
+                        log::info!(
+                            "迁移数据库从 v21 到 v22（proxy_request_logs 添加 route_reason 列）"
+                        );
+                        if Self::table_exists(conn, "proxy_request_logs")? {
+                            Self::add_column_if_missing(
+                                conn,
+                                "proxy_request_logs",
+                                "route_reason",
+                                "TEXT",
+                            )?;
+                        }
+                        Self::set_user_version(conn, 22)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

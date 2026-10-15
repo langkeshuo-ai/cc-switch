@@ -48,10 +48,14 @@ pub enum KeyPoolStrategy {
 }
 
 /// 一次池选择的结果。`key_id` 供冷却反馈归属（当前 P-C1 仅用于日志）。
+///
+/// `reason` 是 N1 的路由决策留痕：本次为什么选了这把（如 `usage:b=0,a=5001->b`）。
+/// 与 key_id 同行写入 `proxy_request_logs.route_reason`，让策略行为可解释。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeySelection {
     pub key: String,
     pub key_id: String,
+    pub reason: String,
 }
 
 /// 429（限流）默认冷却 60s；402（欠费）冷却 1h——与 magpie 默认值对齐。
@@ -166,17 +170,22 @@ fn is_live(
 /// - 空池 -> `None`
 /// - 全部冷却 -> 回落第一把（宁可撞一次限流也不阻塞请求；请求内的
 ///   provider 级 failover 仍会照常工作）
+///
+/// 返回 `(下标, 决策理由)`：理由区分「首活」与「全冷却回落」两种。
 pub fn select_order(
     pool: &[KeyPoolEntry],
     cooldown: &HashMap<String, Instant>,
     provider_id: &str,
     now: Instant,
-) -> Option<usize> {
+) -> Option<(usize, String)> {
     if pool.is_empty() {
         return None;
     }
-    let live = (0..pool.len()).find(|&idx| is_live(pool, cooldown, provider_id, idx, now));
-    Some(live.unwrap_or(0))
+    match (0..pool.len()).find(|&idx| is_live(pool, cooldown, provider_id, idx, now)) {
+        Some(idx) => Some((idx, format!("order:首活[{}]", pool[idx].id))),
+        // 全冷却回落：理由要能和正常首活区分开，排查时一眼看出这不是健康状态
+        None => Some((0, format!("order:全冷却回落[{}]", pool[0].id))),
+    }
 }
 
 /// rotate 选择：从「上次选中 + 1」起找第一把未冷却的 key（环绕）。
@@ -188,7 +197,7 @@ pub fn select_rotate(
     cooldown: &HashMap<String, Instant>,
     provider_id: &str,
     now: Instant,
-) -> Option<usize> {
+) -> Option<(usize, String)> {
     if pool.is_empty() {
         return None;
     }
@@ -197,11 +206,11 @@ pub fn select_rotate(
         .ok()
         .and_then(|g| g.get(provider_id).copied());
     let start = last.map_or(0, |i| (i + 1) % pool.len());
-    let idx = select_rotate_from(pool, cooldown, provider_id, now, start)?;
+    let (idx, reason) = select_rotate_from(pool, cooldown, provider_id, now, start)?;
     if let Ok(mut guard) = cursors().lock() {
         guard.insert(provider_id.to_string(), idx);
     }
-    Some(idx)
+    Some((idx, reason))
 }
 
 /// rotate 的纯函数核心：从 `start` 起环绕找第一把未冷却的 key。
@@ -211,15 +220,18 @@ pub fn select_rotate_from(
     provider_id: &str,
     now: Instant,
     start: usize,
-) -> Option<usize> {
+) -> Option<(usize, String)> {
     if pool.is_empty() {
         return None;
     }
     let start = start % pool.len();
-    let live = (0..pool.len())
+    match (0..pool.len())
         .map(|step| (start + step) % pool.len())
-        .find(|&idx| is_live(pool, cooldown, provider_id, idx, now));
-    Some(live.unwrap_or(0))
+        .find(|&idx| is_live(pool, cooldown, provider_id, idx, now))
+    {
+        Some(idx) => Some((idx, format!("rotate:轮转[{}]", pool[idx].id))),
+        None => Some((0, format!("rotate:全冷却回落[{}]", pool[0].id))),
+    }
 }
 
 /// 取 provider 的 key 池（无 meta 或空池时为空切片）。
@@ -240,22 +252,34 @@ pub fn pool_of(provider: &Provider) -> &[KeyPoolEntry] {
 /// - 无 usage 数据 -> 等价于首把（退化成 order 行为，老库不报错）
 ///
 /// `usage` 的键是 **key_id**（不是 key 本身）；缺失的 key 记 0。
+///
+/// 返回 `(下标, 决策理由)`：理由带各候选 key 的累计值，让「为什么选它」可直接核对。
 pub fn select_usage(
     pool: &[KeyPoolEntry],
     cooldown: &HashMap<String, Instant>,
     provider_id: &str,
     now: Instant,
     usage: &HashMap<String, u64>,
-) -> Option<usize> {
+) -> Option<(usize, String)> {
     if pool.is_empty() {
         return None;
     }
     let live = (0..pool.len()).find(|&idx| is_live(pool, cooldown, provider_id, idx, now));
     let candidates = live.map_or(0..1, |first| first..pool.len());
     // 全部冷却时 live 为 None，回落第一把；否则在未冷却的 key 里取累计最少。
-    candidates
+    let picked = candidates
         .filter(|&idx| idx == 0 || live.is_some_and(|first| idx >= first))
-        .min_by_key(|&idx| (usage.get(&pool[idx].id).copied().unwrap_or(0), idx))
+        .min_by_key(|&idx| (usage.get(&pool[idx].id).copied().unwrap_or(0), idx))?;
+    let tally = |idx: usize| usage.get(&pool[idx].id).copied().unwrap_or(0);
+    let reason = if live.is_none() {
+        format!("usage:全冷却回落[{}]", pool[0].id)
+    } else {
+        let parts: Vec<String> = (0..pool.len())
+            .map(|i| format!("{}={}", pool[i].id, tally(i)))
+            .collect();
+        format!("usage:{}->选[{}]", parts.join(","), pool[picked].id)
+    };
+    Some((picked, reason))
 }
 
 /// 池选择（glue 层）：池非空时返回选中 key，否则 `None`（调用方回落单 key 路径）。
@@ -270,7 +294,7 @@ pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
         .as_ref()
         .and_then(|meta| meta.key_pool_strategy)
         .unwrap_or_default();
-    let idx = match strategy {
+    let (idx, reason) = match strategy {
         KeyPoolStrategy::Order => {
             select_order(pool, &cooldown_snapshot(), &provider.id, Instant::now())?
         }
@@ -294,6 +318,7 @@ pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
     Some(KeySelection {
         key: entry.key.clone(),
         key_id: entry.id.clone(),
+        reason,
     })
 }
 
@@ -304,7 +329,14 @@ pub fn select_for_provider(provider: &Provider) -> Option<KeySelection> {
 ///   （尚无请求发生过）时视作 0。
 ///
 /// 并发下游标可能已被后续请求推进，此时归属是近似的（见模块 doc）。
-fn peek_last_used(pool: &[KeyPoolEntry], provider: &Provider, now: Instant) -> Option<usize> {
+///
+/// 返回 `(下标, 决策理由)`——N1：理由与 key_id 同源同刻，落库时才不会
+/// 出现「key_id 是 b、理由却说选了 a」的错位（同一快照里一起取）。
+fn peek_last_used(
+    pool: &[KeyPoolEntry],
+    provider: &Provider,
+    now: Instant,
+) -> Option<(usize, String)> {
     let strategy = provider
         .meta
         .as_ref()
@@ -330,16 +362,19 @@ fn peek_last_used(pool: &[KeyPoolEntry], provider: &Provider, now: Instant) -> O
     }
 }
 
-/// 预览「上次请求实际使用的池 key」的 id（不推进 rotate 游标、不改状态）。
+/// 预览「上次请求实际使用的池 key」的 `(key_id, 决策理由)`（N1）。
 ///
-/// 与 [`peek_last_used`] 同源，但直接给 id 并**公开**：
-/// 错误行的 usage 归属需要它——错误发生时 `AuthInfo` 早已不在作用域
-/// （见 `handlers::log_forward_error`），而限流错误恰恰是 usage 策略
-/// 最需要归属的数据。无池 / 从未请求过时返回 `None`（→ 落库 NULL）。
-pub fn last_used_key_id(provider: &Provider) -> Option<String> {
+/// 不推进 rotate 游标、不改状态。错误行的 usage 归属与决策留痕都需要它——
+/// 错误发生时 `AuthInfo` 早已不在作用域（见 `handlers::log_forward_error`），
+/// 而限流错误恰恰是 usage 策略最需要归属的数据。
+/// 无池 / 从未请求过时返回 `None`（→ 落库 NULL）。
+///
+/// 与 [`last_used_key_id`] 同一次 peek（同一快照、同一时刻），保证 id 与
+/// 理由不会错位。无池 / 从未请求过时返回 `None`。
+pub fn last_used_key_and_reason(provider: &Provider) -> Option<(String, String)> {
     let pool = pool_of(provider);
-    let idx = peek_last_used(pool, provider, Instant::now())?;
-    Some(pool[idx].id.clone())
+    let (idx, reason) = peek_last_used(pool, provider, Instant::now())?;
+    Some((pool[idx].id.clone(), reason))
 }
 
 /// 上游限流/欠费反馈：对该 provider 上次请求实际使用的池 key 记冷却。
@@ -358,7 +393,7 @@ pub fn note_rate_limited(provider: &Provider, status: u16, retry_after: Option<D
         402 => COOLDOWN_402,
         _ => COOLDOWN_429,
     });
-    let Some(idx) = peek_last_used(pool, provider, Instant::now()) else {
+    let Some((idx, _)) = peek_last_used(pool, provider, Instant::now()) else {
         return;
     };
     let entry = &pool[idx];
@@ -481,7 +516,7 @@ mod tests {
     fn select_order_picks_first_when_no_cooldown() {
         let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
         assert_eq!(
-            select_order(&pool, &HashMap::new(), "p1", Instant::now()),
+            select_order(&pool, &HashMap::new(), "p1", Instant::now()).map(|(i, _)| i),
             Some(0)
         );
     }
@@ -492,7 +527,10 @@ mod tests {
         let now = Instant::now();
         let mut cooldown = HashMap::new();
         cooldown.insert(cooldown_key("p1", "a"), now + Duration::from_secs(30));
-        assert_eq!(select_order(&pool, &cooldown, "p1", now), Some(1));
+        assert_eq!(
+            select_order(&pool, &cooldown, "p1", now).map(|(i, _)| i),
+            Some(1)
+        );
     }
 
     #[test]
@@ -502,7 +540,10 @@ mod tests {
         let mut cooldown = HashMap::new();
         cooldown.insert(cooldown_key("p1", "a"), now + Duration::from_secs(30));
         cooldown.insert(cooldown_key("p1", "b"), now + Duration::from_secs(30));
-        assert_eq!(select_order(&pool, &cooldown, "p1", now), Some(0));
+        assert_eq!(
+            select_order(&pool, &cooldown, "p1", now).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[test]
@@ -511,7 +552,10 @@ mod tests {
         let now = Instant::now();
         let mut cooldown = HashMap::new();
         cooldown.insert(cooldown_key("p1", "a"), now - Duration::from_secs(1));
-        assert_eq!(select_order(&pool, &cooldown, "p1", now), Some(0));
+        assert_eq!(
+            select_order(&pool, &cooldown, "p1", now).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[test]
@@ -521,7 +565,10 @@ mod tests {
         let mut cooldown = HashMap::new();
         // p2 的 a 冷却不应影响 p1
         cooldown.insert(cooldown_key("p2", "a"), now + Duration::from_secs(30));
-        assert_eq!(select_order(&pool, &cooldown, "p1", now), Some(0));
+        assert_eq!(
+            select_order(&pool, &cooldown, "p1", now).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[test]
@@ -611,7 +658,7 @@ mod tests {
     fn select_rotate_from_picks_start_when_live() {
         let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
         assert_eq!(
-            select_rotate_from(&pool, &HashMap::new(), "p1", Instant::now(), 1),
+            select_rotate_from(&pool, &HashMap::new(), "p1", Instant::now(), 1).map(|(i, _)| i),
             Some(1)
         );
     }
@@ -623,7 +670,10 @@ mod tests {
         let now = Instant::now();
         let mut cooldown = HashMap::new();
         cooldown.insert(cooldown_key("p1", "b"), now + Duration::from_secs(30));
-        assert_eq!(select_rotate_from(&pool, &cooldown, "p1", now, 1), Some(0));
+        assert_eq!(
+            select_rotate_from(&pool, &cooldown, "p1", now, 1).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[test]
@@ -633,7 +683,10 @@ mod tests {
         let mut cooldown = HashMap::new();
         cooldown.insert(cooldown_key("p1", "a"), now + Duration::from_secs(30));
         cooldown.insert(cooldown_key("p1", "b"), now + Duration::from_secs(30));
-        assert_eq!(select_rotate_from(&pool, &cooldown, "p1", now, 1), Some(0));
+        assert_eq!(
+            select_rotate_from(&pool, &cooldown, "p1", now, 1).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[serial_test::serial(global_env)]
@@ -724,7 +777,7 @@ mod tests {
             ("c".to_string(), 900u64),
         ]);
         assert_eq!(
-            select_usage(&pool, &cooldown, "p1", now, &usage),
+            select_usage(&pool, &cooldown, "p1", now, &usage).map(|(i, _)| i),
             Some(1),
             "b 累计最少，应被选中"
         );
@@ -737,7 +790,10 @@ mod tests {
         let cooldown = HashMap::new();
         let now = Instant::now();
         let usage = HashMap::from([("a".to_string(), 300u64), ("b".to_string(), 300u64)]);
-        assert_eq!(select_usage(&pool, &cooldown, "p1", now, &usage), Some(0));
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", now, &usage).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     /// 全冷却时回落第一把——与 order/rotate 一致（宁可撞一次限流也不阻塞）。
@@ -750,7 +806,10 @@ mod tests {
             (cooldown_key("p1", "b"), now + Duration::from_secs(60)),
         ]);
         let usage = HashMap::from([("b".to_string(), 1u64)]);
-        assert_eq!(select_usage(&pool, &cooldown, "p1", now, &usage), Some(0));
+        assert_eq!(
+            select_usage(&pool, &cooldown, "p1", now, &usage).map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     /// 无 usage 数据时降级为 order 行为（首把）——老库/新表没数据时不报错。
@@ -760,7 +819,7 @@ mod tests {
         let cooldown = HashMap::new();
         let usage = HashMap::new();
         assert_eq!(
-            select_usage(&pool, &cooldown, "p1", Instant::now(), &usage),
+            select_usage(&pool, &cooldown, "p1", Instant::now(), &usage).map(|(i, _)| i),
             Some(0)
         );
     }
@@ -773,7 +832,7 @@ mod tests {
         let cooldown = HashMap::from([(cooldown_key("p1", "a"), now + Duration::from_secs(60))]);
         let usage = HashMap::from([("a".to_string(), 1u64), ("b".to_string(), 9999u64)]);
         assert_eq!(
-            select_usage(&pool, &cooldown, "p1", now, &usage),
+            select_usage(&pool, &cooldown, "p1", now, &usage).map(|(i, _)| i),
             Some(1),
             "a 虽累计最少但在冷却，应选 b"
         );
@@ -840,6 +899,60 @@ mod tests {
         // 未设策略（None）→ order：重复选择都落在第一把
         let provider = provider_with_pool(vec![entry("a", "sk-a"), entry("b", "sk-b")]);
         assert_eq!(select_for_provider(&provider).unwrap().key, "sk-a");
+        reset_for_tests();
+    }
+
+    // ── N1: 路由决策留痕 ──────────────────────────────────────────────
+
+    /// order 正常首活的理由能区分出 key。
+    #[test]
+    fn select_order_reason_names_picked_key() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let (_, reason) = select_order(&pool, &HashMap::new(), "p1", Instant::now()).unwrap();
+        assert!(reason.contains("[a]"), "理由应含选中的 key id: {reason}");
+        assert!(reason.starts_with("order:"), "理由应带策略前缀: {reason}");
+    }
+
+    /// order 全冷却回落的理由必须与正常首活可区分——排查时一眼看出不健康。
+    #[test]
+    fn select_order_all_cooled_reason_is_distinct() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let now = Instant::now();
+        let mut cooldown = HashMap::new();
+        cooldown.insert(cooldown_key("p1", "a"), now + Duration::from_secs(30));
+        cooldown.insert(cooldown_key("p1", "b"), now + Duration::from_secs(30));
+        let (_, reason) = select_order(&pool, &cooldown, "p1", now).unwrap();
+        assert!(reason.contains("全冷却回落"), "{reason}");
+    }
+
+    /// usage 理由带各候选 key 的累计值——「为什么选它」可直接核对。
+    #[test]
+    fn select_usage_reason_contains_tally() {
+        let pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        let cooldown = HashMap::new();
+        let usage = HashMap::from([("a".to_string(), 5001u64), ("b".to_string(), 2u64)]);
+        let (idx, reason) = select_usage(&pool, &cooldown, "p1", Instant::now(), &usage).unwrap();
+        assert_eq!(idx, 1);
+        assert!(
+            reason.contains("a=5001") && reason.contains("b=2"),
+            "{reason}"
+        );
+        assert!(reason.contains("->选[b]"), "{reason}");
+    }
+
+    /// glue 层：select_for_provider 返回的 reason 与所选 key 一致。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn select_for_provider_carries_reason() {
+        reset_for_tests();
+        let provider = provider_with_pool_and_strategy(
+            vec![entry("a", "sk-a"), entry("b", "sk-b")],
+            KeyPoolStrategy::Usage,
+        );
+        record_usage("p1", "a", 5000);
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b");
+        assert!(sel.reason.contains("->选[b]"), "{}", sel.reason);
         reset_for_tests();
     }
 

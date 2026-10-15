@@ -556,6 +556,7 @@ pub(crate) fn create_usage_collector(
                         status_code,
                         Some(session_id),
                         None,
+                        None,
                     )
                     .await;
                 });
@@ -582,6 +583,7 @@ pub(crate) fn create_usage_collector(
                         true, // is_streaming
                         status_code,
                         Some(session_id),
+                        None,
                         None,
                     )
                     .await;
@@ -623,7 +625,9 @@ fn spawn_log_usage(
     let session_id = ctx.session_id.clone();
     // 成功行的 key 归属：本次请求实际选中的池 key（无池时 None → 落库 NULL）。
     // 与错误行路径（handlers::log_forward_error）同源，都是「预览上次用的 key」。
-    let key_id = crate::proxy::key_pool::last_used_key_id(&ctx.provider);
+    // N1：决策理由与 key_id 同一次 peek 取出，保证不错位。
+    let (key_id, route_reason) = crate::proxy::key_pool::last_used_key_and_reason(&ctx.provider)
+        .map_or((None, None), |(id, reason)| (Some(id), Some(reason)));
 
     tokio::spawn(async move {
         log_usage_internal(
@@ -640,6 +644,7 @@ fn spawn_log_usage(
             status_code,
             Some(session_id),
             key_id,
+            route_reason,
         )
         .await;
     });
@@ -674,6 +679,7 @@ async fn log_usage_internal(
     status_code: u16,
     session_id: Option<String>,
     key_id: Option<String>,
+    route_reason: Option<String>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -724,6 +730,7 @@ async fn log_usage_internal(
             None, // provider_type
             is_streaming,
             key_id,
+            route_reason,
         )
     });
     if let Err(e) = write.await.unwrap_or_else(|e| {
@@ -1286,6 +1293,7 @@ mod tests {
             200,
             None,
             None,
+            None,
         )
         .await;
 
@@ -1351,6 +1359,7 @@ mod tests {
             None,
             false,
             200,
+            None,
             None,
             None,
         )
@@ -1445,6 +1454,7 @@ mod tests {
                 None,
                 false,
                 200,
+                None,
                 None,
                 None,
             )

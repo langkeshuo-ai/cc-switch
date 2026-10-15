@@ -431,6 +431,7 @@ async fn write_claude_usage_log(state: &ProxyState, log: ClaudeUsageLog) {
         log.status_code,
         Some(log.session_id),
         None,
+        None,
     )
     .await;
 }
@@ -572,6 +573,7 @@ async fn handle_claude_transform(
                                 true,
                                 status_code,
                                 Some(session_id),
+                                None,
                                 None,
                             )
                             .await;
@@ -1543,6 +1545,7 @@ async fn handle_codex_xai_native_responses_rewrite(
                             status.as_u16(),
                             Some(session_id),
                             None,
+                            None,
                         )
                         .await;
                     }
@@ -1655,6 +1658,7 @@ async fn handle_codex_chat_to_responses_transform(
                             true,
                             status.as_u16(),
                             Some(session_id),
+                            None,
                             None,
                         )
                         .await;
@@ -1777,6 +1781,7 @@ async fn handle_codex_chat_to_responses_transform(
                     false,
                     status.as_u16(),
                     Some(session_id),
+                    None,
                     None,
                 )
                 .await;
@@ -1944,6 +1949,7 @@ async fn handle_codex_anthropic_to_responses_transform(
                     status.as_u16(),
                     Some(session_id),
                     None,
+                    None,
                 )
                 .await;
             }
@@ -2031,6 +2037,7 @@ fn build_codex_anthropic_sse_response(
                         true,
                         status.as_u16(),
                         Some(session_id),
+                        None,
                         None,
                     )
                     .await;
@@ -2962,9 +2969,10 @@ async fn log_forward_error(
     // 错误行的 key 归属：AuthInfo 在此已不在作用域，但「上次实际用的 key」
     // 可由 key_pool 按策略预览得到（与 note_rate_limited 同源）。限流错误
     // 正是 usage 策略最需要归属的数据，不能丢。
-    let key_id = crate::proxy::key_pool::last_used_key_id(&ctx.provider);
+    let (key_id, route_reason) = crate::proxy::key_pool::last_used_key_and_reason(&ctx.provider)
+        .map_or((None, None), |(id, reason)| (Some(id), Some(reason)));
     let write = tokio::task::spawn_blocking(move || {
-        UsageLogger::new(&db).log_error_with_context(
+        UsageLogger::new(&db).log_error_with_context_with_reason(
             request_id,
             provider_id,
             app_type,
@@ -2976,6 +2984,7 @@ async fn log_forward_error(
             Some(session_id),
             None,
             key_id,
+            route_reason,
         )
     });
     if let Err(e) = write.await.unwrap_or_else(|e| {
@@ -3006,6 +3015,7 @@ async fn log_usage(
     status_code: u16,
     session_id: Option<String>,
     key_id: Option<String>,
+    route_reason: Option<String>,
 ) {
     use super::usage::logger::UsageLogger;
 
@@ -3051,6 +3061,7 @@ async fn log_usage(
             None, // provider_type
             is_streaming,
             key_id,
+            route_reason,
         )
     });
     if let Err(e) = write.await.unwrap_or_else(|e| {

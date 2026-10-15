@@ -89,6 +89,9 @@ pub struct RequestLog {
     /// usage 路由策略按它归属 token 消耗。历史行为 NULL，`select_usage`
     /// 遇到无数据的 key 会退化为 order 行为。
     pub key_id: Option<String>,
+    /// N1 路由决策留痕：本次为什么选了这把 key（如 `usage:a=5001,b=0->选[b]`）。
+    /// 与 `key_id` 同行落库（NULL = 无池 / 未走池 / v22 前的历史行）。
+    pub route_reason: Option<String>,
 }
 
 /// 使用量记录器
@@ -181,8 +184,8 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at, key_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
+                provider_type, is_streaming, cost_multiplier, created_at, key_id, route_reason
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)"
         );
         let affected_rows = conn
             .execute(
@@ -214,6 +217,7 @@ impl<'a> UsageLogger<'a> {
                     log.cost_multiplier,
                     created_at,
                     log.key_id,
+                    log.route_reason,
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -315,6 +319,7 @@ impl<'a> UsageLogger<'a> {
             is_streaming: false,
             cost_multiplier: "1.0".to_string(),
             key_id,
+            route_reason: None,
         };
 
         self.log_request(&log)
@@ -355,6 +360,7 @@ impl<'a> UsageLogger<'a> {
             is_streaming,
             cost_multiplier: "1.0".to_string(),
             key_id,
+            route_reason: None,
         }
     }
 
@@ -362,8 +368,9 @@ impl<'a> UsageLogger<'a> {
     ///
     /// 供调用方已身处 blocking 线程池（`spawn_blocking`）的场景使用：
     /// 直接取 `Database` 的阻塞锁写库，不得在 tokio worker 线程上调用。
+    /// 错误行落库（N1）：`route_reason` 与 `key_id` 同行写入（同源同刻）。
     #[allow(clippy::too_many_arguments)]
-    pub fn log_error_with_context(
+    pub fn log_error_with_context_with_reason(
         &self,
         request_id: String,
         provider_id: String,
@@ -376,8 +383,9 @@ impl<'a> UsageLogger<'a> {
         session_id: Option<String>,
         provider_type: Option<String>,
         key_id: Option<String>,
+        route_reason: Option<String>,
     ) -> Result<(), AppError> {
-        let log = Self::error_request_log(
+        let mut log = Self::error_request_log(
             request_id,
             provider_id,
             app_type,
@@ -390,6 +398,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             key_id,
         );
+        log.route_reason = route_reason;
         let conn = crate::database::lock_conn!(self.db.conn);
         Self::log_request_on_conn(&conn, &log)
     }
@@ -455,6 +464,7 @@ impl<'a> UsageLogger<'a> {
         provider_type: Option<String>,
         is_streaming: bool,
         key_id: Option<String>,
+        route_reason: Option<String>,
     ) -> Result<(), AppError> {
         let conn = crate::database::lock_conn!(self.db.conn);
         Self::log_with_calculation_on_conn(
@@ -474,6 +484,7 @@ impl<'a> UsageLogger<'a> {
             provider_type,
             is_streaming,
             key_id,
+            route_reason,
         )
     }
 
@@ -499,6 +510,7 @@ impl<'a> UsageLogger<'a> {
         provider_type: Option<String>,
         is_streaming: bool,
         key_id: Option<String>,
+        route_reason: Option<String>,
     ) -> Result<(), AppError> {
         let pricing = Self::get_model_pricing_on_conn(conn, &pricing_model)?;
 
@@ -536,6 +548,7 @@ impl<'a> UsageLogger<'a> {
             is_streaming,
             cost_multiplier: "1".to_string(),
             key_id,
+            route_reason,
         };
 
         Self::log_request_on_conn(conn, &log)
@@ -572,6 +585,7 @@ mod tests {
             is_streaming: true,
             cost_multiplier: "1".to_string(),
             key_id: None,
+            route_reason: None,
         }
     }
 
@@ -615,6 +629,7 @@ mod tests {
             None,
             Some("claude".to_string()),
             false,
+            None,
             None,
         )?;
 
@@ -666,9 +681,10 @@ mod tests {
             Some("claude".to_string()),
             false,
             Some("pool-a".to_string()),
+            Some("usage:pool-a=0,pool-b=0->选[pool-a]".to_string()),
         )?;
 
-        // ① DB 里的 key_id
+        // ① DB 里的 key_id 与 route_reason（N1：同一行、同源同刻）
         let conn = crate::database::lock_conn!(db.conn);
         let key_id: Option<String> = conn
             .query_row(
@@ -678,6 +694,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(key_id.as_deref(), Some("pool-a"));
+        let route_reason: Option<String> = conn
+            .query_row(
+                "SELECT route_reason FROM proxy_request_logs WHERE request_id = 'req-key-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            route_reason.as_deref(),
+            Some("usage:pool-a=0,pool-b=0->选[pool-a]")
+        );
 
         // ② 进程级 usage 表：input+output = 1500
         // 通过 select_for_provider 的行为间接验证（全局表无公开读取接口），
@@ -922,6 +949,7 @@ mod tests {
             is_streaming: false,
             cost_multiplier: "1".to_string(),
             key_id: None,
+            route_reason: None,
         };
 
         logger.log_request(&log)?;

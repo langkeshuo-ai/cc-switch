@@ -978,6 +978,31 @@ mod tests {
             "key_id 归属应与实际使用的 key 一致"
         );
 
+        // N1：决策理由与 key_id 同行落库，且能解释选择（usage 场景下含累计值）。
+        let reasons: Vec<Option<String>> = {
+            let conn = db.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT route_reason FROM proxy_request_logs ORDER BY rowid")
+                .expect("prepare route_reason query");
+            let rows = stmt
+                .query_map([], |row| row.get::<_, Option<String>>(0))
+                .expect("query route_reasons");
+            rows.collect::<Result<_, _>>()
+                .expect("collect route_reasons")
+        };
+        for (i, reason) in reasons.iter().enumerate() {
+            let reason = reason.as_deref().expect("每行都应有决策理由");
+            assert!(
+                reason.starts_with("usage:") && reason.contains("->选["),
+                "第 {i} 行理由应是 usage 决策格式: {reason}"
+            );
+        }
+        assert!(
+            reasons[1].as_deref().unwrap_or("").contains("->选[b]"),
+            "第二行应解释选了 b: {:?}",
+            reasons[1]
+        );
+
         proxy.stop().await.expect("stop test proxy");
         mock_handle.abort();
         key_pool::reset_for_tests();
