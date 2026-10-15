@@ -69,6 +69,22 @@ describe("normalizeKeyPool", () => {
     expect("dailyLimitUsd" in result[1]).toBe(false);
   });
 
+  it("R7/R10：并发与 RPM 上限保留、非法值剥除", () => {
+    const rows: KeyPoolRow[] = [
+      createKeyPoolRow({ id: "a", key: "sk-a", maxConcurrency: 3, maxRpm: 20 }),
+      createKeyPoolRow({ id: "b", key: "sk-b", maxConcurrency: 0, maxRpm: -5 }),
+    ];
+    const result = normalizeKeyPool(rows);
+    expect(result[0]).toEqual({
+      id: "a",
+      key: "sk-a",
+      maxConcurrency: 3,
+      maxRpm: 20,
+    });
+    expect("maxConcurrency" in result[1]).toBe(false);
+    expect("maxRpm" in result[1]).toBe(false);
+  });
+
   it("序列化往返：normalize 的产物可直接作为 meta.keyPool", () => {
     const rows: KeyPoolRow[] = [
       createKeyPoolRow({ id: "a", key: "sk-a", label: "主 key" }),

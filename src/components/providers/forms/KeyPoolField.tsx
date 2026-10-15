@@ -37,12 +37,17 @@ export function normalizeKeyPool(rows: KeyPoolRow[]): KeyPoolEntry[] {
     const parsedCap = Number.parseInt(String(row.maxConcurrency ?? ""), 10);
     const maxConcurrency =
       Number.isFinite(parsedCap) && parsedCap > 0 ? parsedCap : undefined;
+    // R10：RPM 留空 / 0 / 非数字 = 不限（与 Rust 端同语义）
+    const parsedRpm = Number.parseInt(String(row.maxRpm ?? ""), 10);
+    const maxRpm =
+      Number.isFinite(parsedRpm) && parsedRpm > 0 ? parsedRpm : undefined;
     result.push({
       id,
       key,
       ...(label ? { label } : {}),
       ...(dailyLimitUsd ? { dailyLimitUsd } : {}),
       ...(maxConcurrency ? { maxConcurrency } : {}),
+      ...(maxRpm ? { maxRpm } : {}),
     });
   });
   return result;
