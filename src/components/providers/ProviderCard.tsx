@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useReducer } from "react";
 import {
   AlertTriangle,
   GripVertical,
@@ -94,21 +94,42 @@ export function CardChipBadge({ chip }: { chip: CardChip }) {
   );
 }
 
-/** R5：池 key 冷却徽章。异步数据不进同步 presentation 链——组件自持 useQuery。 */
+/** R5：池 key 冷却徽章。异步数据不进同步 presentation 链——组件自持 useQuery。
+ *
+ * N3：剩余时间本地每秒递减（`fetchedAt` 锚点插值），消除 30s 轮询之间的
+ * 静止感；全部倒计时归零后徽章消失（下一轮 refetch 会拉到空列表，双保险）。
+ */
 function CooldownChip({ providerId }: { providerId: string }) {
   const { t } = useTranslation();
-  const { data: cooldowns } = useQuery({
+  const { data: cooldowns, dataUpdatedAt } = useQuery({
     queryKey: ["key-pool-cooldown", providerId],
     queryFn: () => usageApi.getKeyPoolCooldown(providerId),
     refetchInterval: 30_000,
     staleTime: 10_000,
   });
+  // 1s tick 驱动重渲染；倒计时是纯插值，tick 值本身不参与显示。
+  const [, forceTick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!cooldowns || cooldowns.length === 0) {
+      return;
+    }
+    const timer = window.setInterval(forceTick, 1000);
+    return () => window.clearInterval(timer);
+  }, [cooldowns]);
   if (!cooldowns || cooldowns.length === 0) {
     return null;
   }
-  const maxSecs = Math.max(...cooldowns.map((c) => c.remainingSecs));
+  // react-query 的 dataUpdatedAt 是本次数据落库的时刻，天然就是锚点。
+  const elapsedSecs = Math.max(0, (Date.now() - dataUpdatedAt) / 1000);
+  const remaining = cooldowns
+    .map((c) => Math.max(0, c.remainingSecs - elapsedSecs))
+    .filter((s) => s > 0);
+  if (remaining.length === 0) {
+    return null;
+  }
+  const maxSecs = Math.ceil(Math.max(...remaining));
   const label =
-    cooldowns.length === 1
+    remaining.length === 1
       ? t("keyPool.cooldownBadgeOne", {
           keyId: cooldowns[0].keyId,
           secs: maxSecs,
@@ -116,7 +137,7 @@ function CooldownChip({ providerId }: { providerId: string }) {
           interpolation: { escapeValue: false },
         })
       : t("keyPool.cooldownBadgeMany", {
-          count: cooldowns.length,
+          count: remaining.length,
           secs: maxSecs,
           defaultValue: "{{count}} 把 key 冷却 最长 {{secs}}s",
           interpolation: { escapeValue: false },
