@@ -158,6 +158,40 @@ pub async fn get_model_stats(
     .await
 }
 
+/// 某把池 key 的冷却剩余时间（秒）。`remaining_secs = 0` 表示未冷却。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyPoolCooldown {
+    pub key_id: String,
+    pub remaining_secs: u64,
+}
+
+/// 查询一个 provider 的池 key 冷却剩余时间。
+///
+/// 数据源是进程级冷却注册表（`key_pool::cooldown_snapshot`，存 `Instant`）——
+/// 前端无法解释进程内时刻，所以在这里换算成剩余秒数。无冷却的 key
+/// **不出现**在返回里（而不是给 0），前端可以据此渲染「冷却中」的视觉态。
+#[tauri::command]
+pub async fn key_pool_cooldown(provider_id: String) -> Result<Vec<KeyPoolCooldown>, AppError> {
+    // 冷却记账在进程内，查询无 IO；但仍走阻塞池与其它 command 同姿态。
+    tauri::async_runtime::spawn_blocking(move || {
+        let now = std::time::Instant::now();
+        Ok(crate::proxy::key_pool::cooldown_snapshot()
+            .into_iter()
+            .filter(|(key, until)| key.starts_with(&format!("{provider_id}::")) && *until > now)
+            .map(|(key, until)| KeyPoolCooldown {
+                key_id: key
+                    .split_once("::")
+                    .map(|(_, key_id)| key_id.to_string())
+                    .unwrap_or(key),
+                remaining_secs: (until - now).as_secs(),
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| AppError::Message(format!("冷却查询任务失败: {error}")))?
+}
+
 /// 获取请求日志列表
 #[tauri::command]
 pub async fn get_request_logs(

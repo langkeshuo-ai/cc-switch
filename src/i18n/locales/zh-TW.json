@@ -2058,6 +2058,7 @@
     "modelPricingDesc": "設定各模型的 Token 成本",
     "noPricingData": "暫無定價資料。點擊「新增」加入模型定價設定。",
     "model": "模型",
+    "keyId": "Key 歸屬",
     "pricingModel": "計價模型",
     "displayName": "顯示名稱",
     "inputCost": "輸入成本",

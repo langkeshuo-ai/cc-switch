@@ -249,6 +249,18 @@ export function RequestLogTable({
             {log.model}
           </span>
         </td>
+        {/* Key 池归属（R1）：没走池的行显示 —，与缓存列的空值姿态一致 */}
+        <td
+          className={cn(
+            usageTable.td,
+            usageTable.mono,
+            "w-[8%] max-w-0",
+            !log.keyId && usageTable.muted,
+          )}
+          title={log.keyId ?? undefined}
+        >
+          <span className="block truncate">{log.keyId ?? "—"}</span>
+        </td>
         <td
           className={usageTable.tdEnd}
           title={
@@ -322,6 +334,7 @@ export function RequestLogTable({
               <th className={usageTable.th}>{t("usage.app")}</th>
               <th className={usageTable.th}>{t("usage.provider")}</th>
               <th className={usageTable.th}>{t("usage.model")}</th>
+              <th className={usageTable.th}>{t("usage.keyId")}</th>
               <th className={usageTable.thEnd}>{t("usage.freshInput")}</th>
               <th className={usageTable.thEnd}>{t("usage.outputTokens")}</th>
               <th className={usageTable.thEnd}>{t("usage.cacheReadTokens")}</th>
@@ -339,7 +352,7 @@ export function RequestLogTable({
           <tbody>
             {logs.length === 0 ? (
               <tr>
-                <td colSpan={9} className={usageTable.empty}>
+                <td colSpan={10} className={usageTable.empty}>
                   {t("usage.noData")}
                 </td>
               </tr>

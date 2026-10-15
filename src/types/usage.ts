@@ -34,6 +34,8 @@ export interface RequestLog {
   errorMessage?: string;
   createdAt: number;
   dataSource?: string;
+  /** 本次实际使用的池 key id（R1）。缺省 = 无池 / 未走池 / v21 前的历史行。 */
+  keyId?: string;
 }
 
 export interface SessionSyncResult {

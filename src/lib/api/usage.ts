@@ -164,6 +164,13 @@ export const usageApi = {
     return invoke("get_request_detail", { requestId });
   },
 
+  /** 查询一个 provider 的池 key 冷却剩余时间（R5）。无冷却的 key 不在返回里。 */
+  getKeyPoolCooldown: async (
+    providerId: string,
+  ): Promise<Array<{ keyId: string; remainingSecs: number }>> => {
+    return invoke("key_pool_cooldown", { providerId });
+  },
+
   getModelPricing: async (): Promise<ModelPricing[]> => {
     return invoke("get_model_pricing");
   },
