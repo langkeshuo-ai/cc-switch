@@ -1188,6 +1188,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -1195,6 +1196,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 ..Default::default()
@@ -1227,6 +1229,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -1234,6 +1237,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 ..Default::default()

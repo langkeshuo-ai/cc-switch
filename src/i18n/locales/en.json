@@ -1640,7 +1640,9 @@
     "keyPoolDailyLimitLabel": "Daily limit $ (optional)",
     "keyPoolDailyLimitPlaceholder": "e.g. 5 = $5/day",
     "keyPoolMaxConcurrencyLabel": "Max concurrency (optional)",
-    "keyPoolMaxConcurrencyPlaceholder": "e.g. 3"
+    "keyPoolMaxConcurrencyPlaceholder": "e.g. 3",
+    "keyPoolMaxRpmLabel": "Max per minute (optional)",
+    "keyPoolMaxRpmPlaceholder": "e.g. 20"
   },
   "copilot": {
     "authSection": "GitHub Copilot Authentication",

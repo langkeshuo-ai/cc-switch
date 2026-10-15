@@ -532,6 +532,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -539,6 +540,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 ..Default::default()
@@ -696,6 +698,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -703,6 +706,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 ..Default::default()
@@ -879,6 +883,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -886,6 +891,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Usage),
@@ -1098,6 +1104,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -1105,6 +1112,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 // order：无 usage/限额干扰，压力软冷却是唯一变量
@@ -1241,6 +1249,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     KeyPoolEntry {
                         id: "b".to_string(),
@@ -1248,6 +1257,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Rotate),

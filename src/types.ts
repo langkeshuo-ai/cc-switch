@@ -257,6 +257,8 @@ export interface KeyPoolEntry {
   // R7：单把 key 的并发上限。在途请求达上限的 key 视作「忙」跳过（不进冷却）。
   // 缺省 / 0 = 不限。
   maxConcurrency?: number;
+  // R10：单把 key 的每分钟请求数上限（滑动窗口）。缺省 / 0 = 不限。
+  maxRpm?: number;
 }
 
 // Key 池路由策略。camelCase 序列化，与 Rust 侧 KeyPoolStrategy 对齐。

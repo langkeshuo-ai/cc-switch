@@ -1640,7 +1640,9 @@
     "keyPoolDailyLimitLabel": "日限額 $（可選）",
     "keyPoolDailyLimitPlaceholder": "如 5 = 每日 $5",
     "keyPoolMaxConcurrencyLabel": "並發上限（可選）",
-    "keyPoolMaxConcurrencyPlaceholder": "如 3"
+    "keyPoolMaxConcurrencyPlaceholder": "如 3",
+    "keyPoolMaxRpmLabel": "每分鐘上限（可選）",
+    "keyPoolMaxRpmPlaceholder": "如 20"
   },
   "copilot": {
     "authSection": "GitHub Copilot 驗證",

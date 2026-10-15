@@ -52,6 +52,11 @@ pub struct KeyPoolEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_concurrency: Option<u32>,
+    /// 单把 key 的每分钟请求数上限（R10，滑动窗口）。OpenRouter 免费模型
+    /// 20 req/min 这类供应商的刚需。达到上限的 key 视作「忙」（同并发上限：
+    /// 不进冷却不记失败），等窗口腾出名额。None / 0 = 不限。
+    #[serde(default, rename = "maxRpm", skip_serializing_if = "Option::is_none")]
+    pub max_rpm: Option<u32>,
 }
 
 /// 池路由策略。缺省 `Order`（与 P-C1 首发行为一致，存量池零感知升级）。
@@ -311,6 +316,53 @@ impl Drop for ConcurrencyGuard {
     }
 }
 
+/// 进程级 RPM 滑动窗口表（R10）：`provider_id::key_id` -> 最近出站时刻队列。
+///
+/// magpie 的 +1s slack（本机计发出时刻、vendor 计到达时刻，首请求要 dial+TLS）
+/// 同样适用：不减 slack 会在 vendor 窗口里多算一个。
+fn rpm_windows() -> &'static Mutex<HashMap<String, std::collections::VecDeque<Instant>>> {
+    static RPM: LazyLock<Mutex<HashMap<String, std::collections::VecDeque<Instant>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    &RPM
+}
+
+/// RPM 窗口：60s + 1s slack（magpie rpmSlack 同款）。
+const RPM_SPAN: Duration = Duration::from_secs(61);
+
+/// 某把 key 本分钟是否已达 RPM 上限（R10）。过期时刻出队后再数。
+fn at_rpm_cap(pool: &[KeyPoolEntry], provider_id: &str, idx: usize, now: Instant) -> bool {
+    let Some(cap) = pool[idx].max_rpm.filter(|c| *c > 0) else {
+        return false;
+    };
+    let slot = cooldown_key(provider_id, &pool[idx].id);
+    let Ok(mut guard) = rpm_windows().lock() else {
+        return false;
+    };
+    let window = guard.entry(slot).or_default();
+    while let Some(front) = window.front() {
+        if now.duration_since(*front) > RPM_SPAN {
+            window.pop_front();
+        } else {
+            break;
+        }
+    }
+    window.len() >= cap as usize
+}
+
+/// 记一次出站时刻（R10）。**发送成功后**才记——等待中的请求不占窗口名额
+/// （agent 离开时退出队列，「one taken back only leaves more room」）。
+pub fn note_rpm_send(provider_id: &str, key_id: &str) {
+    if key_id.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = rpm_windows().lock() {
+        guard
+            .entry(cooldown_key(provider_id, key_id))
+            .or_default()
+            .push_back(Instant::now());
+    }
+}
+
 /// forwarder 便捷入口（R7）：按 key_id 找池下标并尝试占名额。
 pub fn acquire_concurrency(provider: &Provider, key_id: &str) -> Option<ConcurrencyGuard> {
     let pool = pool_of(provider);
@@ -402,6 +454,9 @@ pub fn reset_for_tests() {
     if let Ok(mut guard) = in_flight().lock() {
         guard.clear();
     }
+    if let Ok(mut guard) = rpm_windows().lock() {
+        guard.clear();
+    }
 }
 
 fn is_live(
@@ -430,6 +485,10 @@ fn is_live(
     // R7 并发上限：满额的 key 视作「忙」——不是失败，不进冷却，
     // 名额释放（guard Drop）后立刻恢复可用。
     if at_concurrency_cap(pool, provider_id, idx) {
+        return false;
+    }
+    // R10 RPM 滑动窗口：本分钟出站次数达上限的 key 同样视作「忙」。
+    if at_rpm_cap(pool, provider_id, idx, now) {
         return false;
     }
     true
@@ -874,6 +933,7 @@ mod tests {
             label: None,
             daily_limit_usd: None,
             max_concurrency: None,
+            max_rpm: None,
         }
     }
 
@@ -1469,6 +1529,7 @@ mod tests {
             label: None,
             daily_limit_usd: limit.map(str::to_string),
             max_concurrency: None,
+            max_rpm: None,
         }
     }
 
@@ -1768,6 +1829,73 @@ mod tests {
         set_affinity_session(Some("sess-c".to_string()));
         let sel = select_for_provider(&provider).unwrap();
         assert_eq!(sel.key_id, "b", "满额 key 连亲和也进不了");
+        reset_for_tests();
+    }
+
+    // ── R10: MaxRPM 滑动窗口 ─────────────────────────────────────────
+
+    /// 出站记录进窗口；达到上限的 key 被 is_live 挡掉。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn rpm_cap_skips_key_at_limit() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        pool[0].max_rpm = Some(2);
+        let provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        note_rpm_send("p1", "a");
+        note_rpm_send("p1", "a");
+        let sel = select_for_provider(&provider).unwrap();
+        assert_eq!(sel.key_id, "b", "a 已 2/2 per min，应选 b");
+        reset_for_tests();
+    }
+
+    /// 过期时刻出队——窗口过去后 key 恢复可用（slack 内不算过期）。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn rpm_window_expires_entries() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a")];
+        pool[0].max_rpm = Some(1);
+        let pool_ref = pool.clone();
+        let _provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        note_rpm_send("p1", "a");
+        assert!(
+            !is_live(&pool_ref, &HashMap::new(), "p1", 0, Instant::now()),
+            "1/1 达上限应忙"
+        );
+        // 手工把唯一时刻拨到窗口外（61s slack 之外）
+        {
+            let mut guard = rpm_windows().lock().unwrap();
+            let window = guard.get_mut(&cooldown_key("p1", "a")).unwrap();
+            let old = Instant::now() - Duration::from_secs(62);
+            *window.front_mut().unwrap() = old;
+        }
+        assert!(
+            is_live(&pool_ref, &HashMap::new(), "p1", 0, Instant::now()),
+            "窗口过期后应恢复可用"
+        );
+        reset_for_tests();
+    }
+
+    /// 未设 / 0 = 不限。
+    #[serial_test::serial(global_env)]
+    #[test]
+    fn rpm_cap_absent_or_zero_means_unlimited() {
+        reset_for_tests();
+        let mut pool = vec![entry("a", "sk-a"), entry("b", "sk-b")];
+        pool[0].max_rpm = None;
+        pool[1].max_rpm = Some(0);
+        let pool_ref = pool.clone();
+        let _provider = provider_with_pool_and_strategy(pool, KeyPoolStrategy::Order);
+        for _ in 0..50 {
+            note_rpm_send("p1", "a");
+            note_rpm_send("p1", "b");
+        }
+        assert!(
+            is_live(&pool_ref, &HashMap::new(), "p1", 0, Instant::now())
+                && is_live(&pool_ref, &HashMap::new(), "p1", 1, Instant::now()),
+            "None 与 0 都不限"
+        );
         reset_for_tests();
     }
 

@@ -161,7 +161,7 @@ export function KeyPoolField({
         </p>
       ) : (
         <div className="space-y-2">
-          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
+          <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_100px_36px] gap-2 px-1 text-xs font-medium text-fg-2 md:grid">
             <span>
               {t("providerForm.keyPoolKeyLabel", { defaultValue: "API Key" })}
             </span>
@@ -176,6 +176,11 @@ export function KeyPoolField({
             <span>
               {t("providerForm.keyPoolMaxConcurrencyLabel", {
                 defaultValue: "并发上限（可选）",
+              })}
+            </span>
+            <span>
+              {t("providerForm.keyPoolMaxRpmLabel", {
+                defaultValue: "每分钟上限（可选）",
               })}
             </span>
             <span />
@@ -210,7 +215,7 @@ function KeyPoolRowInputs({
   const [showKey, setShowKey] = useState(false);
 
   return (
-    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_36px]">
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_100px_100px_36px]">
       <div className="relative">
         <Input
           type={showKey ? "text" : "password"}

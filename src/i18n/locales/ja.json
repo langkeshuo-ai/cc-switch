@@ -1640,7 +1640,9 @@
     "keyPoolDailyLimitLabel": "日次上限 $（任意）",
     "keyPoolDailyLimitPlaceholder": "例: 5 = 每日 $5",
     "keyPoolMaxConcurrencyLabel": "同時実行上限（任意）",
-    "keyPoolMaxConcurrencyPlaceholder": "例: 3"
+    "keyPoolMaxConcurrencyPlaceholder": "例: 3",
+    "keyPoolMaxRpmLabel": "毎分上限（任意）",
+    "keyPoolMaxRpmPlaceholder": "例: 20"
   },
   "copilot": {
     "authSection": "GitHub Copilot 認証",

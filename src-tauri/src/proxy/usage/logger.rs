@@ -738,6 +738,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                     crate::proxy::key_pool::KeyPoolEntry {
                         id: "pool-b".to_string(),
@@ -745,6 +746,7 @@ mod tests {
                         label: None,
                         daily_limit_usd: None,
                         max_concurrency: None,
+                        max_rpm: None,
                     },
                 ],
                 key_pool_strategy: Some(crate::proxy::key_pool::KeyPoolStrategy::Usage),

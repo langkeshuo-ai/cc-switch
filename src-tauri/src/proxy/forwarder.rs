@@ -2841,6 +2841,15 @@ impl RequestForwarder {
             .await?
         };
 
+        // R10：请求真的出网了才记 RPM 窗口——等待中的请求不占名额
+        // （agent 离开时退出，「one taken back only leaves more room」）。
+        if let Some(key_id) = super::key_pool::last_used_key_and_reason(provider)
+            .map(|(id, _)| id)
+            .filter(|id| !id.is_empty())
+        {
+            super::key_pool::note_rpm_send(&provider.id, &key_id);
+        }
+
         // 检查响应状态
         let status = response.status();
 
