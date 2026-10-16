@@ -1,6 +1,11 @@
 # BASELINE.md — 裁剪基线与边界声明
 
 > 本文件是 fork 维护模型的权威基线记录。修改裁剪规则前必须先更新本文件。
+>
+> **基线时间点：2026-10-16**。凡本文件与代码现状冲突，**以代码为准**并立即更新本文件。
+> 本文曾因未标注时间点而停在 `4.0.6-trim.1` 时代的事实上，先后误导过 Coder 与 Recon 各一次。
+> 核对命令：`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.lock`
+> 四处 version，以及 `src-tauri/src/database/mod.rs` 的 `SCHEMA_VERSION`。
 
 ## 1. 上游基线
 
@@ -8,18 +13,23 @@
 |---|---|---|
 | 上游仓库 | `farion1231/cc-switch` | git remote `upstream` |
 | 基线上游 tag | **v4.0.6** | merge commit `06147412`（上游 v4.0.6 合入，冲突以上游为准），其 `package.json` version = `4.0.6` |
-| 本 fork 版本 | `4.0.6-trim.1` | `package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` 三处**一致**（2026-10-12 交叉核对通过） |
-| 历史基线（参考） | v3.20.4（merge-base `1ee2fdc3`）→ trim.13；v4.0.6 升级后 N 归零重计 | 跟版流程见 §7 |
+| 本 fork 版本 | **`4.0.13`** | 四处**一致**（2026-10-16 核对通过）：`package.json:3` / `src-tauri/Cargo.toml:3` / `src-tauri/tauri.conf.json:4` / `src-tauri/Cargo.lock:849`。fork 已在 `faa4ad00` 并入上游版本线号，故不再使用 `-trim.N` 后缀，后续 cherry-pick 与上游同基准 |
+| 历史基线（参考） | v3.20.4（merge-base `1ee2fdc3`）→ trim.13；v4.0.6 升级后 N 归零重计；v4.0.13 起弃用 `-trim.N` | 跟版流程见 §7 |
 
-**版本核对结果**：三处版本号一致，无漂移。
+**版本核对结果**：四处版本号一致，无漂移。（本行曾错误地声称「三处一致」——实际第四处 `Cargo.lock` 长期漂移，已由 `d3f772d1` 修复，故此处理应核对四处。）
 
 ## 2. 数据库 schema 不变量（最高优先级）
 
-> **本 fork 的 `SCHEMA_VERSION` 必须等于基线上游（v4.0.6）的值：`20`。**
+> **本 fork 的 `SCHEMA_VERSION` 当前值 = `22`**（`src-tauri/src/database/mod.rs:65`，2026-10-16 核对）。
+>
+> ⚠️ **本节原声称「必须等于基线上游（v4.0.6）的值 20」已不成立**：上游从 v4.0.6 之后持续推进 schema，
+> fork 跟版到 4.0.13 后实际值已高于 20。当前真实状态是 **22**，且这是**已接受的既成事实**——
+> 任务书「当前水位」一节记录的正是 `schema v22：key_id + route_reason 列已在`。
+>
 > 上游 v3.20.4 为 `19`；4.0.x 的 v19→v20 迁移内容是给 `mcp_servers` 加 `enabled_pi`（随上游基线接受，非 fork 自造）。
 
 - 禁止任何 fork 自造迁移；fork 曾自造的三条迁移（v19→v20 `app_snapshots` 建表、v20→v21 放行 Pi proxy_config 行、v21→v22 清理被裁应用）已全部删除，schema 回退上游基线（T2）。
-- `proxy_config` 的 CHECK 约束保持上游四值：`('claude','codex','gemini','grokbuild')`，**不含 `'pi'`**。
+- `proxy_config` 的 CHECK 约束保持上游四值：`('claude','codex','gemini','grokbuild')`，**不含 `'pi'`**。（2026-10-16 核对：`src-tauri/src/database/schema.rs:130/952/1514` 三处均为四值，未变。）
 - 存量 fork 数据库（v20/v21/v22）由启动时的版本预检放行（`093fb91d`）：高于 `SCHEMA_VERSION` 拒绝、等于/低于则正常迁移，**无需手工改库**。
 - 理由：fork 曾把 schema 顶到 22，导致每次跟上游都要手改数据库、且与官方构建互不兼容（官方装在 fork 库上直接拒绝启动）。schema 对齐后，跟版只 diff 代码，不动库。
 
@@ -70,11 +80,16 @@ README 功能表 Pi 行（中/英/日三份）已逐列核对代码：
 | Skills | ✓ | `services/skill.rs` 含 Pi 部署逻辑 |
 | 会话 / 用量统计 | ✓ | `session_manager/providers/pi.rs` 等 |
 
-## 6. 版本号规则（`-trim.N` 递增条件）
+## 6. 版本号规则
+
+> **2026-10-16 更新：fork 已弃用 `-trim.N` 后缀。** `faa4ad00` 那次「版本对齐上游 4.0.13」起，
+> fork 直接采用上游版本线号（当前 4.0.13），后续与上游同基准。下面的 `-trim.N` 规则仅对
+> **v3.20.4-trim.1 ~ v3.20.4-trim.13 时代**有效，作为历史记录保留，**不再适用于新发布**。
 
 - **递增**：合并一批上游修复/功能（月度 ADR-001 pick 评审）并重新打包发布时；或 fork 自身发生行为变更的修复/重构后发布时。
 - **不递增**：纯文档、注释、CI 配置修正（合入下一批次一起发）。
-- 命名：`v{上游基线版本}-trim.{N}`，如 `v3.20.4-trim.14`。升上游基线（如 4.0）后 N 归零重计：`v4.0.x-trim.1`。
+- 命名（历史规则，已停用）：`v{上游基线版本}-trim.{N}`，如 `v3.20.4-trim.14`。升上游基线（如 4.0）后 N 归零重计：`v4.0.x-trim.1`。
+- 命名（现行）：直接用上游线号 `v{上游版本}`，如 `v4.0.13`；fork 自有变更随上游版本一起发布，不另起后缀。
 
 ## 7. 跟版流程
 
@@ -82,4 +97,4 @@ README 功能表 Pi 行（中/英/日三份）已逐列核对代码：
 2. 若上游 `SCHEMA_VERSION` 变化：先跑 T5 式只读评估，再决定是否跟。
 3. 跑 `node scripts/trim-app.mjs <上游tag>` 产出裁剪补丁（T4），按补丁 cherry-pick/合并。
 4. 全量闸门：typecheck + cargo check + cargo test --lib + 打包验证。
-5. 递增 `-trim.N`，发布。
+5. 发布（沿用上游版本线号；`-trim.N` 递增已停用）。
