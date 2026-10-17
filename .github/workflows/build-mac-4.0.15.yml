@@ -26,8 +26,10 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Setup Rust (stable + universal targets)
-        uses: dtolnay/rust-toolchain@stable
+      # 钉 1.95：rust-toolchain.toml 钉死 1.95，用 stable 会装到前移后的新版本，
+      # targets 落错工具链（x86_64 缺失导致 universal 构建失败）
+      - name: Setup Rust (1.95 + universal targets)
+        uses: dtolnay/rust-toolchain@1.95
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
