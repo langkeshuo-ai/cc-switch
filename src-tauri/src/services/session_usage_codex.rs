@@ -3420,7 +3420,7 @@ mod tests {
             // Keep the existing malformed-JSON/blank-line behavior too.
             (b"{malformed\n \t\r\n", b"{malformed", false),
         ];
-        for compressed in [false, true] {
+        for _ in [0] {
             for &(prefix, suffix, remove_final_newline) in cases {
                 clear_codex_replay_caches();
                 let db = Database::memory()?;
@@ -3432,12 +3432,7 @@ mod tests {
                     assert_eq!(contents.pop(), Some(b'\n'));
                 }
                 fs::write(&parent, [prefix, contents.as_slice(), suffix].concat()).unwrap();
-                let parent = if compressed {
-                    compress_rollout(&parent)
-                } else {
-                    parent
-                };
-
+                // fork 未取 8641cd1d 压缩特性，只测纯文本父文件
                 let result = sync_test_file(&db, &child, &[&parent, &child])?;
                 assert_eq!(
                     (result.imported, result.skipped, result.deferred),
@@ -4054,86 +4049,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[serial_test::serial]
-    fn test_retryable_pending_retries_parent_decompression_errors() -> Result<(), AppError> {
-        clear_codex_replay_caches();
-        let db = Database::memory()?;
-        let temp = tempdir().unwrap();
-        let (parent, child) = retryable_parent_and_child(temp.path());
-        let compressed_parent = PathBuf::from(format!("{}.zst", parent.display()));
-        fs::remove_file(&parent).unwrap();
-        fs::write(&compressed_parent, b"invalid zstd bytes").unwrap();
-        // Opening/statting this file succeeds; decoding its body fails. That
-        // transient failure must not be suppressed by an unchanged fingerprint.
-        for _ in 0..2 {
-            assert!(sync_test_file(&db, &child, &[&compressed_parent, &child])?.deferred);
-        }
-        assert_eq!(codex_parse_count(&child), 2);
-        assert!(!replay_caches()
-            .lock()
-            .unwrap()
-            .parent_timelines
-            .contains_key(&compressed_parent));
-        Ok(())
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn test_parent_decompression_error_after_valid_prefix_does_not_cache_partial_timeline(
-    ) -> Result<(), AppError> {
-        clear_codex_replay_caches();
-        let db = Database::memory()?;
-        let temp = tempdir().unwrap();
-        let (parent, child) = retryable_parent_and_child(temp.path());
-        append_jsonl(&parent, turn_context_at("2026-07-10T03:00:10Z"));
-        let mut contents = fs::read(&parent).unwrap();
-        // Fill the rollout reader's buffer before it reaches a corrupt second
-        // frame, so valid token events are read before decompression fails.
-        contents.extend(vec![b'\n'; 2 << 20]);
-        fs::write(&parent, contents).unwrap();
-        let compressed_parent = compress_rollout(&parent);
-        let valid_frame = fs::read(&compressed_parent).unwrap();
-        let mut corrupt_frames = valid_frame.clone();
-        corrupt_frames.extend_from_slice(b"invalid zstd bytes");
-        fs::write(&compressed_parent, corrupt_frames).unwrap();
-        let mut reader = codex_rollout_file::open_reader(&compressed_parent).unwrap();
-        let mut first_line = Vec::new();
-        assert!(reader.read_until(b'\n', &mut first_line).unwrap() > 0);
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&first_line).unwrap(),
-            session_meta(PARENT_ID)
-        );
-        drop(reader);
-
-        for _ in 0..2 {
-            let error = load_parent_timeline(&compressed_parent).unwrap_err();
-            assert!(!error.cacheable);
-            assert!(error.reason.contains("无法读取父 rollout"));
-            assert!(sync_test_file(&db, &child, &[&compressed_parent, &child])?.deferred);
-            assert!(!replay_caches()
-                .lock()
-                .unwrap()
-                .parent_timelines
-                .contains_key(&compressed_parent));
-        }
-        assert_eq!(codex_parse_count(&child), 2);
-        assert_eq!(get_sync_state(&db, &child.to_string_lossy())?, (0, 0));
-
-        fs::write(&compressed_parent, valid_frame).unwrap();
-        let recovered = sync_test_file(&db, &child, &[&compressed_parent, &child])?;
-        assert_eq!(
-            (recovered.imported, recovered.skipped, recovered.deferred),
-            (1, 1, false)
-        );
-        assert_eq!(codex_parse_count(&child), 3);
-        assert_eq!(
-            sync_test_file(&db, &child, &[&compressed_parent, &child])?.imported,
-            0
-        );
-        assert_eq!(codex_parse_count(&child), 3);
-        Ok(())
-    }
+    // 上游有两个压缩父 rollout 测试（解压错误不缓存部分时间线、修复后恢复计数），
+    // 依赖 fork 未取的 8641cd1d 压缩特性（compress_rollout/codex_rollout_file），不拣
 
     #[test]
     #[serial_test::serial]
