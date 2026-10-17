@@ -1,0 +1,37 @@
+# 一次性发布：v4.0.14 从已成功的构建 run 取 dmg，创建 GitHub Release。
+# 本机（Windows）大文件下载链路故障，release 创建改在 GitHub 内网完成。
+# 完成后与 build-mac-4.0.14.yml 一起删除。
+name: Publish macOS 4.0.14 release (one-off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: Create release v4.0.14
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download dmg artifact (build run 39016254806)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh artifact download cc-switch-v4.0.14-macos -D dmg
+          ls -l dmg/
+          sha256sum dmg/CC-Switch-v4.0.14-macOS.dmg
+
+      # 文案与任务书第 5 步一致
+      - name: Create GitHub Release with dmg
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create v4.0.14 \
+            --title "CC Switch v4.0.14" \
+            --notes "首个 4.x macOS 安装包（universal，Apple Silicon + Intel）。本版为手动下载安装；自动更新链路待 Windows/Linux 产物齐备后统一开启。" \
+            dmg/CC-Switch-v4.0.14-macOS.dmg
+          gh release view v4.0.14
