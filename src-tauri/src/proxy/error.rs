@@ -239,7 +239,12 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
-        let error = reqwest::Client::new()
+        // no_proxy：系统代理（如 Clash 增强模式）会拦截回环请求返回 502，
+        // 破坏「连接被拒绝」前提；本测试只关心错误文案，不走代理
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("build client")
             .get(format!(
                 "http://127.0.0.1:{port}/v1/responses?key=secret-token"
             ))

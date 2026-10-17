@@ -94,11 +94,6 @@ describe("useDirectorySettings", () => {
   it.each([
     ["claude", "claudeConfigDir"],
     ["codex", "codexConfigDir"],
-    ["gemini", "geminiConfigDir"],
-    ["grokbuild", "grokConfigDir"],
-    ["opencode", "opencodeConfigDir"],
-    ["openclaw", "openclawConfigDir"],
-    ["hermes", "hermesConfigDir"],
     ["pi", "piConfigDir"],
   ] as const)(
     "syncs the %s display when form drafts are discarded",

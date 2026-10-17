@@ -333,12 +333,6 @@ describe("SettingsPage integration", () => {
   );
 
   it.each([
-    [
-      "hermes",
-      "hermesConfigDir",
-      "settings.browsePlaceholderHermes",
-      "/env/hermes-home",
-    ],
     ["pi", "piConfigDir", "settings.browsePlaceholderPi", "/env/pi-agent"],
   ] as const)(
     "restores backend-resolved %s default after draft discard",

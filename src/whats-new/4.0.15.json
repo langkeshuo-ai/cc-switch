@@ -3,24 +3,24 @@
   "items": [
     {
       "type": "new",
-      "zh": "同步上游修复：Codex 用量统计的父链、分页与脏记录不再漏算或卡住",
-      "zh-TW": "同步上游修復：Codex 用量統計的父鏈、分頁與髒記錄不再漏算或卡住",
-      "ja": "上流の修正を同期：Codex 使用量統計の親チェーン・ページング・不正レコードで漏れや停滞を解消",
-      "en": "Upstream fixes: Codex usage stats parent chains, pagination, and malformed records no longer stall or undercount"
+      "zh": "Codex 用量统计修复：父链、分页与脏记录不再漏算或卡住",
+      "zh-TW": "Codex 用量統計修復：父鏈、分頁與髒記錄不再漏算或卡住",
+      "ja": "Codex 使用量統計の親チェーン・ページング・不正レコードの漏れと停滞を修正",
+      "en": "Codex usage stats: parent chains, pagination and malformed records no longer undercount or stall"
     },
     {
       "type": "new",
-      "zh": "Pi 用量统计计入子代理（subagent-artifacts）消耗",
-      "zh-TW": "Pi 用量統計計入子代理（subagent-artifacts）消耗",
+      "zh": "Pi 用量统计计入子代理消耗",
+      "zh-TW": "Pi 用量統計計入子代理消耗",
       "ja": "Pi の使用量統計にサブエージェントの消費を含む",
-      "en": "Pi usage stats now count subagent (pi-subagents) consumption"
+      "en": "Pi usage stats now include subagent consumption"
     },
     {
       "type": "new",
-      "zh": "Deep Link 冷启动不再丢链接；不支持的 configUrl 导入提前拒绝",
-      "zh-TW": "Deep Link 冷啟動不再丟連結；不支援的 configUrl 導入提前拒絕",
-      "ja": "Deep Link のコールドスタートでリンクが失われなくなりました。非対応の configUrl は事前に拒否",
-      "en": "Deep links survive cold start; unsupported configUrl imports are rejected up front"
+      "zh": "Deep Link 冷启动不再丢链接",
+      "zh-TW": "Deep Link 冷啟動不再丟連結",
+      "ja": "Deep Link のコールドスタートでリンクが失われなくなりました",
+      "en": "Deep links survive cold start; bad configUrl imports are rejected up front"
     },
     {
       "type": "new",
@@ -28,13 +28,6 @@
       "zh-TW": "切換模式預覽顯示各供應商真實模型數",
       "ja": "モード切替のプレビューで各プロバイダーの実際のモデル数を表示",
       "en": "Mode-switch preview shows each provider's real model count"
-    },
-    {
-      "type": "new",
-      "zh": "配置读取更宽容：损坏的 settings 文件自动备份，可用字段照读",
-      "zh-TW": "配置讀取更寬容：損壞的 settings 檔案自動備份，可用欄位照讀",
-      "ja": "設定読み取りの寛容化：壊れた settings ファイルは自動バックアップし、読める項目はそのまま使う",
-      "en": "Corrupted settings files are backed up automatically; readable fields still load"
     }
   ]
 }

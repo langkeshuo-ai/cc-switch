@@ -56,11 +56,6 @@ export type { SettingsFormState, ResolvedDirectories };
 const DIRECTORY_KEYS = [
   "claudeConfigDir",
   "codexConfigDir",
-  "geminiConfigDir",
-  "grokConfigDir",
-  "opencodeConfigDir",
-  "openclawConfigDir",
-  "hermesConfigDir",
   "piConfigDir",
 ] as const;
 

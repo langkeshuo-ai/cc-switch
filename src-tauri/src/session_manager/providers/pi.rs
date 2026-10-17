@@ -750,11 +750,7 @@ mod tests {
         let artifacts = root.join("proj").join("subagent-artifacts");
         fs::create_dir_all(&artifacts).expect("artifacts");
         fs::write(root.join("proj").join("main.jsonl"), "{}\n").expect("main");
-        fs::write(
-            artifacts.join("r1-worker_transcript.jsonl"),
-            "{}\n",
-        )
-        .expect("artifact");
+        fs::write(artifacts.join("r1-worker_transcript.jsonl"), "{}\n").expect("artifact");
         let deep = artifacts.join("deeper");
         fs::create_dir_all(&deep).expect("deep");
         fs::write(deep.join("x.jsonl"), "{}\n").expect("deep file");

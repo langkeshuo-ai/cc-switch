@@ -106,12 +106,12 @@ async function renderApps() {
   // 安装 / 升级的状态放在模块级 store 里，跨挂载保留。
   const { AppsPage } = await import("@/components/apps/AppsPage");
   const view = mountApps(AppsPage);
-  // Both header labels stay mounted to reserve their width. Wait for the idle
-  // label to be shown, including when a pending dialog hides the page itself.
+  // fork 的 AppsPage 未采用 AppPageHeader 的 aria-hidden 宽度保留方案（0310d25d），
+  // 标签恒挂载，等待出现即可
   await waitFor(() =>
     expect(
       within(view.container).getByText("appsPage.checkUpdates"),
-    ).toHaveAttribute("aria-hidden", "false"),
+    ).toBeInTheDocument(),
   );
   return view;
 }

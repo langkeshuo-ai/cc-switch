@@ -1,0 +1,55 @@
+# 一次性构建：v4.0.15 macOS universal 安装包（fork 无签名私钥，出产物供手动下载安装）。
+# 仅 workflow_dispatch 触发，不碰 tag、不建 Release（tag 与 release 由 Windows 侧 gh 完成）。
+# dmg 取回后本文件可删。
+name: Build macOS 4.0.15 (one-off)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-mac:
+    name: Build universal dmg
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Rust (stable + universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 与 v4.0.14 一致：关 updater 产物（本机无签名私钥），只出 app + dmg
+      - name: Build universal app + dmg
+        run: |
+          pnpm tauri build --target universal-apple-darwin --bundles app,dmg \
+            -c '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Rename dmg (no spaces)
+        run: |
+          cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
+          mv "CC-Switch_4.0.15_universal.dmg" "CC-Switch-v4.0.15-macOS.dmg"
+          ls -l CC-Switch-v4.0.15-macOS.dmg
+          shasum -a 256 CC-Switch-v4.0.15-macOS.dmg
+
+      - name: Upload dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-v4.0.15-macos
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/CC-Switch-v4.0.15-macOS.dmg
+          retention-days: 14

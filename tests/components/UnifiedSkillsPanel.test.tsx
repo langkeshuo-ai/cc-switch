@@ -284,10 +284,10 @@ describe("UnifiedSkillsPanel", () => {
   it.each([true, false])(
     "shows an error toast when every bulk toggle fails (enabled=%s)",
     async (enabled) => {
-      m.visibleApps = ["hermes"];
+      m.visibleApps = ["pi"];
       m.installed = [
-        makeSkill({ id: "a", name: "A", apps: { hermes: !enabled } }),
-        makeSkill({ id: "b", name: "B", apps: { hermes: !enabled } }),
+        makeSkill({ id: "a", name: "A", apps: { pi: !enabled } }),
+        makeSkill({ id: "b", name: "B", apps: { pi: !enabled } }),
       ];
       m.bulkToggle.mockResolvedValueOnce({
         succeeded: [],
@@ -313,7 +313,7 @@ describe("UnifiedSkillsPanel", () => {
       );
       expect(m.bulkToggle).toHaveBeenCalledWith({
         ids: ["a", "b"],
-        app: "hermes",
+        app: "pi",
         enabled,
       });
       expect(
@@ -371,9 +371,9 @@ describe("UnifiedSkillsPanel", () => {
 
   describe.each([true, false])("bulk undo feedback (enabled=%s)", (enabled) => {
     beforeEach(() => {
-      m.visibleApps = ["hermes"];
+      m.visibleApps = ["pi"];
       m.installed = ["a", "b"].map((id) =>
-        makeSkill({ id, name: id, apps: { hermes: !enabled } }),
+        makeSkill({ id, name: id, apps: { pi: !enabled } }),
       );
       // Check the actual outcome text and count without changing panel labels.
       i18n.addResourceBundle("zh", "translation", {
@@ -440,7 +440,7 @@ describe("UnifiedSkillsPanel", () => {
         }
         expect(m.bulkToggle).toHaveBeenLastCalledWith({
           ids: ["a", "b"],
-          app: "hermes",
+          app: "pi",
           enabled: !enabled,
         });
         const failedCells = screen.queryAllByRole("button", {
@@ -454,7 +454,7 @@ describe("UnifiedSkillsPanel", () => {
           await waitFor(() =>
             expect(m.toggle).toHaveBeenCalledWith({
               id: failedIds[0],
-              app: "hermes",
+              app: "pi",
               enabled: !enabled,
             }),
           );

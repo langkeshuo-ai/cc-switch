@@ -2884,13 +2884,7 @@ model_provider = "aihubmix"
                 + "{\"type\":\"response_item\",\"payload\":{\"text\":\"cc-switch-official\"}}\n",
         )
         .expect("write plain session");
-        let compressed = session_dir.join("rollout-legacy-zst.jsonl.zst");
-        fs::write(
-            &compressed,
-            zstd::stream::encode_all(session_meta_line("s2", "cc-switch-official").as_bytes(), 3)
-                .expect("encode"),
-        )
-        .expect("write zst session");
+        // fork 未取 8641cd1d 压缩 rollout 特性，迁移只处理 plain .jsonl，不覆盖 zst 用例
         let third_party = session_dir.join("rollout-custom.jsonl");
         fs::write(&third_party, session_meta_line("s3", "custom")).expect("write custom session");
 
@@ -2899,7 +2893,6 @@ model_provider = "aihubmix"
             &state_db,
             &[
                 ("s1", "cc-switch-official"),
-                ("s2", "cc-switch-official"),
                 ("s3", "custom"),
                 ("s4", "openai"),
             ],
@@ -2908,8 +2901,8 @@ model_provider = "aihubmix"
         let outcome = maybe_migrate_codex_legacy_official_history_to_openai_bucket()
             .expect("migrate legacy official bucket");
         assert_eq!(outcome.skipped_reason, None);
-        assert_eq!(outcome.migrated_jsonl_files, 2);
-        assert_eq!(outcome.migrated_state_rows, 2);
+        assert_eq!(outcome.migrated_jsonl_files, 1);
+        assert_eq!(outcome.migrated_state_rows, 1);
 
         let plain_text = fs::read_to_string(&plain).expect("read plain");
         assert!(plain_text.contains("\"model_provider\":\"openai\""));
@@ -2917,18 +2910,12 @@ model_provider = "aihubmix"
         assert!(plain_text.contains(
             "{\"type\":\"response_item\",\"payload\":{\"text\":\"cc-switch-official\"}}"
         ));
-        let raw = fs::read(&compressed).expect("read zst");
-        assert_eq!(&raw[..4], &[0x28, 0xB5, 0x2F, 0xFD], "still zstd");
-        let decoded = String::from_utf8(zstd::stream::decode_all(raw.as_slice()).expect("decode"))
-            .expect("utf8");
-        assert!(decoded.contains("\"model_provider\":\"openai\""));
         assert_eq!(
             fs::read_to_string(&third_party).expect("read custom"),
             session_meta_line("s3", "custom")
         );
 
         assert_eq!(thread_provider(&state_db, "s1"), "openai");
-        assert_eq!(thread_provider(&state_db, "s2"), "openai");
         assert_eq!(thread_provider(&state_db, "s3"), "custom");
         assert_eq!(thread_provider(&state_db, "s4"), "openai");
 
