@@ -32,6 +32,7 @@ jobs:
       - name: Create GitHub Release with dmg
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: langkeshuo-ai/cc-switch
         run: |
           set -euo pipefail
           gh release create v4.0.14 \
