@@ -1,0 +1,12 @@
+{
+  "version": "4.0.14",
+  "items": [
+    {
+      "type": "new",
+      "zh": "首个 4.x 线号 macOS 安装包",
+      "zh-TW": "首個 4.x 線號 macOS 安裝包",
+      "ja": "4.x 系初の macOS インストーラー",
+      "en": "First 4.x-line macOS installer"
+    }
+  ]
+}
