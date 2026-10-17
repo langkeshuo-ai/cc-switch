@@ -1797,7 +1797,7 @@ mod tests {
             "{}\n}}\n  \"tail\": true\n}}",
             serde_json::json!({
                 "claudeConfigDir": "/tmp/claude",
-                "visibleApps": { "claude-desktop": false, "gemini": false }
+                "visibleApps": { "pi": false }
             })
         );
         assert!(serde_json::from_str::<AppSettings>(&content).is_err());
@@ -1809,8 +1809,8 @@ mod tests {
         );
         assert_eq!(settings.claude_config_dir.as_deref(), Some("/tmp/claude"));
         let visible = settings.visible_apps.expect("visible apps kept");
-        assert!(!visible.claude_desktop);
-        assert!(!visible.gemini);
+        assert!(!visible.pi);
+        assert!(visible.claude);
         assert!(visible.codex);
     }
 

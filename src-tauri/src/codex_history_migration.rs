@@ -1437,6 +1437,7 @@ mod tests {
     use super::*;
     use crate::codex_state_db::CODEX_STATE_DB_FILENAME;
     use crate::provider::Provider;
+    use serial_test::serial;
     use std::ffi::OsString;
     use tempfile::tempdir;
 

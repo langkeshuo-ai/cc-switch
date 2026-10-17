@@ -136,23 +136,13 @@ fn test_parse_rejects_config_url_up_front() {
     assert!(err.to_string().contains("configUrl"), "{err}");
 }
 
-/// 下游 parse_mcp_apps 与 McpService 都支持 Pi / MiniMax Code，解析层不能先把它们拦掉
+/// fork 已裁 mcode 面：prompt deeplink 对 mcode 明确报错（与裁剪白名单一致）
 #[test]
-fn test_parse_mcp_deeplink_accepts_pi_and_mcode() {
-    let config = BASE64_URL_SAFE_NO_PAD.encode(r#"{"mcpServers":{"fetch":{"command":"uvx"}}}"#);
-    let url = format!("ccswitch://v1/import?resource=mcp&apps=claude,pi,mcode&config={config}");
-
-    let request = parse_deeplink_url(&url).expect("pi and mcode are valid MCP targets");
-    let apps = parse_mcp_apps(request.apps.as_deref().unwrap()).unwrap();
-    assert!(apps.claude && apps.pi && apps.mcode);
-}
-
-#[test]
-fn test_parse_prompt_deeplink_accepts_mcode() {
+fn test_parse_prompt_deeplink_rejects_trimmed_mcode() {
     let url = "ccswitch://v1/import?resource=prompt&app=mcode&name=Rules&content=IyBoaQ%3D%3D";
 
-    let request = parse_deeplink_url(url).expect("MiniMax Code has a prompt panel");
-    assert_eq!(request.app.as_deref(), Some("mcode"));
+    let err = parse_deeplink_url(url).unwrap_err();
+    assert!(err.to_string().contains("mcode"), "{err}");
 }
 
 /// 读取不清除，按编号确认才清除：前端读到后、显示前被打断（effect 重建、窗口销毁），
