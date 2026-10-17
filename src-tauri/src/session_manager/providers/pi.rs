@@ -688,11 +688,27 @@ fn collect_jsonl_files(
                     continue;
                 };
                 for project_entry in project_entries.flatten() {
-                    if project_entry
-                        .file_type()
-                        .is_ok_and(|file_type| file_type.is_file())
-                    {
+                    let Ok(entry_type) = project_entry.file_type() else {
+                        continue;
+                    };
+                    if entry_type.is_file() {
                         push_jsonl_file(&project_entry, output, enforce_size_limit);
+                    } else if entry_type.is_dir()
+                        && project_entry.file_name() == "subagent-artifacts"
+                    {
+                        // pi-subagents 把子会话转录写到 subagent-artifacts/ 子目录
+                        // （与主会话同格式 JSONL，#8298），只递归这一个已知目录
+                        let Ok(artifact_entries) = fs::read_dir(project_entry.path()) else {
+                            continue;
+                        };
+                        for artifact_entry in artifact_entries.flatten() {
+                            if artifact_entry
+                                .file_type()
+                                .is_ok_and(|file_type| file_type.is_file())
+                            {
+                                push_jsonl_file(&artifact_entry, output, enforce_size_limit);
+                            }
+                        }
                     }
                 }
             }
@@ -724,6 +740,35 @@ mod tests {
             format!("{{\"type\":\"session\",\"version\":3,\"id\":\"{id}\",\"cwd\":\"/work\"}}\n"),
         )
         .expect("write session");
+    }
+
+    // #8298：pi-subagents 的子会话转录在 subagent-artifacts/ 子目录，必须被收集
+    #[test]
+    fn project_layout_collects_subagent_artifacts_one_level_down() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("sessions");
+        let artifacts = root.join("proj").join("subagent-artifacts");
+        fs::create_dir_all(&artifacts).expect("artifacts");
+        fs::write(root.join("proj").join("main.jsonl"), "{}\n").expect("main");
+        fs::write(
+            artifacts.join("r1-worker_transcript.jsonl"),
+            "{}\n",
+        )
+        .expect("artifact");
+        let deep = artifacts.join("deeper");
+        fs::create_dir_all(&deep).expect("deep");
+        fs::write(deep.join("x.jsonl"), "{}\n").expect("deep file");
+
+        let mut output = Vec::new();
+        collect_jsonl_files(&root, SessionLayout::ProjectDirectories, &mut output, false);
+        let names: Vec<String> = output
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"main.jsonl".to_string()));
+        assert!(names.contains(&"r1-worker_transcript.jsonl".to_string()));
+        // 只递归 subagent-artifacts 一层，更深的目录不扫
+        assert!(!names.contains(&"x.jsonl".to_string()));
     }
 
     #[test]
