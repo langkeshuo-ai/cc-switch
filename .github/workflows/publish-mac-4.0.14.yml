@@ -15,12 +15,14 @@ jobs:
     name: Create release v4.0.14
     runs-on: ubuntu-22.04
     steps:
+      # runner 预装 gh 版本不认 `gh artifact` 子命令（已实测），用 gh run download 按 run 取
       - name: Download dmg artifact (build run 39016254806)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh artifact download cc-switch-v4.0.14-macos -D dmg
+          gh --version
+          gh run download 39016254806 --name cc-switch-v4.0.14-macos -D dmg
           ls -l dmg/
           sha256sum dmg/CC-Switch-v4.0.14-macOS.dmg
 
