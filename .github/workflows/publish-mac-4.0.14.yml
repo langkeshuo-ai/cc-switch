@@ -16,9 +16,11 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       # runner 预装 gh 版本不认 `gh artifact` 子命令（已实测），用 gh run download 按 run 取
+      # job 没有 checkout，gh 靠 GH_REPO 定位仓库（二跑实测：缺 git 上下文直接挂）
       - name: Download dmg artifact (build run 39016254806)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: langkeshuo-ai/cc-switch
         run: |
           set -euo pipefail
           gh --version
