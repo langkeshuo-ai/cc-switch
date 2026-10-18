@@ -26,12 +26,19 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
-      # 钉 1.95：rust-toolchain.toml 钉死 1.95，用 stable 会装到前移后的新版本，
-      # targets 落错工具链（x86_64 缺失导致 universal 构建失败）
-      - name: Setup Rust (1.95 + universal targets)
-        uses: dtolnay/rust-toolchain@1.95
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # 钉 1.95：rust-toolchain.toml 的 channel="1.95"。dtolnay/rust-toolchain 会把
+      # "1.95" 解析成 "1.95.0" 并以 --force-non-host 安装，而 cargo 按 toml 解析到
+      # 名为 "1.95" 的工具链、自动装成仅宿主版，x86_64 缺失导致 universal 构建失败。
+      # 改为显式安装同名 1.95 工具链并给它补两个 Apple targets（与 toml 完全对齐）。
+      - name: Setup Rust (pinned 1.95 + Apple targets)
+        run: |
+          cd src-tauri
+          rustup toolchain install 1.95 --profile minimal -c rustfmt -c clippy
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin --toolchain 1.95
+          echo "--- active toolchain (src-tauri) ---"
+          rustup show active-toolchain
+          echo "--- 1.95 installed targets ---"
+          rustup target list --toolchain 1.95 --installed
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
