@@ -1313,6 +1313,8 @@ pub fn run() {
             commands::read_live_provider_settings,
             commands::get_settings,
             commands::save_settings,
+            commands::check_app_update_available,
+            commands::install_update_and_restart,
             commands::has_codex_unify_history_backup,
             commands::codex_forces_multi_agent_v2,
             commands::restore_codex_unified_history,

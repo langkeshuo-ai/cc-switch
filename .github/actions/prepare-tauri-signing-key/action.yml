@@ -67,7 +67,8 @@ runs:
           exit 1
         fi
         echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
-        if [ -n "$KEY_PASSWORD" ]; then
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
-        fi
+        # 无条件导出密码变量（即使为空）：不显式给出时 Tauri CLI 会在密钥加载处
+        # 等待交互输入，非交互环境（CI/脚本）直接挂起。空密码对无密码密钥是显式值，
+        # 会跳过交互分支。
+        echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
         echo "✅ Tauri signing key prepared"

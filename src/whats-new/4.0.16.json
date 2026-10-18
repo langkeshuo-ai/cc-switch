@@ -1,0 +1,26 @@
+{
+  "version": "4.0.16",
+  "items": [
+    {
+      "type": "new",
+      "zh": "启用自动更新：应用内检查并一键安装新版本",
+      "zh-TW": "啟用自動更新：應用內檢查並一鍵安裝新版本",
+      "ja": "自動更新を有効化：アプリ内で新版を確認し一鍵インストール",
+      "en": "Auto-updates enabled: check for and install new versions in-app"
+    },
+    {
+      "type": "fix",
+      "zh": "修复数据库版本过新时的一键升级恢复入口",
+      "zh-TW": "修復資料庫版本過新時的一鍵升級恢復入口",
+      "ja": "データベースが新しい場合の一鍵アップグレード復旧入口を修正",
+      "en": "Fixed the one-click upgrade recovery entry shown when the database is newer than the app"
+    },
+    {
+      "type": "new",
+      "zh": "更新源改指本仓库发布，不再跟随上游",
+      "zh-TW": "更新源改指本倉庫發布，不再跟隨上游",
+      "ja": "更新ソースを本リポジトリのリリースに変更し、上流を追従しなくなりました",
+      "en": "Updates now come from this repo's releases instead of following upstream"
+    }
+  ]
+}
