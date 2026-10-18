@@ -49,10 +49,11 @@ jobs:
           pnpm tauri build --target universal-apple-darwin --bundles app,dmg \
             -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
+      # tauri 用 productName 原名（带空格）命名：CC Switch_4.0.15_universal.dmg
       - name: Rename dmg (no spaces)
         run: |
           cd src-tauri/target/universal-apple-darwin/release/bundle/dmg
-          mv "CC-Switch_4.0.15_universal.dmg" "CC-Switch-v4.0.15-macOS.dmg"
+          mv "CC Switch_4.0.15_universal.dmg" "CC-Switch-v4.0.15-macOS.dmg"
           ls -l CC-Switch-v4.0.15-macOS.dmg
           shasum -a 256 CC-Switch-v4.0.15-macOS.dmg
 
