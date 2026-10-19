@@ -79,6 +79,7 @@ import {
   useToolUpdatesAvailable,
 } from "@/components/apps/useToolManagement";
 import { UsagePage } from "@/components/usage/UsagePage";
+import { UnifiedProvidersPage } from "@/components/universal";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { SwitchModePanel } from "@/components/providers/mode/SwitchModePanel";
 import { proxyApi } from "@/lib/api/proxy";
@@ -1133,6 +1134,8 @@ function App() {
 
   const renderGlobalPage = () => {
     switch (currentView) {
+      case "allProviders":
+        return <UnifiedProvidersPage />;
       case "usage":
         return (
           <UsagePage

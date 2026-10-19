@@ -1968,27 +1968,53 @@ impl ProviderService {
         Ok(true)
     }
 
-    /// 删除统一供应商
+    /// 添加或更新统一供应商，并立即同步到各应用（保存即全应用生效）
+    pub fn upsert_universal_synced(
+        state: &AppState,
+        provider: UniversalProvider,
+    ) -> Result<bool, AppError> {
+        let id = provider.id.clone();
+        Self::upsert_universal(state, provider)?;
+        Self::sync_universal_to_apps(state, &id)
+    }
+
+    /// 删除统一供应商，连同它在各应用里生成的子供应商
+    ///
+    /// 子供应商正在使用（本地指针 / DB 当前 / 代理路由）时拒绝删除——
+    /// 与按应用删除同一口径：先切换，再删除。
     pub fn delete_universal(state: &AppState, id: &str) -> Result<bool, AppError> {
         // 获取统一供应商（用于删除生成的子供应商）
         let provider = state.db.get_universal_provider(id)?;
+        let name = provider.as_ref().map(|p| p.name.clone());
 
-        // 删除统一供应商
-        state.db.delete_universal_provider(id)?;
-
-        // 删除生成的子供应商
-        if let Some(p) = provider {
-            if p.apps.claude {
-                let claude_id = format!("universal-claude-{id}");
-                let _ = state.db.delete_provider("claude", &claude_id);
+        // 任何应用正在使用子供应商时拒绝删除
+        for app_type in [AppType::Claude, AppType::Codex] {
+            let child_id = format!("universal-{}-{id}", app_type.as_str());
+            if state
+                .db
+                .get_provider_by_id(&child_id, app_type.as_str())?
+                .is_none()
+            {
+                continue;
             }
-            if p.apps.codex {
-                let codex_id = format!("universal-codex-{id}");
-                let _ = state.db.delete_provider("codex", &codex_id);
+            if crate::mode::current::is_referenced(&state.db, &app_type, &child_id)? {
+                return Err(AppError::Message(format!(
+                    "无法删除：{app} 正在使用统一供应商 {name} 生成的供应商，请先在 {app} 中切换供应商",
+                    app = app_type.as_str(),
+                    name = name.as_deref().unwrap_or(id),
+                )));
             }
         }
 
-        Ok(true)
+        let existed = state.db.delete_universal_provider(id)?;
+
+        // 删除生成的子供应商（不只看启用标志，残留的一并清掉）
+        for app_type in [AppType::Claude, AppType::Codex] {
+            let child_id = format!("universal-{}-{id}", app_type.as_str());
+            let _ = state.db.delete_provider(app_type.as_str(), &child_id);
+        }
+
+        Ok(existed)
     }
 
     /// 同步统一供应商到各应用
@@ -2120,5 +2146,89 @@ impl ProviderService {
                 *base_val = patch_val.clone();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod universal_provider_sync_tests {
+    use super::ProviderService;
+    use crate::app_config::AppType;
+    use crate::database::Database;
+    use crate::error::AppError;
+    use crate::provider::UniversalProvider;
+    use crate::store::AppState;
+    use std::sync::Arc;
+
+    fn state() -> AppState {
+        AppState::new(Arc::new(Database::memory().expect("in-memory database")))
+    }
+
+    fn universal(id: &str) -> UniversalProvider {
+        let mut p = UniversalProvider::new(
+            id.to_string(),
+            "统一".to_string(),
+            "newapi".to_string(),
+            "https://api.example.com".to_string(),
+            "sk-test".to_string(),
+        );
+        p.apps.claude = true;
+        p.apps.codex = true;
+        p
+    }
+
+    #[test]
+    fn upsert_universal_synced_creates_child_providers() {
+        let state = state();
+        ProviderService::upsert_universal_synced(&state, universal("u1")).unwrap();
+        assert!(state
+            .db
+            .get_provider_by_id("universal-claude-u1", "claude")
+            .unwrap()
+            .is_some());
+        assert!(state
+            .db
+            .get_provider_by_id("universal-codex-u1", "codex")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn delete_universal_removes_child_providers() {
+        let state = state();
+        ProviderService::upsert_universal_synced(&state, universal("u1")).unwrap();
+        assert!(ProviderService::delete_universal(&state, "u1").unwrap());
+        assert!(state
+            .db
+            .get_provider_by_id("universal-claude-u1", "claude")
+            .unwrap()
+            .is_none());
+        assert!(state
+            .db
+            .get_provider_by_id("universal-codex-u1", "codex")
+            .unwrap()
+            .is_none());
+        assert!(!ProviderService::delete_universal(&state, "u1").unwrap());
+    }
+
+    #[test]
+    fn delete_universal_rejected_when_child_is_current() {
+        let state = state();
+        ProviderService::upsert_universal_synced(&state, universal("u1")).unwrap();
+        state
+            .db
+            .set_current_provider("claude", "universal-claude-u1")
+            .unwrap();
+        let err = ProviderService::delete_universal(&state, "u1").unwrap_err();
+        assert!(matches!(
+            err,
+            AppError::Message(m) if m.contains(AppType::Claude.as_str())
+        ));
+        // 拒绝删除后统一供应商与子供应商都还在
+        assert!(state.db.get_universal_provider("u1").unwrap().is_some());
+        assert!(state
+            .db
+            .get_provider_by_id("universal-claude-u1", "claude")
+            .unwrap()
+            .is_some());
     }
 }

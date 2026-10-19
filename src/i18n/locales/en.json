@@ -99,6 +99,8 @@
     "windowClose": "Close window"
   },
   "provider": {
+    "unified": "Universal",
+    "unifiedTitle": "Generated from a universal provider. Edit it on the All Providers page; editing it here only affects this app",
     "connectivityCheck": "Connectivity check",
     "tabProvider": "Provider",
     "tabUniversal": "Universal",
@@ -3450,6 +3452,23 @@
     "configJsonPreview": "Config JSON Preview",
     "configJsonPreviewHint": "The following configurations will be synced to each app (only the displayed fields will be overwritten, other custom settings will be preserved)"
   },
+  "allProviders": {
+    "helpTitle": "All Providers",
+    "helpBody": "View and manage providers of all apps in one list. A universal provider takes effect in all enabled apps with a single add or edit.",
+    "searchPlaceholder": "Search by name or API URL",
+    "add": "Add Provider",
+    "current": "In use",
+    "empty": "No providers yet",
+    "emptyHint": "Click \"Add Provider\" in the top right to create one. A universal provider only needs to be added once to take effect in all enabled apps",
+    "noMatch": "No matching providers",
+    "routingTitle": "App Routing",
+    "routingHelp": "Manage each app's routing switch, mode, and active provider in one place. When routing is on, requests go through the local CC Switch first.",
+    "routingSwitch": "Routing",
+    "routingSelect": "Select a provider",
+    "routingNone": "No provider selected",
+    "routingPiDefault": "Default provider",
+    "routingEnabledCount": "{{count}} enabled"
+  },
   "omo": {
     "editProfile": "Edit OMO Config",
     "newProfile": "New OMO Config",
@@ -3649,6 +3668,7 @@
     "collapseSidebar": "Collapse sidebar",
     "appsGroup": "Apps",
     "todayCost": "Today {{cost}}",
+    "allProviders": "All Providers",
     "usage": "Usage",
     "auth": "Accounts",
     "authNeedsReauth": "An account needs to sign in again",

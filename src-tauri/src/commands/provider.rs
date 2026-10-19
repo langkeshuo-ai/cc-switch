@@ -694,12 +694,13 @@ pub fn upsert_universal_provider(
     provider: UniversalProvider,
 ) -> Result<bool, String> {
     let id = provider.id.clone();
-    let result =
-        ProviderService::upsert_universal(state.inner(), provider).map_err(|e| e.to_string())?;
+    // 保存即全应用生效；同步失败时数据库已更新，先广播刷新各应用列表再报错
+    let result = ProviderService::upsert_universal_synced(state.inner(), provider)
+        .map_err(|e| e.to_string());
 
     emit_universal_provider_synced(&app, "upsert", &id);
 
-    Ok(result)
+    result
 }
 
 #[tauri::command]

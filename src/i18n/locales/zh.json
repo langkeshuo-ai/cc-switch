@@ -99,6 +99,8 @@
     "windowClose": "关闭窗口"
   },
   "provider": {
+    "unified": "统一",
+    "unifiedTitle": "由统一供应商生成，请在「全部供应商」页编辑统一供应商，这里单独修改只影响本应用",
     "connectivityCheck": "检测连通",
     "tabProvider": "供应商",
     "tabUniversal": "统一供应商",
@@ -3450,6 +3452,23 @@
     "configJsonPreview": "配置 JSON 预览",
     "configJsonPreviewHint": "以下是将要同步到各应用的配置内容（仅覆盖显示的字段，保留其他自定义配置）"
   },
+  "allProviders": {
+    "helpTitle": "全部供应商",
+    "helpBody": "在一个列表里查看和管理所有应用的供应商。统一供应商添加或修改一次，即在所有启用的应用生效。",
+    "searchPlaceholder": "搜索名称或 API 地址",
+    "add": "添加供应商",
+    "current": "使用中",
+    "empty": "还没有供应商",
+    "emptyHint": "点右上角「添加供应商」创建。统一供应商只需添加一次，即在所有启用的应用生效",
+    "noMatch": "没有匹配的供应商",
+    "routingTitle": "应用路由",
+    "routingHelp": "在此统一管理每个应用的路由开关、模式与生效供应商。打开路由后，请求先经过本机 CC Switch 转发。",
+    "routingSwitch": "路由",
+    "routingSelect": "选择供应商",
+    "routingNone": "未选择供应商",
+    "routingPiDefault": "默认供应商",
+    "routingEnabledCount": "{{count}} 家已启用"
+  },
   "omo": {
     "editProfile": "编辑 OMO 配置",
     "newProfile": "新建 OMO 配置",
@@ -3649,6 +3668,7 @@
     "collapseSidebar": "收起侧栏",
     "appsGroup": "应用",
     "todayCost": "今日 {{cost}}",
+    "allProviders": "全部供应商",
     "usage": "用量统计",
     "auth": "授权中心",
     "authNeedsReauth": "有账号需要重新登录",

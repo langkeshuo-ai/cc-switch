@@ -99,6 +99,8 @@
     "windowClose": "關閉視窗"
   },
   "provider": {
+    "unified": "統一",
+    "unifiedTitle": "由統一供應商產生，請在「全部供應商」頁編輯統一供應商，這裡單獨修改只影響本應用",
     "connectivityCheck": "檢測連通",
     "tabProvider": "供應商",
     "tabUniversal": "通用供應商",
@@ -3450,6 +3452,23 @@
     "configJsonPreview": "設定 JSON 預覽",
     "configJsonPreviewHint": "以下是將要同步至各應用程式的設定內容（僅覆寫顯示的欄位，保留其他自訂設定）"
   },
+  "allProviders": {
+    "helpTitle": "全部供應商",
+    "helpBody": "在一個列表中檢視和管理所有應用的供應商。統一供應商新增或修改一次，即在所有啟用的應用生效。",
+    "searchPlaceholder": "搜尋名稱或 API 位址",
+    "add": "新增供應商",
+    "current": "使用中",
+    "empty": "還沒有供應商",
+    "emptyHint": "點右上角「新增供應商」建立。統一供應商只需新增一次，即在所有啟用的應用生效",
+    "noMatch": "沒有相符的供應商",
+    "routingTitle": "應用程式路由",
+    "routingHelp": "在此統一管理每個應用程式的路由開關、模式與生效供應商。打開路由後，請求先經過本機 CC Switch 轉發。",
+    "routingSwitch": "路由",
+    "routingSelect": "選擇供應商",
+    "routingNone": "未選擇供應商",
+    "routingPiDefault": "默認供應商",
+    "routingEnabledCount": "{{count}} 家已啟用"
+  },
   "omo": {
     "editProfile": "編輯 OMO 設定",
     "newProfile": "新增 OMO 設定",
@@ -3649,6 +3668,7 @@
     "collapseSidebar": "收起側欄",
     "appsGroup": "應用",
     "todayCost": "今日 {{cost}}",
+    "allProviders": "全部供應商",
     "usage": "用量統計",
     "auth": "授權中心",
     "authNeedsReauth": "有帳號需要重新登入",

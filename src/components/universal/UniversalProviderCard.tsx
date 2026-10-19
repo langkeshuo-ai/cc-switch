@@ -3,10 +3,13 @@ import { Edit2, Trash2, RefreshCw, Globe, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HoverTip } from "@/components/ui/hover-tip";
 import { ProviderIcon } from "@/components/ProviderIcon";
+import type { AppId } from "@/lib/api";
 import type { UniversalProvider } from "@/types";
 
 interface UniversalProviderCardProps {
   provider: UniversalProvider;
+  /** 当前正在使用该供应商的应用（其子供应商是应用当前供应商） */
+  currentApps?: AppId[];
   onEdit: (provider: UniversalProvider) => void;
   onDelete: (id: string) => void;
   onSync: (id: string) => void;
@@ -15,6 +18,7 @@ interface UniversalProviderCardProps {
 
 export function UniversalProviderCard({
   provider,
+  currentApps,
   onEdit,
   onDelete,
   onSync,
@@ -23,10 +27,10 @@ export function UniversalProviderCard({
   const { t } = useTranslation();
 
   // 获取启用的应用列表
-  const enabledApps: string[] = [
-    provider.apps.claude ? "Claude" : null,
-    provider.apps.codex ? "Codex" : null,
-  ].filter((app): app is string => app !== null);
+  const enabledApps: { id: AppId; label: string }[] = [
+    provider.apps.claude ? { id: "claude", label: "Claude" } : null,
+    provider.apps.codex ? { id: "codex", label: "Codex" } : null,
+  ].filter((app): app is { id: AppId; label: string } => app !== null);
 
   return (
     <div className="group relative rounded-xl border border-border/50 bg-surface p-4 transition-all hover:border-border hover:shadow-md">
@@ -113,10 +117,15 @@ export function UniversalProviderCard({
         <div className="flex flex-wrap gap-1.5">
           {enabledApps.map((app) => (
             <span
-              key={app}
+              key={app.id}
               className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
             >
-              {app}
+              {app.label}
+              {currentApps?.includes(app.id) && (
+                <span className="ms-1">
+                  {t("allProviders.current", { defaultValue: "使用中" })}
+                </span>
+              )}
             </span>
           ))}
           {enabledApps.length === 0 && (

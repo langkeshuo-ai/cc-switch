@@ -99,6 +99,8 @@
     "windowClose": "ウィンドウを閉じる"
   },
   "provider": {
+    "unified": "ユニバーサル",
+    "unifiedTitle": "ユニバーサルプロバイダーから生成されました。編集は「すべてのプロバイダー」ページで行い、ここで個別に編集するとこのアプリのみ影響します",
     "connectivityCheck": "接続チェック",
     "tabProvider": "プロバイダー",
     "tabUniversal": "統一プロバイダー",
@@ -3450,6 +3452,23 @@
     "configJsonPreview": "設定 JSON プレビュー",
     "configJsonPreviewHint": "以下は各アプリに同期される設定内容です（表示されているフィールドのみ上書きされ、他のカスタム設定は保持されます）"
   },
+  "allProviders": {
+    "helpTitle": "すべてのプロバイダー",
+    "helpBody": "すべてのアプリのプロバイダーを一覧で管理できます。ユニバーサルプロバイダーは一度追加・編集すれば、有効なすべてのアプリに反映されます。",
+    "searchPlaceholder": "名前または API アドレスで検索",
+    "add": "プロバイダーを追加",
+    "current": "使用中",
+    "empty": "プロバイダーはまだありません",
+    "emptyHint": "右上の「プロバイダーを追加」で作成。ユニバーサルプロバイダーは一度追加するだけで有効なすべてのアプリに反映されます",
+    "noMatch": "一致するプロバイダーがありません",
+    "routingTitle": "アプリのルーティング",
+    "routingHelp": "各アプリのルーティング切替、モード、有効なプロバイダーをまとめて管理します。ルーティングをオンにすると、リクエストはまずローカルの CC Switch 経由で転送されます。",
+    "routingSwitch": "ルーティング",
+    "routingSelect": "プロバイダーを選択",
+    "routingNone": "プロバイダー未選択",
+    "routingPiDefault": "既定のプロバイダー",
+    "routingEnabledCount": "{{count}} 件有効"
+  },
   "omo": {
     "editProfile": "OMO 設定を編集",
     "newProfile": "新規 OMO 設定",
@@ -3649,6 +3668,7 @@
     "collapseSidebar": "サイドバーを折りたたむ",
     "appsGroup": "アプリ",
     "todayCost": "今日 {{cost}}",
+    "allProviders": "すべてのプロバイダー",
     "usage": "使用量",
     "auth": "アカウント",
     "authNeedsReauth": "再ログインが必要なアカウントがあります",

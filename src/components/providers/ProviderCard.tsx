@@ -389,6 +389,20 @@ export function ProviderCard({
             {presentation.chips.map((chip) => (
               <CardChipBadge key={chip.key} chip={chip} />
             ))}
+            {/* 统一供应商生成的子供应商：标出来，避免当成独立供应商改 */}
+            {provider.id.startsWith(`universal-${appId}-`) && (
+              <CardChipBadge
+                chip={{
+                  key: "universal",
+                  label: t("provider.unified", { defaultValue: "统一" }),
+                  tone: "outline",
+                  title: t("provider.unifiedTitle", {
+                    defaultValue:
+                      "由统一供应商生成，请在「全部供应商」页编辑统一供应商，这里单独修改只影响本应用",
+                  }),
+                }}
+              />
+            )}
             {presentation.showHealth && health && (
               <HealthChip
                 consecutiveFailures={health.consecutive_failures}

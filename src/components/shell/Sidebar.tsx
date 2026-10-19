@@ -222,6 +222,7 @@ function MainDirectory({
     trailing?: string;
     alert?: string;
   }[] = [
+    { page: "allProviders", label: t("nav.allProviders"), icon: Layers },
     { page: "mcp", label: "MCP", icon: Server },
     { page: "skills", label: "Skills", icon: SkillsIcon },
     { page: "prompts", label: t("nav.prompts"), icon: BookOpen },
